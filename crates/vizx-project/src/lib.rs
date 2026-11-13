@@ -5,14 +5,16 @@
 //! files portable and lets every subsystem share one description of the
 //! project.
 //!
-//! Milestone 0.1 contains only metadata and settings. Media sources, tracks,
+//! The model currently contains metadata and settings. Media sources, tracks,
 //! clips, keyframes and effects will be added to [`Project`] in later
 //! milestones.
 
+mod file;
 mod metadata;
 mod project;
 mod settings;
 
+pub use file::{ProjectFileError, with_project_extension};
 pub use metadata::ProjectMetadata;
 pub use project::Project;
 pub use settings::{FrameRate, ProjectSettings};

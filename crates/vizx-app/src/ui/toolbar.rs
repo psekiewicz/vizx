@@ -1,16 +1,32 @@
 use eframe::egui;
 
-use crate::app::VizxApp;
+use crate::app::{AppCommand, VizxApp};
 use crate::theme;
 use crate::ui::NOT_AVAILABLE_YET;
 
 pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
     ui.horizontal(|ui| {
-        if ui.button("New").on_hover_text("New project").clicked() {
-            app.start_new_project();
-        }
-        unavailable_button(ui, "Open");
-        unavailable_button(ui, "Save");
+        command_button(
+            ui,
+            app,
+            "New",
+            "New project (Ctrl+N)",
+            AppCommand::NewProject,
+        );
+        command_button(
+            ui,
+            app,
+            "Open",
+            "Open project (Ctrl+O)",
+            AppCommand::OpenProject,
+        );
+        command_button(
+            ui,
+            app,
+            "Save",
+            "Save project (Ctrl+S)",
+            AppCommand::SaveProject,
+        );
 
         ui.separator();
 
@@ -29,6 +45,18 @@ pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
         )
         .on_hover_text("Playhead position (placeholder)");
     });
+}
+
+fn command_button(
+    ui: &mut egui::Ui,
+    app: &mut VizxApp,
+    label: &str,
+    tooltip: &str,
+    command: AppCommand,
+) {
+    if ui.button(label).on_hover_text(tooltip).clicked() {
+        app.request(command);
+    }
 }
 
 fn unavailable_button(ui: &mut egui::Ui, label: &str) {

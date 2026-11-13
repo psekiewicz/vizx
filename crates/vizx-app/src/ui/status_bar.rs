@@ -11,10 +11,15 @@ pub fn show(ui: &mut egui::Ui, app: &VizxApp) {
         "No changes"
     };
 
+    let file_location = match app.session.file_path() {
+        Some(path) => path.display().to_string(),
+        None => "Not saved to a file yet".to_owned(),
+    };
+
     ui.horizontal(|ui| {
-        ui.label(muted("Ready"));
+        ui.label(muted(&app.status_message));
         ui.separator();
-        ui.label(muted(&project.metadata.name));
+        ui.label(muted(&file_location));
         ui.separator();
         ui.label(muted(save_state));
 

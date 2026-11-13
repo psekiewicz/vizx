@@ -7,8 +7,5 @@ repository.workspace = true
 
 [dependencies]
 serde.workspace = true
-
-[dev-dependencies]
-# Only used by tests to prove the model round-trips through a real format.
-# The on-disk .vzx encoding is not decided in this milestone.
+# Encoding of .vzx project files.
 serde_json.workspace = true

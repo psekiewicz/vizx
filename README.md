@@ -7,9 +7,10 @@ animations and image compositions.
 It is one integrated editor. Audio, visuals, text and animation live in a
 single project and share one timeline.
 
-> **Status: prototype, milestone 0.1 (workspace foundation).**
-> The application window, dockable panel layout and a minimal project model
-> exist. There is no audio, rendering, timeline editing or export yet.
+> **Status: early prototype.**
+> The application window, dockable panel layout, a minimal project model and
+> saving/opening `.vzx` project files exist. There is no audio, rendering,
+> timeline editing or export yet.
 
 ## Technology
 

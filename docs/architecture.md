@@ -40,9 +40,10 @@ New crates are added only when a subsystem is actually being implemented
 - `FrameRate` is stored as a fraction (`numerator / denominator`). Rates like
   29.97 fps are exactly 30000/1001; a fraction keeps frame timing exact,
   which deterministic export depends on.
-- All types derive Serde's `Serialize` and `Deserialize`. The on-disk
-  encoding of `.vzx` is **not decided yet**; tests use JSON only to prove the
-  model survives a round trip.
+- All types derive Serde's `Serialize` and `Deserialize`.
+- `file.rs` reads and writes `.vzx` files and defines `ProjectFileError`
+  (I/O failure, invalid content, or a format version newer than this build
+  supports). See "The `.vzx` file format" below.
 
 ### `vizx-core`
 
@@ -51,6 +52,9 @@ New crates are added only when a subsystem is actually being implemented
 - The project can only be modified through `EditorSession::edit_project`.
   Funnelling every change through one method means the unsaved-changes flag
   cannot be forgotten, and gives undo/redo a single place to hook into later.
+- `EditorSession::open` and `EditorSession::save_as` load and store the
+  project. A failed save leaves the session untouched: same path, changes
+  still marked as unsaved.
 
 ### `vizx-app`
 
@@ -76,8 +80,30 @@ src/
   can reset the layout.
 - Features that belong to later milestones appear as disabled controls.
   Nothing pretends to work.
+- Menus, toolbar buttons and keyboard shortcuts do not act directly. They
+  call `VizxApp::request` with an `AppCommand` (New, Open, Save, Save As,
+  Exit), and the command runs once at the end of the frame. Every way of
+  triggering a command therefore behaves identically.
+- Commands that would discard the open project (New, Open, Exit, and the
+  window's close button) are held back while there are unsaved changes, and
+  a modal dialog asks whether to save, discard or cancel.
 
 ## Decisions
+
+### The `.vzx` file format
+
+A `.vzx` file is the `Project` struct as pretty-printed UTF-8 JSON.
+
+- JSON is readable in any text editor, identical on every operating system,
+  and gives meaningful diffs in Git. Project files hold structure and
+  references, not media, so file size and parsing speed are not a concern.
+- Every file starts with `format_version`. When loading, the version is read
+  first; a file from a newer VizX is rejected with a clear "unsupported
+  version" error instead of a confusing parse failure.
+- Media files (audio, images, video) will be referenced by path, never
+  embedded.
+
+Native open/save dialogs come from the `rfd` crate, used only in `vizx-app`.
 
 ### Rendering the UI through wgpu
 
@@ -114,8 +140,8 @@ crate. Cross-crate integration tests will go into the relevant crate's own
 
 ### Minimal dependencies
 
-Direct dependencies: `eframe`, `egui_dock`, `serde`, and `serde_json` (tests
-only). Planned libraries (cpal, RustFFT, FFmpeg bindings) are added in the
+Direct dependencies: `eframe`, `egui_dock`, `rfd`, `serde` and `serde_json`.
+Planned libraries (cpal, RustFFT, FFmpeg bindings) are added in the
 milestone that first uses them.
 
 `egui_dock` 0.21 targets egui 0.36, so eframe/egui stay on 0.36 until

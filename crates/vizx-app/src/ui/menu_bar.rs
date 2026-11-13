@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::app::VizxApp;
+use crate::app::{AppCommand, VizxApp};
 use crate::ui::NOT_AVAILABLE_YET;
 use crate::ui::workspace::PanelKind;
 
@@ -15,18 +15,42 @@ pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
 }
 
 fn file_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
-    if ui.button("New Project").clicked() {
-        app.start_new_project();
-    }
-    unavailable_item(ui, "Open Project...", "Ctrl+O");
+    command_item(ui, app, "New Project", "Ctrl+N", AppCommand::NewProject);
+    command_item(
+        ui,
+        app,
+        "Open Project...",
+        "Ctrl+O",
+        AppCommand::OpenProject,
+    );
     ui.separator();
-    unavailable_item(ui, "Save", "Ctrl+S");
-    unavailable_item(ui, "Save As...", "Ctrl+Shift+S");
+    command_item(ui, app, "Save", "Ctrl+S", AppCommand::SaveProject);
+    command_item(
+        ui,
+        app,
+        "Save As...",
+        "Ctrl+Shift+S",
+        AppCommand::SaveProjectAs,
+    );
     ui.separator();
     unavailable_item(ui, "Export Video...", "");
     ui.separator();
-    if ui.button("Exit").clicked() {
-        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+    command_item(ui, app, "Exit", "", AppCommand::Exit);
+}
+
+/// A menu entry that requests an application command when clicked.
+fn command_item(
+    ui: &mut egui::Ui,
+    app: &mut VizxApp,
+    label: &str,
+    shortcut: &str,
+    command: AppCommand,
+) {
+    if ui
+        .add(egui::Button::new(label).shortcut_text(shortcut))
+        .clicked()
+    {
+        app.request(command);
     }
 }
 

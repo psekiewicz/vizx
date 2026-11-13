@@ -15,3 +15,4 @@ vizx-core.workspace = true
 vizx-project.workspace = true
 eframe.workspace = true
 egui_dock.workspace = true
+rfd.workspace = true
