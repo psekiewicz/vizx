@@ -81,31 +81,6 @@ impl Project {
         Ok(project)
     }
 
-    /// A file name for saving this project for the first time, derived from
-    /// its name, e.g. `My Song.vzx`.
-    pub fn suggested_file_name(&self) -> String {
-        let cleaned: String = self
-            .metadata
-            .name
-            .chars()
-            .map(|character| {
-                if INVALID_FILE_NAME_CHARACTERS.contains(&character) || character.is_control() {
-                    '_'
-                } else {
-                    character
-                }
-            })
-            .collect();
-        let cleaned = cleaned.trim().trim_end_matches('.');
-        let base_name = if cleaned.is_empty() {
-            "Untitled"
-        } else {
-            cleaned
-        };
-
-        format!("{base_name}.{PROJECT_FILE_EXTENSION}")
-    }
-
     pub fn save_to_file(&self, path: &Path) -> Result<(), ProjectFileError> {
         fs::write(path, self.to_vzx_string()?)?;
         Ok(())
@@ -134,10 +109,6 @@ pub fn with_project_extension(path: PathBuf) -> PathBuf {
     PathBuf::from(file_name)
 }
 
-/// Characters that are not allowed in file names on Windows. Avoiding them
-/// everywhere keeps suggested names valid on every supported system.
-const INVALID_FILE_NAME_CHARACTERS: [char; 9] = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
-
 /// The one field every version of the format is guaranteed to have.
 #[derive(serde::Deserialize)]
 struct FormatHeader {
@@ -151,7 +122,7 @@ mod tests {
 
     #[test]
     fn project_round_trips_through_vzx_text() {
-        let mut project = Project::new("Round trip");
+        let mut project = Project::new();
         project.metadata.author = "Tester".to_owned();
 
         let content = project.to_vzx_string().unwrap();
@@ -167,7 +138,7 @@ mod tests {
             std::process::id(),
             crate::PROJECT_FILE_EXTENSION
         ));
-        let project = Project::new("On disk");
+        let project = Project::new();
 
         project.save_to_file(&path).unwrap();
         let loaded = Project::load_from_file(&path);
@@ -212,7 +183,9 @@ mod tests {
         let project = Project::from_vzx_str(version_1_content).unwrap();
 
         assert_eq!(project.format_version, CURRENT_FORMAT_VERSION);
-        assert_eq!(project.metadata.name, "Old Project");
+        // Version 1 stored a name inside the file. It is ignored now: the
+        // project is named by its file.
+        assert_eq!(project.metadata.author, "");
         assert_eq!(project.settings.width, 1280);
         assert_eq!(project.settings.duration_milliseconds, 180_000);
         assert!(project.tracks().is_empty());
@@ -281,15 +254,6 @@ mod tests {
             with_project_extension(PathBuf::from("song.VZX")),
             PathBuf::from("song.VZX")
         );
-    }
-
-    #[test]
-    fn suggested_file_name_replaces_invalid_characters() {
-        assert_eq!(
-            Project::new("AC/DC: Live?").suggested_file_name(),
-            "AC_DC_ Live_.vzx"
-        );
-        assert_eq!(Project::new("  ").suggested_file_name(), "Untitled.vzx");
     }
 
     #[test]

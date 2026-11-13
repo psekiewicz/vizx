@@ -10,7 +10,7 @@ mod session;
 mod waveforms;
 
 pub use selection::Selection;
-pub use session::EditorSession;
+pub use session::{EditorSession, UNTITLED_PROJECT_NAME};
 pub use waveforms::{WaveformState, WaveformStore};
 
 /// Name of the application as shown to the user.

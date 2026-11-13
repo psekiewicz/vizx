@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn audio_tracks_are_taller_and_rows_stack_without_gaps() {
-        let mut project = vizx_project::Project::new("Rows");
+        let mut project = vizx_project::Project::new();
         project.add_track("Song", TrackKind::Audio);
         project.add_track("Layer", TrackKind::Visual);
         // Order on the timeline: the visual layer, then the audio track.

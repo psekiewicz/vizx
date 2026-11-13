@@ -5,6 +5,9 @@ use vizx_project::{AudioProperties, Project, ProjectFileError, Track, TrackId, T
 
 use crate::Selection;
 
+/// Name shown for a project that has not been saved to a file yet.
+pub const UNTITLED_PROJECT_NAME: &str = "Untitled";
+
 /// The state of one open project while it is being edited.
 ///
 /// There is exactly one session in the application and every UI panel is a
@@ -23,7 +26,7 @@ impl EditorSession {
     /// Starts a session with a new, never-saved project.
     pub fn new_untitled() -> Self {
         Self {
-            project: Project::with_starter_tracks("Untitled Project"),
+            project: Project::with_starter_tracks(),
             file_path: None,
             has_unsaved_changes: false,
             selection: Selection::Nothing,
@@ -116,6 +119,21 @@ impl EditorSession {
         self.file_path.as_deref()
     }
 
+    /// The project's name: the name of its file without the extension, or
+    /// `Untitled` while it has never been saved.
+    ///
+    /// This is the only name a project has, so the window title, dialogs
+    /// and the file on disk can never disagree.
+    pub fn project_name(&self) -> String {
+        self.file_path
+            .as_deref()
+            .and_then(Path::file_stem)
+            .map_or_else(
+                || UNTITLED_PROJECT_NAME.to_owned(),
+                |stem| stem.to_string_lossy().into_owned(),
+            )
+    }
+
     pub fn has_unsaved_changes(&self) -> bool {
         self.has_unsaved_changes
     }
@@ -146,7 +164,7 @@ mod tests {
 
     fn rename_project(session: &mut EditorSession, name: &str) {
         session.edit_project(|project| {
-            project.metadata.name = name.to_owned();
+            project.metadata.author = name.to_owned();
             true
         });
     }
@@ -168,7 +186,7 @@ mod tests {
 
         rename_project(&mut session, "Renamed");
         assert!(session.has_unsaved_changes());
-        assert_eq!(session.project().metadata.name, "Renamed");
+        assert_eq!(session.project().metadata.author, "Renamed");
     }
 
     #[test]
@@ -244,6 +262,42 @@ mod tests {
         assert_eq!(reopened.project(), session.project());
         assert_eq!(reopened.file_path(), Some(path.as_path()));
         assert!(!reopened.has_unsaved_changes());
+    }
+
+    #[test]
+    fn project_is_named_after_its_file() {
+        let path = temporary_project_path("named");
+        let mut session = EditorSession::new_untitled();
+        assert_eq!(session.project_name(), "Untitled");
+
+        let result = session.save_as(&path);
+        let name_after_save = session.project_name();
+        let reopened_name = EditorSession::open(&path).map(|session| session.project_name());
+        let _ = std::fs::remove_file(&path);
+
+        result.unwrap();
+        let expected = path.file_stem().unwrap().to_string_lossy().into_owned();
+        assert_eq!(name_after_save, expected);
+        assert_eq!(reopened_name.unwrap(), expected);
+    }
+
+    #[test]
+    fn saving_under_another_name_renames_the_project() {
+        let first = temporary_project_path("first-name");
+        let second = temporary_project_path("second-name");
+        let mut session = EditorSession::new_untitled();
+
+        let first_result = session.save_as(&first);
+        let second_result = session.save_as(&second);
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
+
+        first_result.unwrap();
+        second_result.unwrap();
+        assert_eq!(
+            session.project_name(),
+            second.file_stem().unwrap().to_string_lossy()
+        );
     }
 
     #[test]

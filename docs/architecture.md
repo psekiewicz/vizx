@@ -183,6 +183,18 @@ Dependencies are compiled with optimizations even in debug builds
 (`[profile.dev.package."*"]` in the root `Cargo.toml`). Audio decoding is
 many times faster that way, and VizX's own crates still build quickly.
 
+### A project is named by its file
+
+A project has exactly one name: the name of its `.vzx` file without the
+extension, or "Untitled" before it is first saved
+(`EditorSession::project_name`). The window title, dialogs and the Save As
+suggestion all use it.
+
+Earlier versions also stored an editable name inside the project. Saving
+such a project as `test.vzx` left the window showing a different name than
+the file, with no way to tell which one was "the" name. Format version **5**
+removed the stored name; a `name` in older files is ignored on load.
+
 ### Tracks and selection
 
 - A `Track` has a `TrackId`, a name and a `TrackKind` (`Audio` or

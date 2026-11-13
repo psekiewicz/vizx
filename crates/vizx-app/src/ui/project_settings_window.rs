@@ -45,10 +45,6 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
             egui::Grid::new("project_settings_metadata")
                 .num_columns(2)
                 .show(ui, |ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut edited.metadata.name);
-                    ui.end_row();
-
                     ui.label("Author");
                     ui.text_edit_singleline(&mut edited.metadata.author);
                     ui.end_row();

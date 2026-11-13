@@ -209,7 +209,11 @@ impl VizxApp {
 
     fn save_project_as(&mut self, frame: &eframe::Frame) -> bool {
         let chosen_path = project_file_dialog(frame)
-            .set_file_name(self.session.project().suggested_file_name())
+            // Suggest the current name, so "Save As" starts from it.
+            .set_file_name(format!(
+                "{}.{PROJECT_FILE_EXTENSION}",
+                self.session.project_name()
+            ))
             .save_file();
 
         match chosen_path {
@@ -324,7 +328,7 @@ impl VizxApp {
         };
         let title = format!(
             "{}{} - {}",
-            self.session.project().metadata.name,
+            self.session.project_name(),
             unsaved_marker,
             vizx_core::APP_NAME
         );

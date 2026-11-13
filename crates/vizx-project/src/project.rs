@@ -36,12 +36,18 @@ pub struct Project {
     next_clip_id: u64,
 }
 
+impl Default for Project {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Project {
     /// Creates an empty project with default settings and no tracks.
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new() -> Self {
         Self {
             format_version: CURRENT_FORMAT_VERSION,
-            metadata: ProjectMetadata::new(name),
+            metadata: ProjectMetadata::default(),
             settings: ProjectSettings::default(),
             tracks: Vec::new(),
             next_track_id: 0,
@@ -53,8 +59,8 @@ impl Project {
 
     /// Creates a project with the smallest useful timeline: one audio track
     /// for the song and one visual layer to put things on.
-    pub fn with_starter_tracks(name: impl Into<String>) -> Self {
-        let mut project = Self::new(name);
+    pub fn with_starter_tracks() -> Self {
+        let mut project = Self::new();
         project.add_track("Audio", TrackKind::Audio);
         project.add_track("Layer 1", TrackKind::Visual);
         project
@@ -193,17 +199,16 @@ mod tests {
 
     #[test]
     fn new_project_uses_current_format_and_defaults() {
-        let project = Project::new("Demo");
+        let project = Project::new();
 
         assert_eq!(project.format_version, CURRENT_FORMAT_VERSION);
-        assert_eq!(project.metadata.name, "Demo");
         assert_eq!(project.settings, ProjectSettings::default());
         assert!(project.tracks().is_empty());
     }
 
     #[test]
     fn project_survives_a_serialization_round_trip() {
-        let mut project = Project::with_starter_tracks("Round trip");
+        let mut project = Project::with_starter_tracks();
         project.metadata.author = "Tester".to_owned();
         project.settings.frame_rate = FrameRate {
             numerator: 30000,
@@ -229,7 +234,7 @@ mod tests {
 
     #[test]
     fn new_project_starts_with_one_layer_above_one_audio_track() {
-        let project = Project::with_starter_tracks("Starter");
+        let project = Project::with_starter_tracks();
 
         let tracks: Vec<(&str, TrackKind)> = project
             .tracks()
@@ -245,7 +250,7 @@ mod tests {
 
     #[test]
     fn new_layers_go_on_top_and_new_audio_tracks_to_the_bottom() {
-        let mut project = Project::with_starter_tracks("Order");
+        let mut project = Project::with_starter_tracks();
 
         project.add_default_named_track(TrackKind::Audio);
         project.add_default_named_track(TrackKind::Visual);
@@ -260,7 +265,7 @@ mod tests {
 
     #[test]
     fn track_ids_are_not_reused_after_removal() {
-        let mut project = Project::new("Ids");
+        let mut project = Project::new();
         let first = project.add_track("First", TrackKind::Audio);
         let second = project.add_track("Second", TrackKind::Audio);
 
@@ -283,7 +288,7 @@ mod tests {
 
     #[test]
     fn first_imported_audio_fills_the_audio_track_and_sets_the_project_length() {
-        let mut project = Project::with_starter_tracks("Import");
+        let mut project = Project::with_starter_tracks();
 
         let (media_id, track_id) = project.import_audio("C:/Music/song.mp3", audio(215_000));
 
@@ -304,7 +309,7 @@ mod tests {
 
     #[test]
     fn further_audio_gets_its_own_track_and_only_ever_extends_the_project() {
-        let mut project = Project::with_starter_tracks("Stems");
+        let mut project = Project::with_starter_tracks();
         project.import_audio("song.wav", audio(200_000));
 
         let (_, shorter_track) = project.import_audio("vocals.wav", audio(150_000));
@@ -326,7 +331,7 @@ mod tests {
 
     #[test]
     fn media_file_name_handles_both_path_separators() {
-        let mut project = Project::new("Names");
+        let mut project = Project::new();
         let (windows, _) = project.import_audio(r"D:\Music\Album\track 01.flac", audio(1000));
         let (unix, _) = project.import_audio("/home/user/music/track 02.ogg", audio(1000));
 
@@ -342,7 +347,7 @@ mod tests {
 
     #[test]
     fn rename_reports_whether_anything_changed() {
-        let mut project = Project::new("Rename");
+        let mut project = Project::new();
         let id = project.add_track("Old", TrackKind::Audio);
 
         assert!(project.rename_track(id, "New"));

@@ -39,4 +39,6 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 /// - 3: track kinds reduced to `Audio` and `Visual`. The former
 ///   `Visualizer`, `Animation` and `Text` kinds load as `Visual`.
 /// - 4: media sources and clips on tracks.
-pub const CURRENT_FORMAT_VERSION: u32 = 4;
+/// - 5: the project name is no longer stored in the file; the file name is
+///   the project's name. A `name` in older files is ignored.
+pub const CURRENT_FORMAT_VERSION: u32 = 5;

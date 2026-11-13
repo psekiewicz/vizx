@@ -26,7 +26,7 @@ pub fn show(ctx: &egui::Context, app: &VizxApp) -> Option<Decision> {
         ui.add_space(4.0);
         ui.label(format!(
             "Save changes to \"{}\" before {}?",
-            app.session.project().metadata.name,
+            app.session.project_name(),
             describe(command)
         ));
         ui.add_space(12.0);
