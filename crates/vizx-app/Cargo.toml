@@ -11,6 +11,7 @@ name = "vizx"
 path = "src/main.rs"
 
 [dependencies]
+vizx-audio.workspace = true
 vizx-core.workspace = true
 vizx-project.workspace = true
 eframe.workspace = true

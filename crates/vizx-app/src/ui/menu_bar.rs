@@ -36,6 +36,14 @@ fn file_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
     command_item(
         ui,
         app,
+        "Import Audio...",
+        "Ctrl+I",
+        AppCommand::ImportAudio,
+    );
+    ui.separator();
+    command_item(
+        ui,
+        app,
         "Project Settings...",
         "",
         AppCommand::OpenProjectSettings,

@@ -18,6 +18,8 @@ use crate::theme;
 const RULER_HEIGHT: f32 = 22.0;
 const TRACK_HEIGHT: f32 = 28.0;
 const TRACK_HEADER_WIDTH: f32 = 150.0;
+/// Gap between a clip and the top and bottom edges of its lane.
+const CLIP_VERTICAL_MARGIN: f32 = 3.0;
 /// Upper zoom limit, in pixels per second of project time.
 const MAX_PIXELS_PER_SECOND: f32 = 400.0;
 /// Labelled ruler marks are kept at least this far apart.
@@ -242,6 +244,45 @@ fn show_lanes(
                 break;
             }
             painter.vline(x, content_rect.y_range(), guide);
+        }
+
+        // Clips, drawn over the guide lines.
+        for (index, track) in session.project().tracks().iter().enumerate() {
+            let top = content_rect.top() + index as f32 * TRACK_HEIGHT;
+            for clip in &track.clips {
+                let left = content_rect.left()
+                    + clip.start_milliseconds as f32 / 1000.0 * scale.pixels_per_second;
+                let width = clip.duration_milliseconds as f32 / 1000.0 * scale.pixels_per_second;
+                let clip_rect = Rect::from_min_size(
+                    egui::pos2(left, top + CLIP_VERTICAL_MARGIN),
+                    egui::vec2(width, TRACK_HEIGHT - 2.0 * CLIP_VERTICAL_MARGIN),
+                );
+                let color = track_color(track.kind);
+                painter.rect_filled(clip_rect, 2.0, color.gamma_multiply(0.35));
+                painter.rect_stroke(
+                    clip_rect,
+                    2.0,
+                    Stroke::new(1.0, color),
+                    egui::StrokeKind::Inside,
+                );
+
+                // The label stays inside the clip, and stays readable at the
+                // left edge of the view when the clip starts off-screen.
+                let label = session
+                    .project()
+                    .media_source(clip.media)
+                    .map_or("Missing media", |source| source.file_name());
+                let visible_left = content_rect.left() + visible.left();
+                painter
+                    .with_clip_rect(clip_rect.intersect(painter.clip_rect()))
+                    .text(
+                        egui::pos2(left.max(visible_left) + 6.0, clip_rect.center().y),
+                        Align2::LEFT_CENTER,
+                        label,
+                        FontId::proportional(11.0),
+                        Color32::WHITE,
+                    );
+            }
         }
 
         // Clicking a lane selects its track.

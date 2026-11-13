@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{CURRENT_FORMAT_VERSION, ProjectMetadata, ProjectSettings, Track, TrackId, TrackKind};
+use crate::{
+    AudioProperties, CURRENT_FORMAT_VERSION, Clip, ClipId, MediaContent, MediaId, MediaSource,
+    ProjectMetadata, ProjectSettings, Track, TrackId, TrackKind,
+};
 
 /// Root of all data that belongs to one VizX project.
 ///
@@ -24,6 +27,13 @@ pub struct Project {
     /// reference to a removed track can never point at a different track.
     #[serde(default)]
     next_track_id: u64,
+    /// Files used by the project (the "media library").
+    #[serde(default)]
+    media: Vec<MediaSource>,
+    #[serde(default)]
+    next_media_id: u64,
+    #[serde(default)]
+    next_clip_id: u64,
 }
 
 impl Project {
@@ -35,6 +45,9 @@ impl Project {
             settings: ProjectSettings::default(),
             tracks: Vec::new(),
             next_track_id: 0,
+            media: Vec::new(),
+            next_media_id: 0,
+            next_clip_id: 0,
         }
     }
 
@@ -72,6 +85,7 @@ impl Project {
             id,
             name: name.into(),
             kind,
+            clips: Vec::new(),
         };
         match kind {
             TrackKind::Visual => self.tracks.insert(0, track),
@@ -96,6 +110,68 @@ impl Project {
         let count_before = self.tracks.len();
         self.tracks.retain(|track| track.id != id);
         self.tracks.len() != count_before
+    }
+
+    /// All media sources, in the order they were imported.
+    pub fn media(&self) -> &[MediaSource] {
+        &self.media
+    }
+
+    pub fn media_source(&self, id: MediaId) -> Option<&MediaSource> {
+        self.media.iter().find(|source| source.id == id)
+    }
+
+    /// Adds an audio file to the media library and places it on the
+    /// timeline, starting at the beginning of the project.
+    ///
+    /// It goes onto the first audio track that is still empty. If every
+    /// audio track is in use, a new one is created, so importing never
+    /// overlaps or replaces existing audio. Returns the new media source and
+    /// the track that received the clip.
+    pub fn import_audio(
+        &mut self,
+        path: impl Into<String>,
+        properties: AudioProperties,
+    ) -> (MediaId, TrackId) {
+        let has_no_clips_yet = self.tracks.iter().all(|track| track.clips.is_empty());
+
+        let media_id = MediaId(self.next_media_id);
+        self.next_media_id += 1;
+        self.media.push(MediaSource {
+            id: media_id,
+            path: path.into(),
+            content: MediaContent::Audio(properties),
+        });
+
+        let free_audio_track = self
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Audio && track.clips.is_empty())
+            .map(|track| track.id);
+        let track_id =
+            free_audio_track.unwrap_or_else(|| self.add_default_named_track(TrackKind::Audio));
+
+        let clip = Clip {
+            id: ClipId(self.next_clip_id),
+            media: media_id,
+            start_milliseconds: 0,
+            duration_milliseconds: properties.duration_milliseconds,
+        };
+        self.next_clip_id += 1;
+        let clip_end = clip.end_milliseconds();
+        if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
+            track.clips.push(clip);
+        }
+
+        // The project length follows the audio: the first file sets it, and
+        // a later, longer file extends it. It is never shortened here.
+        self.settings.duration_milliseconds = if has_no_clips_yet {
+            clip_end
+        } else {
+            self.settings.duration_milliseconds.max(clip_end)
+        };
+
+        (media_id, track_id)
     }
 
     /// Renames a track. Returns `true` only if the name actually changed.
@@ -195,6 +271,73 @@ mod tests {
         assert_ne!(third, second);
         assert!(project.track(second).is_none());
         assert!(!project.remove_track(second));
+    }
+
+    fn audio(duration_milliseconds: u64) -> AudioProperties {
+        AudioProperties {
+            duration_milliseconds,
+            sample_rate: 44_100,
+            channel_count: 2,
+        }
+    }
+
+    #[test]
+    fn first_imported_audio_fills_the_audio_track_and_sets_the_project_length() {
+        let mut project = Project::with_starter_tracks("Import");
+
+        let (media_id, track_id) = project.import_audio("C:/Music/song.mp3", audio(215_000));
+
+        let track = project.track(track_id).unwrap();
+        assert_eq!(track.name, "Audio");
+        assert_eq!(track.clips.len(), 1);
+        assert_eq!(track.clips[0].media, media_id);
+        assert_eq!(track.clips[0].start_milliseconds, 0);
+        assert_eq!(track.clips[0].duration_milliseconds, 215_000);
+        assert_eq!(project.settings.duration_milliseconds, 215_000);
+        assert_eq!(
+            project.media_source(media_id).unwrap().file_name(),
+            "song.mp3"
+        );
+        // No extra track was needed for a single audio file.
+        assert_eq!(project.tracks().len(), 2);
+    }
+
+    #[test]
+    fn further_audio_gets_its_own_track_and_only_ever_extends_the_project() {
+        let mut project = Project::with_starter_tracks("Stems");
+        project.import_audio("song.wav", audio(200_000));
+
+        let (_, shorter_track) = project.import_audio("vocals.wav", audio(150_000));
+        assert_eq!(project.settings.duration_milliseconds, 200_000);
+
+        let (_, longer_track) = project.import_audio("extended.wav", audio(260_000));
+        assert_eq!(project.settings.duration_milliseconds, 260_000);
+
+        let audio_tracks: Vec<&str> = project
+            .tracks()
+            .iter()
+            .filter(|track| track.kind == TrackKind::Audio)
+            .map(|track| track.name.as_str())
+            .collect();
+        assert_eq!(audio_tracks, ["Audio", "Audio 2", "Audio 3"]);
+        assert_ne!(shorter_track, longer_track);
+        assert_eq!(project.media().len(), 3);
+    }
+
+    #[test]
+    fn media_file_name_handles_both_path_separators() {
+        let mut project = Project::new("Names");
+        let (windows, _) = project.import_audio(r"D:\Music\Album\track 01.flac", audio(1000));
+        let (unix, _) = project.import_audio("/home/user/music/track 02.ogg", audio(1000));
+
+        assert_eq!(
+            project.media_source(windows).unwrap().file_name(),
+            "track 01.flac"
+        );
+        assert_eq!(
+            project.media_source(unix).unwrap().file_name(),
+            "track 02.ogg"
+        );
     }
 
     #[test]

@@ -1,8 +1,9 @@
 use eframe::egui;
 use vizx_core::EditorSession;
-use vizx_project::Track;
+use vizx_project::{MediaContent, Track};
 
 use crate::theme;
+use crate::ui::format_duration;
 
 /// Shows the properties of whatever is selected in the editor.
 ///
@@ -33,6 +34,29 @@ fn track_properties(ui: &mut egui::Ui, session: &mut EditorSession, track: &Trac
             ui.end_row();
         });
     session.edit_project(|project| project.rename_track(track.id, &name));
+
+    if !track.clips.is_empty() {
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("Content").strong());
+        ui.separator();
+        for clip in &track.clips {
+            let Some(source) = session.project().media_source(clip.media) else {
+                continue;
+            };
+            let MediaContent::Audio(audio) = &source.content;
+            ui.label(source.file_name()).on_hover_text(&source.path);
+            ui.label(
+                egui::RichText::new(format!(
+                    "Length {}  |  {} Hz  |  {} ch",
+                    format_duration(clip.duration_milliseconds),
+                    audio.sample_rate,
+                    audio.channel_count
+                ))
+                .small()
+                .color(theme::TEXT_MUTED),
+            );
+        }
+    }
 
     ui.add_space(8.0);
     if ui.button("Delete Track").clicked() {

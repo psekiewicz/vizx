@@ -6,4 +6,5 @@ edition.workspace = true
 repository.workspace = true
 
 [dependencies]
+vizx-audio.workspace = true
 vizx-project.workspace = true

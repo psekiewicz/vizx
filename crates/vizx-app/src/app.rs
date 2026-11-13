@@ -23,6 +23,7 @@ pub enum AppCommand {
     OpenProject,
     SaveProject,
     SaveProjectAs,
+    ImportAudio,
     OpenProjectSettings,
     Exit,
 }
@@ -139,6 +140,7 @@ impl VizxApp {
             AppCommand::SaveProjectAs => {
                 self.save_project_as(frame);
             }
+            AppCommand::ImportAudio => self.import_audio(frame),
             AppCommand::OpenProjectSettings => self.is_project_settings_open = true,
             AppCommand::Exit => {
                 self.is_exit_confirmed = true;
@@ -161,6 +163,36 @@ impl VizxApp {
                 self.status_message = format!("Could not open {}: {error}", path.display());
             }
         }
+    }
+
+    /// Lets the user pick one or more audio files and imports each of them.
+    fn import_audio(&mut self, frame: &eframe::Frame) {
+        let Some(paths) = rfd::FileDialog::new()
+            .add_filter("Audio", &vizx_audio::SUPPORTED_EXTENSIONS)
+            .set_parent(frame)
+            .pick_files()
+        else {
+            return; // dialog cancelled
+        };
+
+        let mut imported_count = 0;
+        let mut last_error = None;
+        for path in &paths {
+            match self.session.import_audio(path) {
+                Ok(_) => imported_count += 1,
+                Err(error) => {
+                    last_error = Some(format!("Could not import {}: {error}", path.display()));
+                }
+            }
+        }
+
+        // A failure is the more important thing to report, even if other
+        // files of the same selection were imported.
+        self.status_message = match (last_error, imported_count) {
+            (Some(error), _) => error,
+            (None, 1) => format!("Imported {}", paths[0].display()),
+            (None, count) => format!("Imported {count} audio files"),
+        };
     }
 
     /// Saves to the project's file, asking for a location if it has none.
@@ -218,6 +250,10 @@ impl VizxApp {
             (
                 KeyboardShortcut::new(Modifiers::COMMAND, Key::N),
                 AppCommand::NewProject,
+            ),
+            (
+                KeyboardShortcut::new(Modifiers::COMMAND, Key::I),
+                AppCommand::ImportAudio,
             ),
         ];
 

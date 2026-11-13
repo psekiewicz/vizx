@@ -10,16 +10,18 @@
 //! milestones.
 
 mod file;
+mod media;
 mod metadata;
 mod project;
 mod settings;
 mod track;
 
 pub use file::{ProjectFileError, with_project_extension};
+pub use media::{AudioProperties, MediaContent, MediaId, MediaSource};
 pub use metadata::ProjectMetadata;
 pub use project::Project;
 pub use settings::{FrameRate, ProjectSettings};
-pub use track::{Track, TrackId, TrackKind};
+pub use track::{Clip, ClipId, Track, TrackId, TrackKind};
 
 /// File extension of native VizX project files, without the leading dot.
 pub const PROJECT_FILE_EXTENSION: &str = "vzx";
@@ -36,4 +38,5 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 ///   the missing fields get default values.
 /// - 3: track kinds reduced to `Audio` and `Visual`. The former
 ///   `Visualizer`, `Animation` and `Text` kinds load as `Visual`.
-pub const CURRENT_FORMAT_VERSION: u32 = 3;
+/// - 4: media sources and clips on tracks.
+pub const CURRENT_FORMAT_VERSION: u32 = 4;

@@ -1,0 +1,9 @@
+[package]
+name = "vizx-audio"
+description = "VizX audio file reading. No GUI code."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+symphonia.workspace = true

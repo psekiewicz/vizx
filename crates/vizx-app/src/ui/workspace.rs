@@ -148,7 +148,9 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, panel: &mut PanelKind) {
         match panel {
-            PanelKind::MediaLibrary => panels::media_library::show(ui),
+            PanelKind::MediaLibrary => {
+                panels::media_library::show(ui, self.session, self.requested_command);
+            }
             PanelKind::Preview => {
                 panels::preview::show(ui, self.session, self.requested_command);
             }

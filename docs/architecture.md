@@ -12,16 +12,23 @@ its own copy of anything.
 
 ## Crates
 
-The workspace has three crates. Dependencies point in one direction only:
+The workspace has four crates. Dependencies point in one direction only:
 
 ```text
 vizx-app  ──►  vizx-core  ──►  vizx-project
- (GUI)         (logic)          (data)
+ (GUI)         (logic)    │     (data)
+                          └──►  vizx-audio
+                                (audio files)
 ```
+
+`vizx-project` and `vizx-audio` do not know about each other. `vizx-core`
+connects them: it asks `vizx-audio` what is in a file and records the answer
+in the project.
 
 | Crate | Responsibility | Must not contain |
 |---|---|---|
 | `vizx-project` | What a project *is*: plain serializable data. | GUI, rendering, audio devices, file dialogs |
+| `vizx-audio` | Reading audio files: format detection, duration, sample rate, channels. Later: decoding samples for waveforms, analysis and playback. | GUI, project data |
 | `vizx-core` | Editing state and logic operating on a project. Future home of subsystem coordination. | GUI code |
 | `vizx-app` | The window, panels, menus and visual style. | Project rules or logic that other front ends would need |
 
@@ -111,7 +118,8 @@ fields get default values (`#[serde(default)]`) and the project is saved in
 the current layout from then on.
 
 Version **3** reduced the track kinds to two; the former `Visualizer`,
-`Animation` and `Text` kinds load as `Visual`.
+`Animation` and `Text` kinds load as `Visual`. Version **4** added media
+sources and clips.
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -130,6 +138,26 @@ shapes the timeline:
 - What a visual element *is* (visualizer, image, animation, text) will be a
   property of the element placed on a layer, not of the layer. Each element
   will be able to choose which audio it reacts to.
+
+### Media sources and clips
+
+- A `MediaSource` is a file the project uses. The project stores a reference
+  to the file plus the facts needed to lay it out (for audio: duration,
+  sample rate, channel count). File content is never copied into the
+  project.
+- A `Clip` places a media source on a track at a point in project time.
+- Importing audio (`Project::import_audio`) puts the file on the first empty
+  audio track and creates a new audio track only if all are in use, so an
+  import never overlaps or replaces existing audio.
+- The project length follows the audio: the first imported file sets it, a
+  later, longer file extends it, and importing never shortens it.
+- Media paths are currently stored as imported (absolute). Storing them
+  relative to the project file and re-linking moved files is planned; until
+  then a project is not portable together with its media.
+
+Audio files are read by `symphonia`, a pure-Rust library with no system
+dependencies. Only the formats VizX supports are compiled in: WAV, MP3,
+FLAC, Ogg Vorbis and AAC/M4A.
 
 ### Tracks and selection
 
@@ -205,7 +233,8 @@ crate. Cross-crate integration tests will go into the relevant crate's own
 
 ### Minimal dependencies
 
-Direct dependencies: `eframe`, `egui_dock`, `rfd`, `serde` and `serde_json`.
+Direct dependencies: `eframe`, `egui_dock`, `rfd`, `serde`, `serde_json` and
+`symphonia`.
 Planned libraries (cpal, RustFFT, FFmpeg bindings) are added in the
 milestone that first uses them.
 

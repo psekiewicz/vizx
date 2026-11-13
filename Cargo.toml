@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/vizx-app", "crates/vizx-core", "crates/vizx-project"]
+members = ["crates/vizx-app", "crates/vizx-audio", "crates/vizx-core", "crates/vizx-project"]
 
 # Values shared by every crate in the workspace. A crate opts in with
 # `version.workspace = true` etc., so there is one place to bump them.
@@ -12,6 +12,7 @@ repository = "https://github.com/psekiewicz/vizx"
 # Single source of truth for dependency versions. Crates reference these with
 # `name.workspace = true`, which keeps every crate on the same version.
 [workspace.dependencies]
+vizx-audio = { path = "crates/vizx-audio" }
 vizx-core = { path = "crates/vizx-core" }
 vizx-project = { path = "crates/vizx-project" }
 
@@ -26,6 +27,18 @@ eframe = { version = "0.36", default-features = false, features = [
 egui_dock = "0.21"
 # Native open/save file dialogs of the operating system.
 rfd = "0.18"
+# Reads audio files (pure Rust, no system libraries). Only the formats
+# listed here are compiled in.
+symphonia = { version = "0.6", default-features = false, features = [
+    "aac",
+    "flac",
+    "isomp4",
+    "mp3",
+    "ogg",
+    "pcm",
+    "vorbis",
+    "wav",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

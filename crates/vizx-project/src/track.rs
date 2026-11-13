@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::MediaId;
+
 /// Identifies a track within one project.
 ///
 /// Other parts of the project and the editor refer to a track by its id
@@ -50,11 +52,46 @@ impl TrackKind {
     }
 }
 
-/// One horizontal lane of the timeline. Elements will be placed on tracks
-/// in a later milestone.
+/// One horizontal lane of the timeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
     pub name: String,
     pub kind: TrackKind,
+    /// What is placed on this track, in no particular order.
+    #[serde(default)]
+    pub clips: Vec<Clip>,
+}
+
+impl Track {
+    /// The time at which the last clip on this track ends.
+    pub fn end_milliseconds(&self) -> u64 {
+        self.clips
+            .iter()
+            .map(Clip::end_milliseconds)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+/// Identifies a clip within one project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ClipId(pub(crate) u64);
+
+/// A piece of media placed on a track at a point in project time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Clip {
+    pub id: ClipId,
+    /// The media source this clip plays.
+    pub media: MediaId,
+    /// Where on the project timeline the clip begins.
+    pub start_milliseconds: u64,
+    pub duration_milliseconds: u64,
+}
+
+impl Clip {
+    pub fn end_milliseconds(&self) -> u64 {
+        self.start_milliseconds + self.duration_milliseconds
+    }
 }

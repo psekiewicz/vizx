@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use vizx_project::{Project, ProjectFileError, Track, TrackId, TrackKind};
+use vizx_audio::AudioFileError;
+use vizx_project::{AudioProperties, Project, ProjectFileError, Track, TrackId, TrackKind};
 
 use crate::Selection;
 
@@ -63,6 +64,26 @@ impl EditorSession {
         self.has_unsaved_changes = true;
         self.selection = Selection::Track(id);
         id
+    }
+
+    /// Imports an audio file: reads its properties, adds it to the project's
+    /// media and places it on an audio track, which becomes selected.
+    ///
+    /// The project is left untouched if the file cannot be read.
+    pub fn import_audio(&mut self, path: &Path) -> Result<TrackId, AudioFileError> {
+        let info = vizx_audio::probe_audio_file(path)?;
+        let properties = AudioProperties {
+            duration_milliseconds: info.duration_milliseconds,
+            sample_rate: info.sample_rate,
+            channel_count: info.channel_count,
+        };
+
+        let (_media_id, track_id) = self
+            .project
+            .import_audio(path.to_string_lossy(), properties);
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        Ok(track_id)
     }
 
     /// Removes a track, clearing the selection if it was selected.
@@ -172,6 +193,17 @@ mod tests {
 
         assert_eq!(session.selection(), Selection::Nothing);
         assert!(session.selected_track().is_none());
+    }
+
+    #[test]
+    fn importing_an_unreadable_file_changes_nothing() {
+        let mut session = EditorSession::new_untitled();
+        let missing = std::env::temp_dir().join("vizx-session-missing-audio.wav");
+
+        assert!(session.import_audio(&missing).is_err());
+        assert!(session.project().media().is_empty());
+        assert!(!session.has_unsaved_changes());
+        assert_eq!(session.selection(), Selection::Nothing);
     }
 
     #[test]

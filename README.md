@@ -8,9 +8,9 @@ It is one integrated editor. Audio, visuals, text and animation live in a
 single project and share one timeline.
 
 > **Status: early prototype.**
-> The application window, dockable panel layout, a minimal project model and
-> saving/opening `.vzx` project files exist. There is no audio, rendering,
-> timeline editing or export yet.
+> The application window, dockable panel layout, project files (`.vzx`), an
+> adaptive timeline with tracks, and audio import exist. There is no audio
+> playback, waveform display, rendering or export yet.
 
 ## Technology
 
@@ -33,6 +33,7 @@ vizx/
 ├── rust-toolchain.toml    Rust toolchain used by this project
 ├── crates/
 │   ├── vizx-project/      Project data model (no GUI)
+│   ├── vizx-audio/        Reading audio files (no GUI)
 │   ├── vizx-core/         Shared application logic (no GUI)
 │   └── vizx-app/          Desktop application: window and interface
 ├── assets/                Icons, fonts and shaders (empty for now)
