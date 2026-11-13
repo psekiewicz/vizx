@@ -34,4 +34,6 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 /// - 1: metadata and settings.
 /// - 2: timeline tracks and project duration. Version 1 files still load;
 ///   the missing fields get default values.
-pub const CURRENT_FORMAT_VERSION: u32 = 2;
+/// - 3: track kinds reduced to `Audio` and `Visual`. The former
+///   `Visualizer`, `Animation` and `Text` kinds load as `Visual`.
+pub const CURRENT_FORMAT_VERSION: u32 = 3;

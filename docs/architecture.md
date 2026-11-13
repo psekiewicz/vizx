@@ -110,11 +110,32 @@ tracks and the project duration. Version 1 files still load: the missing
 fields get default values (`#[serde(default)]`) and the project is saved in
 the current layout from then on.
 
+Version **3** reduced the track kinds to two; the former `Visualizer`,
+`Animation` and `Text` kinds load as `Visual`.
+
+### Audio drives the visuals; VizX is not an audio workstation
+
+Audio is the input that visuals react to, not material to be mixed. This
+shapes the timeline:
+
+- There are only two kinds of track: **audio tracks** and **visual layers**.
+- A new project has one audio track (the song) and one visual layer. A
+  single, unsplit audio file is the normal case.
+- Additional audio tracks exist only for separate stems (vocals, drums, ...)
+  that the user imports or, later, extracts. Their purpose is to be a
+  reaction source for visual elements, not a mixer channel. There will be no
+  faders, panning or audio effects; at most volume and mute.
+- Visual layers stack as in a video editor: a layer higher in the list is
+  drawn on top. New layers are added at the top, audio tracks at the bottom.
+- What a visual element *is* (visualizer, image, animation, text) will be a
+  property of the element placed on a layer, not of the layer. Each element
+  will be able to choose which audio it reacts to.
+
 ### Tracks and selection
 
-- A `Track` has a `TrackId`, a name and a `TrackKind` (Audio, Visualizer,
-  Animation, Text). Everything refers to a track by id, never by its
-  position in the list, and ids are never reused within a project.
+- A `Track` has a `TrackId`, a name and a `TrackKind` (`Audio` or
+  `Visual`). Everything refers to a track by id, never by its position in
+  the list, and ids are never reused within a project.
 - The track list is private to `Project`; tracks are added, removed and
   renamed through methods so ids stay consistent.
 - `Selection` lives in `vizx-core`'s `EditorSession`. It is shared editing

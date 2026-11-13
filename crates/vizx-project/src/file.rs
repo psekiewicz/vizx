@@ -147,6 +147,7 @@ struct FormatHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TrackKind;
 
     #[test]
     fn project_round_trips_through_vzx_text() {
@@ -215,6 +216,48 @@ mod tests {
         assert_eq!(project.settings.width, 1280);
         assert_eq!(project.settings.duration_milliseconds, 180_000);
         assert!(project.tracks().is_empty());
+    }
+
+    #[test]
+    fn version_2_track_kinds_load_as_audio_and_visual() {
+        let version_2_content = r#"{
+            "format_version": 2,
+            "metadata": {
+                "name": "Six Tracks",
+                "author": "",
+                "description": "",
+                "created_with_version": "0.1.0"
+            },
+            "settings": {
+                "width": 1920,
+                "height": 1080,
+                "frame_rate": { "numerator": 30, "denominator": 1 },
+                "duration_milliseconds": 60000
+            },
+            "tracks": [
+                { "id": 0, "name": "Vocals", "kind": "Audio" },
+                { "id": 1, "name": "Visualizer", "kind": "Visualizer" },
+                { "id": 2, "name": "Animation", "kind": "Animation" },
+                { "id": 3, "name": "Lyrics", "kind": "Text" }
+            ],
+            "next_track_id": 4
+        }"#;
+
+        let project = Project::from_vzx_str(version_2_content).unwrap();
+
+        let kinds: Vec<TrackKind> = project.tracks().iter().map(|track| track.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                TrackKind::Audio,
+                TrackKind::Visual,
+                TrackKind::Visual,
+                TrackKind::Visual
+            ]
+        );
+        // The user's track names and order are kept as they were.
+        assert_eq!(project.tracks()[3].name, "Lyrics");
+        assert_eq!(project.format_version, CURRENT_FORMAT_VERSION);
     }
 
     #[test]

@@ -421,11 +421,11 @@ fn add_track_menu(ui: &mut egui::Ui, session: &mut EditorSession) {
     }
 }
 
-/// One "Add ... Track" button per track kind. Returns the kind clicked.
+/// One "Add ..." button per track kind. Returns the kind clicked.
 fn add_track_buttons(ui: &mut egui::Ui) -> Option<TrackKind> {
     let mut clicked_kind = None;
     for kind in TrackKind::ALL {
-        if ui.button(format!("Add {} Track", kind.label())).clicked() {
+        if ui.button(format!("Add {}", kind.label())).clicked() {
             clicked_kind = Some(kind);
         }
     }
@@ -435,9 +435,7 @@ fn add_track_buttons(ui: &mut egui::Ui) -> Option<TrackKind> {
 fn track_color(kind: TrackKind) -> Color32 {
     match kind {
         TrackKind::Audio => Color32::from_rgb(86, 148, 222),
-        TrackKind::Visualizer => Color32::from_rgb(0, 168, 150),
-        TrackKind::Animation => Color32::from_rgb(150, 110, 220),
-        TrackKind::Text => Color32::from_rgb(120, 190, 96),
+        TrackKind::Visual => theme::ACCENT,
     }
 }
 

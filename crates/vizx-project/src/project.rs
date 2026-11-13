@@ -38,24 +38,17 @@ impl Project {
         }
     }
 
-    /// Creates a project with a typical set of tracks for a music video, so
-    /// a new project does not start with an empty timeline.
+    /// Creates a project with the smallest useful timeline: one audio track
+    /// for the song and one visual layer to put things on.
     pub fn with_starter_tracks(name: impl Into<String>) -> Self {
         let mut project = Self::new(name);
-        for (track_name, kind) in [
-            ("Vocals", TrackKind::Audio),
-            ("Music", TrackKind::Audio),
-            ("Beat", TrackKind::Audio),
-            ("Visualizer", TrackKind::Visualizer),
-            ("Animation", TrackKind::Animation),
-            ("Lyrics", TrackKind::Text),
-        ] {
-            project.add_track(track_name, kind);
-        }
+        project.add_track("Audio", TrackKind::Audio);
+        project.add_track("Layer 1", TrackKind::Visual);
         project
     }
 
-    /// Tracks from top to bottom.
+    /// Tracks from top to bottom. Visual layers come first, in drawing order
+    /// (the first one is drawn on top), followed by the audio tracks.
     pub fn tracks(&self) -> &[Track] {
         &self.tracks
     }
@@ -64,25 +57,38 @@ impl Project {
         self.tracks.iter().find(|track| track.id == id)
     }
 
-    /// Appends a track at the bottom and returns its id.
+    /// Adds a track and returns its id.
+    ///
+    /// A visual layer is added at the top, so it is drawn over the existing
+    /// layers, as a new layer is in a video or image editor. An audio track
+    /// is added at the bottom, below all visual layers.
     pub fn add_track(&mut self, name: impl Into<String>, kind: TrackKind) -> TrackId {
         // Guard against a hand-edited file whose counter is behind its ids.
         let highest_existing_id = self.tracks.iter().map(|track| track.id.0 + 1).max();
         let id = TrackId(self.next_track_id.max(highest_existing_id.unwrap_or(0)));
 
         self.next_track_id = id.0 + 1;
-        self.tracks.push(Track {
+        let track = Track {
             id,
             name: name.into(),
             kind,
-        });
+        };
+        match kind {
+            TrackKind::Visual => self.tracks.insert(0, track),
+            TrackKind::Audio => self.tracks.push(track),
+        }
         id
     }
 
-    /// Appends a track with an automatic name such as `Audio 7`.
+    /// Adds a track with an automatic name such as `Layer 2` or `Audio 2`.
     pub fn add_default_named_track(&mut self, kind: TrackKind) -> TrackId {
-        let number = self.tracks.len() + 1;
-        self.add_track(format!("{} {number}", kind.label()), kind)
+        let number = self
+            .tracks
+            .iter()
+            .filter(|track| track.kind == kind)
+            .count()
+            + 1;
+        self.add_track(format!("{} {number}", kind.default_name_prefix()), kind)
     }
 
     /// Removes a track. Returns `false` if no track has this id.
@@ -146,29 +152,34 @@ mod tests {
     }
 
     #[test]
-    fn starter_tracks_have_unique_ids_in_order() {
+    fn new_project_starts_with_one_layer_above_one_audio_track() {
         let project = Project::with_starter_tracks("Starter");
+
+        let tracks: Vec<(&str, TrackKind)> = project
+            .tracks()
+            .iter()
+            .map(|track| (track.name.as_str(), track.kind))
+            .collect();
+        assert_eq!(
+            tracks,
+            [("Layer 1", TrackKind::Visual), ("Audio", TrackKind::Audio)]
+        );
+        assert_ne!(project.tracks()[0].id, project.tracks()[1].id);
+    }
+
+    #[test]
+    fn new_layers_go_on_top_and_new_audio_tracks_to_the_bottom() {
+        let mut project = Project::with_starter_tracks("Order");
+
+        project.add_default_named_track(TrackKind::Audio);
+        project.add_default_named_track(TrackKind::Visual);
 
         let names: Vec<&str> = project
             .tracks()
             .iter()
             .map(|track| track.name.as_str())
             .collect();
-        assert_eq!(
-            names,
-            [
-                "Vocals",
-                "Music",
-                "Beat",
-                "Visualizer",
-                "Animation",
-                "Lyrics"
-            ]
-        );
-
-        let mut ids: Vec<TrackId> = project.tracks().iter().map(|track| track.id).collect();
-        ids.dedup();
-        assert_eq!(ids.len(), 6);
+        assert_eq!(names, ["Layer 2", "Layer 1", "Audio", "Audio 2"]);
     }
 
     #[test]
@@ -178,7 +189,7 @@ mod tests {
         let second = project.add_track("Second", TrackKind::Audio);
 
         assert!(project.remove_track(second));
-        let third = project.add_track("Third", TrackKind::Text);
+        let third = project.add_track("Third", TrackKind::Visual);
 
         assert_ne!(third, first);
         assert_ne!(third, second);

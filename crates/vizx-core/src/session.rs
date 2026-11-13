@@ -57,7 +57,7 @@ impl EditorSession {
         }
     }
 
-    /// Adds a track at the bottom of the timeline and selects it.
+    /// Adds a track to the timeline and selects it.
     pub fn add_track(&mut self, kind: TrackKind) -> TrackId {
         let id = self.project.add_default_named_track(kind);
         self.has_unsaved_changes = true;
@@ -155,11 +155,11 @@ mod tests {
         let mut session = EditorSession::new_untitled();
         let track_count_before = session.project().tracks().len();
 
-        let id = session.add_track(TrackKind::Text);
+        let id = session.add_track(TrackKind::Visual);
 
         assert_eq!(session.project().tracks().len(), track_count_before + 1);
         assert_eq!(session.selection(), Selection::Track(id));
-        assert_eq!(session.selected_track().unwrap().kind, TrackKind::Text);
+        assert_eq!(session.selected_track().unwrap().kind, TrackKind::Visual);
         assert!(session.has_unsaved_changes());
     }
 
