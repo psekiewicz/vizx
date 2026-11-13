@@ -1,0 +1,9 @@
+[package]
+name = "vizx-core"
+description = "VizX shared application logic. No GUI code."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+vizx-project.workspace = true

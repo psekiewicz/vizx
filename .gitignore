@@ -1,0 +1,32 @@
+# --- Rust / Cargo ---
+/target/
+**/*.rs.bk
+*.pdb
+
+# Machine-local cargo configuration (e.g. a custom target-dir).
+/.cargo/config.toml
+
+# --- Editors / IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Windows ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# --- Linux ---
+.directory
+.Trash-*
+.fuse_hidden*
+.nfs*
+
+# --- Local environment / temporary files ---
+.env
+.env.*
+*.tmp
+*.log

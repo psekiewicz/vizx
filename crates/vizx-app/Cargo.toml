@@ -1,0 +1,17 @@
+[package]
+name = "vizx-app"
+description = "VizX desktop application: window, egui interface and panel layout."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+# The executable is called `vizx` (vizx.exe on Windows).
+[[bin]]
+name = "vizx"
+path = "src/main.rs"
+
+[dependencies]
+vizx-core.workspace = true
+vizx-project.workspace = true
+eframe.workspace = true
+egui_dock.workspace = true

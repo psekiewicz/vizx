@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/vizx-app", "crates/vizx-core", "crates/vizx-project"]
+
+# Values shared by every crate in the workspace. A crate opts in with
+# `version.workspace = true` etc., so there is one place to bump them.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/psekiewicz/vizx"
+
+# Single source of truth for dependency versions. Crates reference these with
+# `name.workspace = true`, which keeps every crate on the same version.
+[workspace.dependencies]
+vizx-core = { path = "crates/vizx-core" }
+vizx-project = { path = "crates/vizx-project" }
+
+# egui_dock 0.21 is built against egui 0.36, so eframe/egui must stay on 0.36
+# until egui_dock publishes a release for a newer egui.
+eframe = { version = "0.36", default-features = false, features = [
+    "default_fonts", # bundled UI fonts, identical on every OS
+    "wgpu",          # render the UI through wgpu (no OpenGL-only path)
+    "x11",           # Linux display servers; ignored on Windows
+    "wayland",
+] }
+egui_dock = "0.21"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Smaller debug info: noticeably less disk usage and faster linking on the
+# modest development laptop, while panics/backtraces still show file:line.
+[profile.dev]
+debug = "line-tables-only"

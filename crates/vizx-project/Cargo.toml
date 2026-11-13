@@ -1,0 +1,14 @@
+[package]
+name = "vizx-project"
+description = "VizX project data model (.vzx). No GUI code."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+# Only used by tests to prove the model round-trips through a real format.
+# The on-disk .vzx encoding is not decided in this milestone.
+serde_json.workspace = true
