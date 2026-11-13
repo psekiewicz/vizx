@@ -9,8 +9,8 @@ single project and share one timeline.
 
 > **Status: early prototype.**
 > The application window, dockable panel layout, project files (`.vzx`), an
-> adaptive timeline with tracks, and audio import exist. There is no audio
-> playback, waveform display, rendering or export yet.
+> adaptive timeline with tracks, audio import and waveform display exist.
+> There is no audio playback, rendering or export yet.
 
 ## Technology
 

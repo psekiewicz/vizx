@@ -7,9 +7,11 @@
 
 mod selection;
 mod session;
+mod waveforms;
 
 pub use selection::Selection;
 pub use session::EditorSession;
+pub use waveforms::{WaveformState, WaveformStore};
 
 /// Name of the application as shown to the user.
 pub const APP_NAME: &str = "VizX (Prototype)";

@@ -159,6 +159,30 @@ Audio files are read by `symphonia`, a pure-Rust library with no system
 dependencies. Only the formats VizX supports are compiled in: WAV, MP3,
 FLAC, Ogg Vorbis and AAC/M4A.
 
+### Waveforms
+
+- `vizx-audio` decodes a file and reduces it to `WaveformPeaks`: the lowest
+  and highest sample value of every 5 ms of audio. A song has millions of
+  samples but a screen only a couple of thousand pixel columns, so the peaks
+  hold everything a waveform drawing can show in a few hundred kilobytes.
+- Decoding a whole song takes seconds, so it never happens on the UI thread.
+  `WaveformStore` (in `vizx-core`) decodes each file once on a background
+  thread and receives the result through a channel. The UI asks for the
+  current state every frame and draws what is available; a clip shows
+  "reading waveform..." until its peaks arrive.
+- The timeline draws one vertical line per pixel column, asking the peaks
+  for exactly the time that column covers. The same code therefore works at
+  every zoom level, and only visible columns are drawn.
+- Waveforms are derived data. They are not part of the project, are not
+  saved, and are recomputed when a project is opened.
+- Audio tracks are taller than visual layers to give the waveform room, so
+  lane positions are computed by `TrackRows` rather than by multiplying an
+  index.
+
+Dependencies are compiled with optimizations even in debug builds
+(`[profile.dev.package."*"]` in the root `Cargo.toml`). Audio decoding is
+many times faster that way, and VizX's own crates still build quickly.
+
 ### Tracks and selection
 
 - A `Track` has a `TrackId`, a name and a `TrackKind` (`Audio` or

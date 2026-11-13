@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use vizx_core::EditorSession;
+use vizx_core::{EditorSession, WaveformStore};
 use vizx_project::{PROJECT_FILE_EXTENSION, with_project_extension};
 
 use crate::theme;
@@ -43,6 +43,8 @@ impl AppCommand {
 pub struct VizxApp {
     pub session: EditorSession,
     pub workspace: Workspace,
+    /// Waveforms of the project's audio files, computed in the background.
+    waveforms: WaveformStore,
     pub is_about_window_open: bool,
     pub is_project_settings_open: bool,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
@@ -69,6 +71,7 @@ impl VizxApp {
         Self {
             session: EditorSession::new_untitled(),
             workspace: Workspace::new(),
+            waveforms: WaveformStore::default(),
             is_about_window_open: false,
             is_project_settings_open: false,
             graphics_summary: describe_graphics_adapter(creation_context),
@@ -268,6 +271,23 @@ impl VizxApp {
         }
     }
 
+    /// Collects waveforms finished in the background and starts computing
+    /// the ones the project needs but does not have yet.
+    fn update_waveforms(&mut self, ctx: &egui::Context) {
+        self.waveforms.collect_finished();
+
+        for source in self.session.project().media() {
+            if self.waveforms.state(&source.path).is_none() {
+                // The background thread calls this when it is done, so the
+                // window redraws and shows the waveform without waiting for
+                // the next mouse movement.
+                let ctx = ctx.clone();
+                self.waveforms
+                    .request(&source.path, move || ctx.request_repaint());
+            }
+        }
+    }
+
     /// Intercepts the window's close button while there are unsaved changes
     /// and routes it through the same confirmation as File > Exit.
     fn handle_window_close_request(&mut self, ctx: &egui::Context) {
@@ -328,6 +348,7 @@ impl eframe::App for VizxApp {
         self.maximize_on_startup(&ctx);
         self.handle_window_close_request(&ctx);
         self.handle_keyboard_shortcuts(&ctx);
+        self.update_waveforms(&ctx);
 
         // Fixed bars are added first; each one takes space from an edge of
         // the window. Whatever remains is given to the dockable workspace.
@@ -338,8 +359,12 @@ impl eframe::App for VizxApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
-                self.workspace
-                    .show(ui, &mut self.session, &mut self.requested_command);
+                self.workspace.show(
+                    ui,
+                    &mut self.session,
+                    &self.waveforms,
+                    &mut self.requested_command,
+                );
             });
 
         about_window::show(&ctx, self);

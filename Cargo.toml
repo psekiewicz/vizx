@@ -46,3 +46,14 @@ serde_json = "1"
 # modest development laptop, while panics/backtraces still show file:line.
 [profile.dev]
 debug = "line-tables-only"
+
+# Compile dependencies with optimizations even in debug builds. Audio
+# decoding and UI rendering are many times faster this way, while VizX's own
+# crates still build quickly and stay easy to debug. The cost is a longer
+# first build.
+[profile.dev.package."*"]
+opt-level = 2
+
+# The per-sample loops of the audio crate need the same treatment.
+[profile.dev.package.vizx-audio]
+opt-level = 2

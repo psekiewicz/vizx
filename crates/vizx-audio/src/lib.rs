@@ -1,16 +1,22 @@
 //! Reading audio files for VizX.
 //!
 //! This crate knows about audio file formats and nothing else: not the
-//! project, not the GUI. It currently answers one question, "what is in
-//! this audio file?", which is what importing needs. Decoding samples for
-//! waveforms, analysis and playback will be added here later.
+//! project, not the GUI.
+//!
+//! Two things are provided: reading the basic facts about a file (for
+//! importing) and summarizing its samples as waveform peaks (for drawing).
+//! Analysis and playback will be added here later.
 //!
 //! Decoding is done by the `symphonia` library, which is written in Rust and
 //! needs no system libraries, so it behaves the same on Windows and Linux.
 
 mod probe;
+mod wav;
+mod waveform;
 
 pub use probe::{AudioFileError, AudioFileInfo, probe_audio_file};
+pub use wav::write_wav_file;
+pub use waveform::{WaveformPeaks, compute_waveform_peaks};
 
 /// File extensions of the audio formats VizX can read, in lower case.
 pub const SUPPORTED_EXTENSIONS: [&str; 7] = ["wav", "mp3", "flac", "ogg", "m4a", "aac", "mp4"];

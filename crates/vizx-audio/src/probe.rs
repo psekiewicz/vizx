@@ -4,7 +4,7 @@ use std::io;
 use std::path::Path;
 
 use symphonia::core::formats::probe::Hint;
-use symphonia::core::formats::{FormatOptions, Track, TrackType};
+use symphonia::core::formats::{FormatOptions, FormatReader, Track, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
@@ -55,8 +55,11 @@ impl From<io::Error> for AudioFileError {
     }
 }
 
-/// Opens an audio file and reads its duration, sample rate and channels.
-pub fn probe_audio_file(path: &Path) -> Result<AudioFileInfo, AudioFileError> {
+/// Opens an audio file and detects its container format.
+///
+/// The returned reader gives access to the file's tracks and, packet by
+/// packet, to its compressed audio. Shared by probing and decoding.
+pub(crate) fn open_format(path: &Path) -> Result<Box<dyn FormatReader>, AudioFileError> {
     let file = File::open(path)?;
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -67,14 +70,19 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioFileInfo, AudioFileError> {
         hint.with_extension(extension);
     }
 
-    let format = symphonia::default::get_probe()
+    symphonia::default::get_probe()
         .probe(
             &hint,
             stream,
             FormatOptions::default(),
             MetadataOptions::default(),
         )
-        .map_err(|error| AudioFileError::UnsupportedFormat(error.to_string()))?;
+        .map_err(|error| AudioFileError::UnsupportedFormat(error.to_string()))
+}
+
+/// Opens an audio file and reads its duration, sample rate and channels.
+pub fn probe_audio_file(path: &Path) -> Result<AudioFileInfo, AudioFileError> {
+    let format = open_format(path)?;
 
     let track = format
         .default_track(TrackType::Audio)
@@ -127,34 +135,17 @@ fn frames_to_milliseconds(frame_count: u64, sample_rate: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
     use std::path::PathBuf;
 
     use super::*;
+    use crate::write_wav_file;
 
-    /// Writes a silent 16-bit PCM WAV file and returns its path.
+    /// Writes a silent WAV file with the given number of frames.
     fn write_test_wav(name: &str, sample_rate: u32, channel_count: u16, frames: u32) -> PathBuf {
         let path =
             std::env::temp_dir().join(format!("vizx-audio-{name}-{}.wav", std::process::id()));
-        let bytes_per_frame = u32::from(channel_count) * 2;
-        let data_size = frames * bytes_per_frame;
-
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"RIFF");
-        bytes.extend_from_slice(&(36 + data_size).to_le_bytes());
-        bytes.extend_from_slice(b"WAVEfmt ");
-        bytes.extend_from_slice(&16u32.to_le_bytes()); // size of the fmt chunk
-        bytes.extend_from_slice(&1u16.to_le_bytes()); // 1 = uncompressed PCM
-        bytes.extend_from_slice(&channel_count.to_le_bytes());
-        bytes.extend_from_slice(&sample_rate.to_le_bytes());
-        bytes.extend_from_slice(&(sample_rate * bytes_per_frame).to_le_bytes());
-        bytes.extend_from_slice(&(bytes_per_frame as u16).to_le_bytes());
-        bytes.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-        bytes.extend_from_slice(b"data");
-        bytes.extend_from_slice(&data_size.to_le_bytes());
-        bytes.resize(bytes.len() + data_size as usize, 0);
-
-        File::create(&path).unwrap().write_all(&bytes).unwrap();
+        let samples = vec![0i16; frames as usize * usize::from(channel_count)];
+        write_wav_file(&path, sample_rate, channel_count, &samples).unwrap();
         path
     }
 

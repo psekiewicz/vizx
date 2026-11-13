@@ -10,13 +10,16 @@
 //! - Ruler marks get denser or sparser with the zoom level.
 
 use eframe::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke};
-use vizx_core::{EditorSession, Selection};
-use vizx_project::{TrackId, TrackKind};
+use vizx_audio::WaveformPeaks;
+use vizx_core::{EditorSession, Selection, WaveformState, WaveformStore};
+use vizx_project::{Track, TrackId, TrackKind};
 
 use crate::theme;
 
 const RULER_HEIGHT: f32 = 22.0;
-const TRACK_HEIGHT: f32 = 28.0;
+const VISUAL_TRACK_HEIGHT: f32 = 28.0;
+/// Audio tracks are taller, to leave room for the waveform.
+const AUDIO_TRACK_HEIGHT: f32 = 64.0;
 const TRACK_HEADER_WIDTH: f32 = 150.0;
 /// Gap between a clip and the top and bottom edges of its lane.
 const CLIP_VERTICAL_MARGIN: f32 = 3.0;
@@ -52,7 +55,12 @@ enum Zoom {
     PixelsPerSecond(f32),
 }
 
-pub fn show(ui: &mut egui::Ui, session: &mut EditorSession, view: &mut TimelineView) {
+pub fn show(
+    ui: &mut egui::Ui,
+    session: &mut EditorSession,
+    view: &mut TimelineView,
+    waveforms: &WaveformStore,
+) {
     let panel_rect = ui.available_rect_before_wrap();
     ui.painter_at(panel_rect)
         .rect_filled(panel_rect, 0.0, theme::CANVAS_BACKGROUND);
@@ -78,7 +86,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut EditorSession, view: &mut TimelineV
     let scale = TimeScale::new(view, duration_seconds, lanes_rect.width());
     handle_zoom_input(ui, view, &scale, ruler_rect.union(lanes_rect));
 
-    let scroll_offset = show_lanes(ui, session, view, &scale, lanes_rect);
+    let scroll_offset = show_lanes(ui, session, view, waveforms, &scale, lanes_rect);
     view.scroll_offset = scroll_offset;
 
     show_ruler(ui, &scale, ruler_rect, scroll_offset.x);
@@ -188,6 +196,7 @@ fn show_lanes(
     ui: &mut egui::Ui,
     session: &mut EditorSession,
     view: &mut TimelineView,
+    waveforms: &WaveformStore,
     scale: &TimeScale,
     lanes_rect: Rect,
 ) -> egui::Vec2 {
@@ -213,18 +222,17 @@ fn show_lanes(
 
     let mut lanes_ui = ui.new_child(egui::UiBuilder::new().max_rect(lanes_rect));
     let output = scroll_area.show_viewport(&mut lanes_ui, |ui, visible| {
-        let track_count = session.project().tracks().len();
-        let content_size = egui::vec2(scale.content_width(), track_count as f32 * TRACK_HEIGHT);
+        let rows = TrackRows::new(session.project().tracks());
+        let content_size = egui::vec2(scale.content_width(), rows.total_height);
         let (content_rect, response) = ui.allocate_exact_size(content_size, Sense::click());
         let painter = ui.painter();
         let separator = Stroke::new(1.0, theme::SEPARATOR);
         let selection = session.selection();
 
-        for (index, track) in session.project().tracks().iter().enumerate() {
-            let top = content_rect.top() + index as f32 * TRACK_HEIGHT;
+        for (track, row) in session.project().tracks().iter().zip(&rows.rows) {
             let lane_rect = Rect::from_min_size(
-                egui::pos2(content_rect.left(), top),
-                egui::vec2(content_rect.width(), TRACK_HEIGHT),
+                egui::pos2(content_rect.left(), content_rect.top() + row.top),
+                egui::vec2(content_rect.width(), row.height),
             );
             if selection == Selection::Track(track.id) {
                 painter.rect_filled(lane_rect, 0.0, theme::ACCENT.gamma_multiply(0.12));
@@ -247,15 +255,17 @@ fn show_lanes(
         }
 
         // Clips, drawn over the guide lines.
-        for (index, track) in session.project().tracks().iter().enumerate() {
-            let top = content_rect.top() + index as f32 * TRACK_HEIGHT;
+        let visible_left = content_rect.left() + visible.left();
+        let visible_right = content_rect.left() + visible.right();
+        for (track, row) in session.project().tracks().iter().zip(&rows.rows) {
+            let top = content_rect.top() + row.top;
             for clip in &track.clips {
                 let left = content_rect.left()
                     + clip.start_milliseconds as f32 / 1000.0 * scale.pixels_per_second;
                 let width = clip.duration_milliseconds as f32 / 1000.0 * scale.pixels_per_second;
                 let clip_rect = Rect::from_min_size(
                     egui::pos2(left, top + CLIP_VERTICAL_MARGIN),
-                    egui::vec2(width, TRACK_HEIGHT - 2.0 * CLIP_VERTICAL_MARGIN),
+                    egui::vec2(width, row.height - 2.0 * CLIP_VERTICAL_MARGIN),
                 );
                 let color = track_color(track.kind);
                 painter.rect_filled(clip_rect, 2.0, color.gamma_multiply(0.35));
@@ -266,22 +276,38 @@ fn show_lanes(
                     egui::StrokeKind::Inside,
                 );
 
-                // The label stays inside the clip, and stays readable at the
-                // left edge of the view when the clip starts off-screen.
-                let label = session
-                    .project()
-                    .media_source(clip.media)
-                    .map_or("Missing media", |source| source.file_name());
-                let visible_left = content_rect.left() + visible.left();
-                painter
-                    .with_clip_rect(clip_rect.intersect(painter.clip_rect()))
-                    .text(
-                        egui::pos2(left.max(visible_left) + 6.0, clip_rect.center().y),
-                        Align2::LEFT_CENTER,
-                        label,
-                        FontId::proportional(11.0),
-                        Color32::WHITE,
-                    );
+                // Nothing drawn for a clip may spill outside of it.
+                let clip_painter = painter.with_clip_rect(clip_rect.intersect(painter.clip_rect()));
+                let source = session.project().media_source(clip.media);
+                let waveform = source.and_then(|source| waveforms.state(&source.path));
+
+                let status = match waveform {
+                    Some(WaveformState::Ready(peaks)) => {
+                        draw_waveform(
+                            &clip_painter,
+                            clip_rect,
+                            visible_left..=visible_right,
+                            peaks,
+                            scale.pixels_per_second,
+                            color,
+                        );
+                        ""
+                    }
+                    Some(WaveformState::Loading) => "  (reading waveform...)",
+                    Some(WaveformState::Failed(_)) => "  (waveform unavailable)",
+                    None => "",
+                };
+
+                // The label stays readable at the left edge of the view when
+                // the clip starts off-screen.
+                let file_name = source.map_or("Missing media", |source| source.file_name());
+                clip_painter.text(
+                    egui::pos2(left.max(visible_left) + 6.0, clip_rect.top() + 3.0),
+                    Align2::LEFT_TOP,
+                    format!("{file_name}{status}"),
+                    FontId::proportional(11.0),
+                    Color32::WHITE,
+                );
             }
         }
 
@@ -289,8 +315,10 @@ fn show_lanes(
         if response.clicked()
             && let Some(pointer) = response.interact_pointer_pos()
         {
-            let index = ((pointer.y - content_rect.top()) / TRACK_HEIGHT).floor() as usize;
-            let clicked_track = session.project().tracks().get(index).map(|track| track.id);
+            let clicked_track = rows
+                .index_at(pointer.y - content_rect.top())
+                .and_then(|index| session.project().tracks().get(index))
+                .map(|track| track.id);
             session.select(clicked_track.map_or(Selection::Nothing, Selection::Track));
         }
         response.context_menu(|ui| add_track_menu(ui, session));
@@ -351,12 +379,12 @@ fn show_track_headers(
     let mut track_to_remove: Option<TrackId> = None;
     let mut kind_to_add: Option<TrackKind> = None;
     let selection = session.selection();
+    let rows = TrackRows::new(session.project().tracks());
 
-    for (index, track) in session.project().tracks().iter().enumerate() {
-        let top = headers_rect.top() - scroll_y + index as f32 * TRACK_HEIGHT;
+    for (track, row) in session.project().tracks().iter().zip(&rows.rows) {
         let row_rect = Rect::from_min_size(
-            egui::pos2(headers_rect.left(), top),
-            egui::vec2(headers_rect.width(), TRACK_HEIGHT),
+            egui::pos2(headers_rect.left(), headers_rect.top() - scroll_y + row.top),
+            egui::vec2(headers_rect.width(), row.height),
         );
         let visible_rect = row_rect.intersect(headers_rect);
         if !visible_rect.is_positive() {
@@ -369,7 +397,7 @@ fn show_track_headers(
         }
         // Colored marker on the left edge shows the kind of track.
         painter.rect_filled(
-            Rect::from_min_size(row_rect.left_top(), egui::vec2(3.0, TRACK_HEIGHT)),
+            Rect::from_min_size(row_rect.left_top(), egui::vec2(3.0, row.height)),
             0.0,
             track_color(track.kind),
         );
@@ -406,8 +434,7 @@ fn show_track_headers(
     }
 
     // The empty space under the last header also offers "add track".
-    let empty_top =
-        headers_rect.top() - scroll_y + session.project().tracks().len() as f32 * TRACK_HEIGHT;
+    let empty_top = headers_rect.top() - scroll_y + rows.total_height;
     let empty_rect = Rect::from_min_max(
         egui::pos2(headers_rect.left(), empty_top.max(headers_rect.top())),
         headers_rect.max,
@@ -432,6 +459,77 @@ fn show_track_headers(
     }
     if let Some(kind) = kind_to_add {
         session.add_track(kind);
+    }
+}
+
+/// Where each track's lane is, measured down from the top of the first one.
+/// Lanes have different heights, so positions cannot be computed by simply
+/// multiplying an index.
+struct TrackRows {
+    rows: Vec<TrackRow>,
+    total_height: f32,
+}
+
+struct TrackRow {
+    top: f32,
+    height: f32,
+}
+
+impl TrackRows {
+    fn new(tracks: &[Track]) -> Self {
+        let mut rows = Vec::with_capacity(tracks.len());
+        let mut top = 0.0;
+        for track in tracks {
+            let height = match track.kind {
+                TrackKind::Audio => AUDIO_TRACK_HEIGHT,
+                TrackKind::Visual => VISUAL_TRACK_HEIGHT,
+            };
+            rows.push(TrackRow { top, height });
+            top += height;
+        }
+        Self {
+            rows,
+            total_height: top,
+        }
+    }
+
+    /// Index of the track whose lane contains the vertical position `y`.
+    fn index_at(&self, y: f32) -> Option<usize> {
+        self.rows
+            .iter()
+            .position(|row| y >= row.top && y < row.top + row.height)
+    }
+}
+
+/// Draws a waveform into a clip: one vertical line per pixel column, from
+/// the lowest to the highest sample value within that column's slice of
+/// time. Because each column asks for exactly the time it covers, the same
+/// code works at every zoom level, and only visible columns are drawn.
+fn draw_waveform(
+    painter: &egui::Painter,
+    clip_rect: Rect,
+    visible_x: std::ops::RangeInclusive<f32>,
+    peaks: &WaveformPeaks,
+    pixels_per_second: f32,
+    color: Color32,
+) {
+    let stroke = Stroke::new(1.0, color);
+    let center_y = clip_rect.center().y;
+    let half_height = (clip_rect.height() / 2.0 - 2.0).max(1.0);
+    let last_x = clip_rect.right().min(*visible_x.end());
+
+    let mut x = clip_rect.left().max(*visible_x.start()).floor();
+    while x < last_x {
+        let start_seconds = f64::from((x - clip_rect.left()) / pixels_per_second);
+        let end_seconds = f64::from((x + 1.0 - clip_rect.left()) / pixels_per_second);
+        if let Some((minimum, maximum)) = peaks.range(start_seconds, end_seconds) {
+            // Positive sample values go up, which is towards smaller y.
+            let top = center_y - maximum * half_height;
+            let bottom = center_y - minimum * half_height;
+            // Silence still gets a one-pixel line, so the clip is not blank.
+            painter.vline(x + 0.5, top..=bottom.max(top + 1.0), stroke);
+        }
+        x += 1.0;
     }
 }
 
@@ -529,6 +627,27 @@ mod tests {
         // Labels never end up closer than the minimum spacing.
         assert!(zoomed_out * 2.0 >= MIN_LABEL_SPACING);
         assert!(zoomed_in * 200.0 >= MIN_LABEL_SPACING);
+    }
+
+    #[test]
+    fn audio_tracks_are_taller_and_rows_stack_without_gaps() {
+        let mut project = vizx_project::Project::new("Rows");
+        project.add_track("Song", TrackKind::Audio);
+        project.add_track("Layer", TrackKind::Visual);
+        // Order on the timeline: the visual layer, then the audio track.
+        let rows = TrackRows::new(project.tracks());
+
+        assert_eq!(rows.rows[0].top, 0.0);
+        assert_eq!(rows.rows[0].height, VISUAL_TRACK_HEIGHT);
+        assert_eq!(rows.rows[1].top, VISUAL_TRACK_HEIGHT);
+        assert_eq!(rows.rows[1].height, AUDIO_TRACK_HEIGHT);
+        assert_eq!(rows.total_height, VISUAL_TRACK_HEIGHT + AUDIO_TRACK_HEIGHT);
+
+        assert_eq!(rows.index_at(0.0), Some(0));
+        assert_eq!(rows.index_at(VISUAL_TRACK_HEIGHT - 0.1), Some(0));
+        assert_eq!(rows.index_at(VISUAL_TRACK_HEIGHT), Some(1));
+        assert_eq!(rows.index_at(rows.total_height), None);
+        assert_eq!(rows.index_at(-1.0), None);
     }
 
     #[test]

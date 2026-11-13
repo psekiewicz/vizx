@@ -2,7 +2,7 @@
 
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex};
-use vizx_core::EditorSession;
+use vizx_core::{EditorSession, WaveformStore};
 
 use crate::app::AppCommand;
 use crate::theme;
@@ -82,12 +82,14 @@ impl Workspace {
         &mut self,
         ui: &mut egui::Ui,
         session: &mut EditorSession,
+        waveforms: &WaveformStore,
         requested_command: &mut Option<AppCommand>,
     ) {
         let style = theme::dock_style(ui.style());
         let mut panel_viewer = PanelViewer {
             session,
             timeline_view: &mut self.timeline_view,
+            waveforms,
             requested_command,
         };
 
@@ -132,6 +134,7 @@ fn default_layout() -> DockState<PanelKind> {
 struct PanelViewer<'session> {
     session: &'session mut EditorSession,
     timeline_view: &'session mut TimelineView,
+    waveforms: &'session WaveformStore,
     requested_command: &'session mut Option<AppCommand>,
 }
 
@@ -156,7 +159,7 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
             }
             PanelKind::Properties => panels::properties::show(ui, self.session),
             PanelKind::Timeline => {
-                panels::timeline::show(ui, self.session, self.timeline_view);
+                panels::timeline::show(ui, self.session, self.timeline_view, self.waveforms);
             }
         }
     }
