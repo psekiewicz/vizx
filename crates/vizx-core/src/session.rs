@@ -20,6 +20,8 @@ pub struct EditorSession {
     file_path: Option<PathBuf>,
     has_unsaved_changes: bool,
     selection: Selection,
+    /// Current position on the project timeline, in seconds.
+    playhead_seconds: f64,
 }
 
 impl EditorSession {
@@ -30,6 +32,7 @@ impl EditorSession {
             file_path: None,
             has_unsaved_changes: false,
             selection: Selection::Nothing,
+            playhead_seconds: 0.0,
         }
     }
 
@@ -40,7 +43,27 @@ impl EditorSession {
             file_path: Some(path.to_owned()),
             has_unsaved_changes: false,
             selection: Selection::Nothing,
+            playhead_seconds: 0.0,
         })
+    }
+
+    /// Where the playhead is on the project timeline, in seconds.
+    ///
+    /// Every panel that shows "now" (the timeline, the time display, later
+    /// the preview) reads this one value. Like the selection, it is editing
+    /// state: moving it is not a change to the project and it is not saved.
+    pub fn playhead_seconds(&self) -> f64 {
+        self.playhead_seconds
+    }
+
+    /// Moves the playhead, keeping it within the project.
+    pub fn set_playhead_seconds(&mut self, seconds: f64) {
+        let project_end = self.project.settings.duration_seconds();
+        self.playhead_seconds = if seconds.is_finite() {
+            seconds.clamp(0.0, project_end)
+        } else {
+            0.0
+        };
     }
 
     pub fn selection(&self) -> Selection {
@@ -222,6 +245,26 @@ mod tests {
         assert!(session.project().media().is_empty());
         assert!(!session.has_unsaved_changes());
         assert_eq!(session.selection(), Selection::Nothing);
+    }
+
+    #[test]
+    fn playhead_stays_within_the_project_and_is_not_an_edit() {
+        let mut session = EditorSession::new_untitled();
+        let project_end = session.project().settings.duration_seconds();
+
+        session.set_playhead_seconds(12.5);
+        assert_eq!(session.playhead_seconds(), 12.5);
+
+        session.set_playhead_seconds(-3.0);
+        assert_eq!(session.playhead_seconds(), 0.0);
+
+        session.set_playhead_seconds(project_end + 100.0);
+        assert_eq!(session.playhead_seconds(), project_end);
+
+        session.set_playhead_seconds(f64::NAN);
+        assert_eq!(session.playhead_seconds(), 0.0);
+
+        assert!(!session.has_unsaved_changes());
     }
 
     #[test]

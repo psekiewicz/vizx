@@ -1,19 +1,23 @@
 //! Reading audio files for VizX.
 //!
-//! This crate knows about audio file formats and nothing else: not the
-//! project, not the GUI.
+//! This crate knows about audio files and the sound card and nothing else:
+//! not the project, not the GUI.
 //!
-//! Two things are provided: reading the basic facts about a file (for
-//! importing) and summarizing its samples as waveform peaks (for drawing).
-//! Analysis and playback will be added here later.
+//! It reads the basic facts about a file (for importing), decodes files
+//! into memory, summarizes samples as waveform peaks (for drawing) and
+//! plays audio through the sound card. Analysis will be added here later.
 //!
 //! Decoding is done by the `symphonia` library, which is written in Rust and
 //! needs no system libraries, so it behaves the same on Windows and Linux.
 
+mod decode;
+mod playback;
 mod probe;
 mod wav;
 mod waveform;
 
+pub use decode::{DecodedAudio, decode_audio_file};
+pub use playback::{AudioPlayer, PlaybackError, PlaybackSource};
 pub use probe::{AudioFileError, AudioFileInfo, probe_audio_file};
 pub use wav::write_wav_file;
 pub use waveform::{WaveformPeaks, compute_waveform_peaks};

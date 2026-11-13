@@ -9,7 +9,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
         ui.menu_button("File", |ui| file_menu(ui, app));
         ui.menu_button("Edit", edit_menu);
         ui.menu_button("View", |ui| view_menu(ui, app));
-        ui.menu_button("Playback", playback_menu);
+        ui.menu_button("Playback", |ui| playback_menu(ui, app));
         ui.menu_button("Help", |ui| help_menu(ui, app));
     });
 }
@@ -94,12 +94,13 @@ fn view_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
     }
 }
 
-fn playback_menu(ui: &mut egui::Ui) {
-    unavailable_item(ui, "Play / Pause", "Space");
-    unavailable_item(ui, "Stop", "");
+fn playback_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
+    let play_label = if app.is_playing() { "Pause" } else { "Play" };
+    command_item(ui, app, play_label, "Space", AppCommand::TogglePlayback);
+    command_item(ui, app, "Stop", "", AppCommand::StopPlayback);
     ui.separator();
-    unavailable_item(ui, "Go to Start", "Home");
-    unavailable_item(ui, "Go to End", "End");
+    command_item(ui, app, "Go to Start", "Home", AppCommand::GoToStart);
+    command_item(ui, app, "Go to End", "End", AppCommand::GoToEnd);
 }
 
 fn help_menu(ui: &mut egui::Ui, app: &mut VizxApp) {

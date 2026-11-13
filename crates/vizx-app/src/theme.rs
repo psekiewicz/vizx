@@ -15,6 +15,8 @@ pub const TAB_BAR_BACKGROUND: Color32 = Color32::from_rgb(25, 26, 29);
 pub const SEPARATOR: Color32 = Color32::from_rgb(52, 54, 60);
 /// Accent color for selection and the active state.
 pub const ACCENT: Color32 = Color32::from_rgb(0, 168, 150);
+/// The playhead line on the timeline.
+pub const PLAYHEAD: Color32 = Color32::from_rgb(255, 92, 92);
 /// Secondary text such as hints and placeholders.
 pub const TEXT_MUTED: Color32 = Color32::from_rgb(128, 132, 142);
 

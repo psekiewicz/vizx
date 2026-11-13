@@ -1,11 +1,6 @@
 use std::path::Path;
 
-use symphonia::core::codecs::audio::AudioDecoderOptions;
-use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::TrackType;
-
-use crate::AudioFileError;
-use crate::probe::open_format;
+use crate::{AudioFileError, DecodedAudio, decode_audio_file};
 
 /// A compact summary of an audio file's loudness over time, for drawing a
 /// waveform.
@@ -27,6 +22,17 @@ pub struct WaveformPeaks {
 impl WaveformPeaks {
     /// Resolution used by VizX: one bucket per 5 milliseconds of audio.
     pub const DEFAULT_BUCKETS_PER_SECOND: u32 = 200;
+
+    /// Summarizes audio that is already decoded.
+    pub fn from_audio(audio: &DecodedAudio) -> Self {
+        let mut builder = PeakBuilder::new(
+            audio.sample_rate,
+            audio.channel_count,
+            Self::DEFAULT_BUCKETS_PER_SECOND,
+        );
+        builder.push_interleaved(&audio.samples);
+        builder.finish()
+    }
 
     pub fn bucket_count(&self) -> usize {
         self.minimums.len()
@@ -64,65 +70,12 @@ impl WaveformPeaks {
     }
 }
 
-/// Decodes a whole audio file and summarizes it as waveform peaks.
+/// Decodes an audio file and summarizes it as waveform peaks.
 ///
 /// This reads every sample of the file, so it can take seconds for a long
 /// song. Call it from a background thread, never from the UI thread.
 pub fn compute_waveform_peaks(path: &Path) -> Result<WaveformPeaks, AudioFileError> {
-    let mut format = open_format(path)?;
-
-    let track = format
-        .default_track(TrackType::Audio)
-        .ok_or(AudioFileError::NoAudioTrack)?;
-    let track_id = track.id;
-    let audio_parameters = track
-        .codec_params
-        .as_ref()
-        .and_then(|parameters| parameters.audio())
-        .ok_or(AudioFileError::NoAudioTrack)?;
-    let mut decoder = symphonia::default::get_codecs()
-        .make_audio_decoder(audio_parameters, &AudioDecoderOptions::default())
-        .map_err(|error| AudioFileError::UnsupportedFormat(error.to_string()))?;
-
-    // Created when the first packet is decoded, because only then are the
-    // real sample rate and channel count known for certain.
-    let mut builder: Option<PeakBuilder> = None;
-    // Reused for every packet to avoid allocating memory over and over.
-    let mut samples: Vec<f32> = Vec::new();
-
-    // An audio file is a sequence of "packets", each holding a short piece
-    // of compressed audio. Decoding a packet yields its samples.
-    while let Ok(Some(packet)) = format.next_packet() {
-        if packet.track_id != track_id {
-            continue;
-        }
-        match decoder.decode(&packet) {
-            Ok(decoded) => {
-                let sample_rate = decoded.spec().rate();
-                let channel_count = decoded.spec().channels().count();
-                decoded.copy_to_vec_interleaved(&mut samples);
-
-                builder
-                    .get_or_insert_with(|| {
-                        PeakBuilder::new(
-                            sample_rate,
-                            channel_count,
-                            WaveformPeaks::DEFAULT_BUCKETS_PER_SECOND,
-                        )
-                    })
-                    .push_interleaved(&samples);
-            }
-            // A damaged packet: skip it and keep going.
-            Err(SymphoniaError::DecodeError(_)) => {}
-            // Anything else means decoding cannot continue. Keep what was
-            // decoded so far rather than showing nothing.
-            Err(_) => break,
-        }
-    }
-
-    builder
-        .map(PeakBuilder::finish)
-        .ok_or(AudioFileError::NoAudioTrack)
+    Ok(WaveformPeaks::from_audio(&decode_audio_file(path)?))
 }
 
 /// Turns a stream of samples into [`WaveformPeaks`].

@@ -4,39 +4,47 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use vizx_audio::WaveformPeaks;
+use vizx_audio::{DecodedAudio, WaveformPeaks};
 
-/// Progress of the waveform of one audio file.
+/// An audio file that has been decoded and is ready to be drawn and played.
+#[derive(Debug)]
+pub struct LoadedAudio {
+    /// Summary of the samples for drawing the waveform.
+    pub peaks: WaveformPeaks,
+    /// The samples themselves, for playback. `Arc` is a shared pointer: the
+    /// audio player can use the same samples without copying them.
+    pub audio: Arc<DecodedAudio>,
+}
+
+/// Progress of loading one audio file.
 #[derive(Debug, Clone)]
-pub enum WaveformState {
+pub enum AudioState {
     /// The file is being decoded in the background.
     Loading,
-    /// `Arc` is a shared pointer: the peaks can be handed to the UI without
-    /// copying them.
-    Ready(Arc<WaveformPeaks>),
+    Ready(Arc<LoadedAudio>),
     /// The file could not be decoded; the text says why.
     Failed(String),
 }
 
-/// Computes and remembers the waveforms of audio files.
+/// Decodes and remembers the audio files a project uses.
 ///
 /// Decoding a whole song takes seconds, far too long to do while drawing a
 /// frame. Each file is therefore decoded once on its own background thread,
 /// and the result is sent back through a channel. The UI never waits: it
-/// asks for the current state and draws whatever is available.
+/// asks for the current state and uses whatever is available.
 ///
-/// Waveforms are derived from the audio files, so they are not project data
-/// and are not saved; they are recomputed when a project is opened.
-pub struct WaveformStore {
+/// Decoded audio is derived from the files, so it is not project data and
+/// is not saved; it is loaded again when a project is opened.
+pub struct AudioStore {
     /// Keyed by file path, so the same file is only ever decoded once, even
     /// across different projects opened in one session.
-    states: HashMap<String, WaveformState>,
+    states: HashMap<String, AudioState>,
     /// Given (as a copy) to every background thread to send its result.
-    result_sender: Sender<(String, WaveformState)>,
-    result_receiver: Receiver<(String, WaveformState)>,
+    result_sender: Sender<(String, AudioState)>,
+    result_receiver: Receiver<(String, AudioState)>,
 }
 
-impl Default for WaveformStore {
+impl Default for AudioStore {
     fn default() -> Self {
         let (result_sender, result_receiver) = mpsc::channel();
         Self {
@@ -47,13 +55,21 @@ impl Default for WaveformStore {
     }
 }
 
-impl WaveformStore {
-    /// The state of a file's waveform, or `None` if it was never requested.
-    pub fn state(&self, path: &str) -> Option<&WaveformState> {
+impl AudioStore {
+    /// The state of a file, or `None` if it was never requested.
+    pub fn state(&self, path: &str) -> Option<&AudioState> {
         self.states.get(path)
     }
 
-    /// Starts computing the waveform of a file unless that already happened.
+    /// The decoded file, if it has finished loading.
+    pub fn loaded(&self, path: &str) -> Option<&Arc<LoadedAudio>> {
+        match self.states.get(path) {
+            Some(AudioState::Ready(loaded)) => Some(loaded),
+            _ => None,
+        }
+    }
+
+    /// Starts loading a file unless that already happened.
     ///
     /// `on_finished` runs on the background thread once the result is ready
     /// to be collected. The UI uses it to ask for a repaint.
@@ -61,15 +77,18 @@ impl WaveformStore {
         if self.states.contains_key(path) {
             return;
         }
-        self.states.insert(path.to_owned(), WaveformState::Loading);
+        self.states.insert(path.to_owned(), AudioState::Loading);
 
         let path = path.to_owned();
         let result_sender = self.result_sender.clone();
         // `move` gives the new thread ownership of the values it uses.
         thread::spawn(move || {
-            let state = match vizx_audio::compute_waveform_peaks(&PathBuf::from(&path)) {
-                Ok(peaks) => WaveformState::Ready(Arc::new(peaks)),
-                Err(error) => WaveformState::Failed(error.to_string()),
+            let state = match vizx_audio::decode_audio_file(&PathBuf::from(&path)) {
+                Ok(audio) => AudioState::Ready(Arc::new(LoadedAudio {
+                    peaks: WaveformPeaks::from_audio(&audio),
+                    audio: Arc::new(audio),
+                })),
+                Err(error) => AudioState::Failed(error.to_string()),
             };
             // Sending fails only if the store no longer exists (the app is
             // closing), in which case nobody needs the result.
@@ -95,60 +114,59 @@ mod tests {
     use super::*;
 
     /// Waits until the background thread has delivered a result.
-    fn wait_until_finished(store: &mut WaveformStore, path: &str) -> WaveformState {
+    fn wait_until_finished(store: &mut AudioStore, path: &str) -> AudioState {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             store.collect_finished();
             match store.state(path) {
-                Some(WaveformState::Loading) if Instant::now() < deadline => {
+                Some(AudioState::Loading) if Instant::now() < deadline => {
                     thread::sleep(Duration::from_millis(5));
                 }
                 Some(state) => return state.clone(),
-                None => panic!("waveform was never requested"),
+                None => panic!("audio was never requested"),
             }
         }
     }
 
     #[test]
-    fn requested_file_is_loading_and_then_ready() {
-        let path =
-            std::env::temp_dir().join(format!("vizx-core-waveform-{}.wav", std::process::id()));
+    fn requested_file_is_loading_and_then_ready_with_samples_and_peaks() {
+        let path = std::env::temp_dir().join(format!("vizx-core-audio-{}.wav", std::process::id()));
         vizx_audio::write_wav_file(&path, 8_000, 1, &vec![1000i16; 4_000]).unwrap();
         let path_text = path.to_string_lossy().into_owned();
-        let mut store = WaveformStore::default();
+        let mut store = AudioStore::default();
 
         store.request(&path_text, || {});
-        assert!(matches!(
-            store.state(&path_text),
-            Some(WaveformState::Loading)
-        ));
+        assert!(matches!(store.state(&path_text), Some(AudioState::Loading)));
+        assert!(store.loaded(&path_text).is_none());
 
         let state = wait_until_finished(&mut store, &path_text);
         let _ = std::fs::remove_file(&path);
 
-        let WaveformState::Ready(peaks) = state else {
-            panic!("expected a ready waveform, got {state:?}");
+        let AudioState::Ready(loaded) = state else {
+            panic!("expected loaded audio, got {state:?}");
         };
-        assert!((peaks.duration_seconds() - 0.5).abs() < 0.01);
+        assert!((loaded.peaks.duration_seconds() - 0.5).abs() < 0.01);
+        assert_eq!(loaded.audio.frame_count(), 4_000);
+        assert!(store.loaded(&path_text).is_some());
     }
 
     #[test]
     fn unreadable_file_ends_as_failed() {
-        let mut store = WaveformStore::default();
-        let path = "vizx-core-waveform-file-that-does-not-exist.wav";
+        let mut store = AudioStore::default();
+        let path = "vizx-core-audio-file-that-does-not-exist.wav";
 
         store.request(path, || {});
         let state = wait_until_finished(&mut store, path);
 
-        assert!(matches!(state, WaveformState::Failed(_)));
+        assert!(matches!(state, AudioState::Failed(_)));
     }
 
     #[test]
     fn finish_notification_is_called() {
         let (notified_sender, notified_receiver) = mpsc::channel();
-        let mut store = WaveformStore::default();
+        let mut store = AudioStore::default();
 
-        store.request("vizx-core-waveform-missing.wav", move || {
+        store.request("vizx-core-audio-missing.wav", move || {
             let _ = notified_sender.send(());
         });
 
@@ -161,10 +179,6 @@ mod tests {
 
     #[test]
     fn unknown_file_has_no_state() {
-        assert!(
-            WaveformStore::default()
-                .state("never-requested.wav")
-                .is_none()
-        );
+        assert!(AudioStore::default().state("never-requested.wav").is_none());
     }
 }

@@ -57,9 +57,8 @@ fn describe(command: AppCommand) -> &'static str {
         AppCommand::NewProject => "creating a new project",
         AppCommand::OpenProject => "opening another project",
         AppCommand::Exit => "exiting",
-        AppCommand::SaveProject
-        | AppCommand::SaveProjectAs
-        | AppCommand::ImportAudio
-        | AppCommand::OpenProjectSettings => "continuing",
+        // Only the three commands above discard the project, so no other
+        // command ever reaches this dialog.
+        _ => "continuing",
     }
 }

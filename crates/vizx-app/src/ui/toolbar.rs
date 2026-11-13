@@ -2,7 +2,6 @@ use eframe::egui;
 
 use crate::app::{AppCommand, VizxApp};
 use crate::theme;
-use crate::ui::NOT_AVAILABLE_YET;
 
 pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
     ui.horizontal(|ui| {
@@ -30,20 +29,49 @@ pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
 
         ui.separator();
 
-        // Transport controls. They become functional with the audio engine.
-        unavailable_button(ui, "\u{23EE}"); // skip to start
-        unavailable_button(ui, "\u{25B6}"); // play
-        unavailable_button(ui, "\u{23F9}"); // stop
-        unavailable_button(ui, "\u{23ED}"); // skip to end
+        // Transport controls. The play button turns into a pause button
+        // while playing.
+        let (play_symbol, play_tooltip) = if app.is_playing() {
+            ("\u{23F8}", "Pause (Space)")
+        } else {
+            ("\u{25B6}", "Play (Space)")
+        };
+        command_button(
+            ui,
+            app,
+            "\u{23EE}",
+            "Go to start (Home)",
+            AppCommand::GoToStart,
+        );
+        command_button(
+            ui,
+            app,
+            play_symbol,
+            play_tooltip,
+            AppCommand::TogglePlayback,
+        );
+        command_button(
+            ui,
+            app,
+            "\u{23F9}",
+            "Stop and return to start",
+            AppCommand::StopPlayback,
+        );
+        command_button(ui, app, "\u{23ED}", "Go to end (End)", AppCommand::GoToEnd);
 
         ui.separator();
 
+        let time_color = if app.is_playing() {
+            ui.visuals().strong_text_color()
+        } else {
+            theme::TEXT_MUTED
+        };
         ui.label(
-            egui::RichText::new("00:00:00.000")
+            egui::RichText::new(format_timecode(app.session.playhead_seconds()))
                 .monospace()
-                .color(theme::TEXT_MUTED),
+                .color(time_color),
         )
-        .on_hover_text("Playhead position (placeholder)");
+        .on_hover_text("Playhead position (hours:minutes:seconds.milliseconds)");
     });
 }
 
@@ -59,7 +87,29 @@ fn command_button(
     }
 }
 
-fn unavailable_button(ui: &mut egui::Ui, label: &str) {
-    ui.add_enabled(false, egui::Button::new(label))
-        .on_disabled_hover_text(NOT_AVAILABLE_YET);
+/// Formats a position as `hh:mm:ss.mmm`.
+fn format_timecode(seconds: f64) -> String {
+    let total_milliseconds = (seconds.max(0.0) * 1000.0).round() as u64;
+    let milliseconds = total_milliseconds % 1000;
+    let total_seconds = total_milliseconds / 1000;
+    format!(
+        "{:02}:{:02}:{:02}.{:03}",
+        total_seconds / 3600,
+        (total_seconds / 60) % 60,
+        total_seconds % 60,
+        milliseconds
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timecode_shows_hours_minutes_seconds_and_milliseconds() {
+        assert_eq!(format_timecode(0.0), "00:00:00.000");
+        assert_eq!(format_timecode(65.25), "00:01:05.250");
+        assert_eq!(format_timecode(3723.004), "01:02:03.004");
+        assert_eq!(format_timecode(-5.0), "00:00:00.000");
+    }
 }

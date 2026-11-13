@@ -27,6 +27,8 @@ eframe = { version = "0.36", default-features = false, features = [
 egui_dock = "0.21"
 # Native open/save file dialogs of the operating system.
 rfd = "0.18"
+# Sends audio to the sound card (WASAPI on Windows, ALSA on Linux).
+cpal = "0.18"
 # Reads audio files (pure Rust, no system libraries). Only the formats
 # listed here are compiled in.
 symphonia = { version = "0.6", default-features = false, features = [

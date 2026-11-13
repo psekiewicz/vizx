@@ -28,7 +28,7 @@ in the project.
 | Crate | Responsibility | Must not contain |
 |---|---|---|
 | `vizx-project` | What a project *is*: plain serializable data. | GUI, rendering, audio devices, file dialogs |
-| `vizx-audio` | Reading audio files: format detection, duration, sample rate, channels. Later: decoding samples for waveforms, analysis and playback. | GUI, project data |
+| `vizx-audio` | Audio files and the sound card: reading file properties, decoding, waveform peaks, mixing and playback. Later: analysis (FFT, beats). | GUI, project data |
 | `vizx-core` | Editing state and logic operating on a project. Future home of subsystem coordination. | GUI code |
 | `vizx-app` | The window, panels, menus and visual style. | Project rules or logic that other front ends would need |
 
@@ -159,6 +159,36 @@ Audio files are read by `symphonia`, a pure-Rust library with no system
 dependencies. Only the formats VizX supports are compiled in: WAV, MP3,
 FLAC, Ogg Vorbis and AAC/M4A.
 
+### Playback and the project clock
+
+- `EditorSession::playhead_seconds` is the one "now" of the project. The
+  timeline, the time display and, later, the preview all read it. Like the
+  selection it is editing state: not saved, and moving it is not an edit.
+- `vizx-audio`'s `AudioPlayer` sends audio to the sound card through `cpal`.
+  While playing, **the audio is the clock**: the playhead is set from the
+  number of frames actually handed to the sound card, so picture and sound
+  cannot drift apart. The preview will be driven by the same value.
+- The sound card requests audio on its own thread, which must never wait.
+  The UI and audio threads share only atomics (playing flag, position, end
+  position) and one mutex that the audio thread only *tries* to lock; if it
+  is busy for an instant, that one short buffer is silent.
+- Mixing is a pure function (`mix_sources`): for every output frame it adds
+  up the sources at that project time, resampling with linear interpolation
+  when a file's sample rate differs from the sound card's. Being pure, it is
+  tested without any audio device.
+- `Transport` (in `vizx-app`) connects the two: it copies the player's
+  position into the playhead at the start of each frame, and if the UI moved
+  the playhead during the frame (ruler click, Home/End) it tells the player
+  to seek. The player is created on first use, and its stream is paused
+  whenever nothing plays, so VizX does not keep the sound card busy.
+- Audio files are decoded fully into memory (`DecodedAudio`, about 20 MB per
+  minute of stereo). `AudioStore` in `vizx-core` loads each file once in the
+  background and keeps both the samples (for playback) and the waveform
+  peaks (for drawing). Streaming from disk can replace this later.
+
+There are deliberately no per-track volume, pan or effect controls: see
+"Audio drives the visuals".
+
 ### Waveforms
 
 - `vizx-audio` decodes a file and reduces it to `WaveformPeaks`: the lowest
@@ -166,7 +196,7 @@ FLAC, Ogg Vorbis and AAC/M4A.
   samples but a screen only a couple of thousand pixel columns, so the peaks
   hold everything a waveform drawing can show in a few hundred kilobytes.
 - Decoding a whole song takes seconds, so it never happens on the UI thread.
-  `WaveformStore` (in `vizx-core`) decodes each file once on a background
+  `AudioStore` (in `vizx-core`) decodes each file once on a background
   thread and receives the result through a channel. The UI asks for the
   current state every frame and draws what is available; a clip shows
   "reading waveform..." until its peaks arrive.
@@ -269,8 +299,8 @@ crate. Cross-crate integration tests will go into the relevant crate's own
 
 ### Minimal dependencies
 
-Direct dependencies: `eframe`, `egui_dock`, `rfd`, `serde`, `serde_json` and
-`symphonia`.
+Direct dependencies: `eframe`, `egui_dock`, `rfd`, `serde`, `serde_json`,
+`symphonia` and `cpal`.
 Planned libraries (cpal, RustFFT, FFmpeg bindings) are added in the
 milestone that first uses them.
 

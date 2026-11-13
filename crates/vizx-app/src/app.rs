@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use vizx_core::{EditorSession, WaveformStore};
+use vizx_core::{AudioStore, EditorSession};
 use vizx_project::{PROJECT_FILE_EXTENSION, with_project_extension};
 
 use crate::theme;
+use crate::transport::Transport;
 use crate::ui::workspace::Workspace;
 use crate::ui::{
     about_window, menu_bar, project_settings_window, status_bar, toolbar, unsaved_changes_dialog,
@@ -25,6 +26,12 @@ pub enum AppCommand {
     SaveProjectAs,
     ImportAudio,
     OpenProjectSettings,
+    /// Start playback, or pause it if it is running.
+    TogglePlayback,
+    /// Pause and return to the start of the project.
+    StopPlayback,
+    GoToStart,
+    GoToEnd,
     Exit,
 }
 
@@ -43,8 +50,9 @@ impl AppCommand {
 pub struct VizxApp {
     pub session: EditorSession,
     pub workspace: Workspace,
-    /// Waveforms of the project's audio files, computed in the background.
-    waveforms: WaveformStore,
+    /// Decoded audio of the project's files, loaded in the background.
+    audio_store: AudioStore,
+    transport: Transport,
     pub is_about_window_open: bool,
     pub is_project_settings_open: bool,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
@@ -71,7 +79,8 @@ impl VizxApp {
         Self {
             session: EditorSession::new_untitled(),
             workspace: Workspace::new(),
-            waveforms: WaveformStore::default(),
+            audio_store: AudioStore::default(),
+            transport: Transport::default(),
             is_about_window_open: false,
             is_project_settings_open: false,
             graphics_summary: describe_graphics_adapter(creation_context),
@@ -82,6 +91,22 @@ impl VizxApp {
             window_title: String::new(),
             has_maximized_on_startup: false,
         }
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.transport.is_playing()
+    }
+
+    fn toggle_playback(&mut self) {
+        if self.transport.is_playing() {
+            self.transport.pause();
+            self.status_message = "Paused".to_owned();
+            return;
+        }
+        self.status_message = match self.transport.play(&mut self.session, &self.audio_store) {
+            Ok(note) => note,
+            Err(error) => format!("Cannot play: {error}"),
+        };
     }
 
     /// Asks for a command to be executed at the end of this frame.
@@ -133,6 +158,7 @@ impl VizxApp {
     fn execute(&mut self, command: AppCommand, ctx: &egui::Context, frame: &eframe::Frame) {
         match command {
             AppCommand::NewProject => {
+                self.transport.pause();
                 self.session = EditorSession::new_untitled();
                 self.status_message = "New project created".to_owned();
             }
@@ -145,6 +171,17 @@ impl VizxApp {
             }
             AppCommand::ImportAudio => self.import_audio(frame),
             AppCommand::OpenProjectSettings => self.is_project_settings_open = true,
+            AppCommand::TogglePlayback => self.toggle_playback(),
+            AppCommand::StopPlayback => {
+                self.transport.pause();
+                self.session.set_playhead_seconds(0.0);
+                self.status_message = "Stopped".to_owned();
+            }
+            AppCommand::GoToStart => self.session.set_playhead_seconds(0.0),
+            AppCommand::GoToEnd => {
+                let project_end = self.session.project().settings.duration_seconds();
+                self.session.set_playhead_seconds(project_end);
+            }
             AppCommand::Exit => {
                 self.is_exit_confirmed = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -159,6 +196,7 @@ impl VizxApp {
 
         match EditorSession::open(&path) {
             Ok(session) => {
+                self.transport.pause();
                 self.session = session;
                 self.status_message = format!("Opened {}", path.display());
             }
@@ -268,6 +306,20 @@ impl VizxApp {
         if self.command_awaiting_confirmation.is_some() {
             return;
         }
+
+        // Single keys control playback, but only while the user is not
+        // typing into a text field, where Space and Home mean something else.
+        if !ctx.egui_wants_keyboard_input() {
+            for (key, command) in [
+                (Key::Space, AppCommand::TogglePlayback),
+                (Key::Home, AppCommand::GoToStart),
+                (Key::End, AppCommand::GoToEnd),
+            ] {
+                if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key)) {
+                    self.request(command);
+                }
+            }
+        }
         for (shortcut, command) in shortcuts {
             if ctx.input_mut(|input| input.consume_shortcut(&shortcut)) {
                 self.request(command);
@@ -275,18 +327,18 @@ impl VizxApp {
         }
     }
 
-    /// Collects waveforms finished in the background and starts computing
-    /// the ones the project needs but does not have yet.
-    fn update_waveforms(&mut self, ctx: &egui::Context) {
-        self.waveforms.collect_finished();
+    /// Collects audio files that finished loading in the background and
+    /// starts loading the ones the project needs but does not have yet.
+    fn load_project_audio(&mut self, ctx: &egui::Context) {
+        self.audio_store.collect_finished();
 
         for source in self.session.project().media() {
-            if self.waveforms.state(&source.path).is_none() {
+            if self.audio_store.state(&source.path).is_none() {
                 // The background thread calls this when it is done, so the
                 // window redraws and shows the waveform without waiting for
                 // the next mouse movement.
                 let ctx = ctx.clone();
-                self.waveforms
+                self.audio_store
                     .request(&source.path, move || ctx.request_repaint());
             }
         }
@@ -351,8 +403,9 @@ impl eframe::App for VizxApp {
 
         self.maximize_on_startup(&ctx);
         self.handle_window_close_request(&ctx);
+        self.transport.begin_frame(&mut self.session, &ctx);
         self.handle_keyboard_shortcuts(&ctx);
-        self.update_waveforms(&ctx);
+        self.load_project_audio(&ctx);
 
         // Fixed bars are added first; each one takes space from an edge of
         // the window. Whatever remains is given to the dockable workspace.
@@ -366,7 +419,7 @@ impl eframe::App for VizxApp {
                 self.workspace.show(
                     ui,
                     &mut self.session,
-                    &self.waveforms,
+                    &self.audio_store,
                     &mut self.requested_command,
                 );
             });
@@ -380,6 +433,7 @@ impl eframe::App for VizxApp {
         // Commands requested anywhere above are executed here, after the
         // whole interface for this frame has been described.
         self.run_requested_command(&ctx, frame);
+        self.transport.end_frame(&self.session);
         self.sync_window_title(&ctx);
     }
 }

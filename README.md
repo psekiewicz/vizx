@@ -9,8 +9,8 @@ single project and share one timeline.
 
 > **Status: early prototype.**
 > The application window, dockable panel layout, project files (`.vzx`), an
-> adaptive timeline with tracks, audio import and waveform display exist.
-> There is no audio playback, rendering or export yet.
+> adaptive timeline with tracks, audio import, waveform display and audio
+> playback exist. There is no visual rendering or export yet.
 
 ## Technology
 
@@ -33,7 +33,7 @@ vizx/
 ├── rust-toolchain.toml    Rust toolchain used by this project
 ├── crates/
 │   ├── vizx-project/      Project data model (no GUI)
-│   ├── vizx-audio/        Reading audio files (no GUI)
+│   ├── vizx-audio/        Audio files, mixing and playback (no GUI)
 │   ├── vizx-core/         Shared application logic (no GUI)
 │   └── vizx-app/          Desktop application: window and interface
 ├── assets/                Icons, fonts and shaders (empty for now)

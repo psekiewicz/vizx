@@ -11,7 +11,7 @@
 
 use eframe::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke};
 use vizx_audio::WaveformPeaks;
-use vizx_core::{EditorSession, Selection, WaveformState, WaveformStore};
+use vizx_core::{AudioState, AudioStore, EditorSession, Selection};
 use vizx_project::{Track, TrackId, TrackKind};
 
 use crate::theme;
@@ -30,6 +30,8 @@ const MIN_LABEL_SPACING: f32 = 70.0;
 /// Width kept free in "fit" mode so a vertical scroll bar does not force a
 /// horizontal one.
 const SCROLL_BAR_ALLOWANCE: f32 = 14.0;
+/// Space kept to the left of the playhead when the view scrolls to follow it.
+const FOLLOW_MARGIN: f32 = 40.0;
 /// Candidate distances between labelled ruler marks, in seconds.
 const RULER_INTERVALS_SECONDS: [f32; 14] = [
     0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0,
@@ -44,6 +46,8 @@ pub struct TimelineView {
     scroll_offset: egui::Vec2,
     /// Horizontal scroll position to apply on the next frame, set by zooming.
     pending_horizontal_scroll: Option<f32>,
+    /// Playhead position seen on the previous frame, to notice it moving.
+    last_playhead_seconds: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -59,7 +63,7 @@ pub fn show(
     ui: &mut egui::Ui,
     session: &mut EditorSession,
     view: &mut TimelineView,
-    waveforms: &WaveformStore,
+    audio_store: &AudioStore,
 ) {
     let panel_rect = ui.available_rect_before_wrap();
     ui.painter_at(panel_rect)
@@ -86,10 +90,10 @@ pub fn show(
     let scale = TimeScale::new(view, duration_seconds, lanes_rect.width());
     handle_zoom_input(ui, view, &scale, ruler_rect.union(lanes_rect));
 
-    let scroll_offset = show_lanes(ui, session, view, waveforms, &scale, lanes_rect);
+    let scroll_offset = show_lanes(ui, session, view, audio_store, &scale, lanes_rect);
     view.scroll_offset = scroll_offset;
 
-    show_ruler(ui, &scale, ruler_rect, scroll_offset.x);
+    let is_scrubbing = show_ruler(ui, session, &scale, ruler_rect, scroll_offset.x);
     show_track_headers(ui, session, headers_rect, scroll_offset.y);
     show_corner(ui, view, corner_rect);
 
@@ -97,6 +101,41 @@ pub fn show(
     let painter = ui.painter_at(panel_rect);
     painter.vline(split_x, panel_rect.y_range(), separator);
     painter.hline(panel_rect.x_range(), split_y, separator);
+
+    // The playhead: a line across the ruler and all lanes, drawn last so it
+    // is on top of everything.
+    let timeline_rect = ruler_rect.union(lanes_rect);
+    let playhead_seconds = session.playhead_seconds();
+    let playhead_x =
+        timeline_rect.left() - scroll_offset.x + playhead_seconds as f32 * scale.pixels_per_second;
+    if timeline_rect.x_range().contains(playhead_x) {
+        let playhead_painter = ui.painter_at(timeline_rect);
+        playhead_painter.vline(
+            playhead_x,
+            timeline_rect.y_range(),
+            Stroke::new(1.5, theme::PLAYHEAD),
+        );
+        // A small marker in the ruler makes the line easy to find.
+        playhead_painter.rect_filled(
+            Rect::from_center_size(
+                egui::pos2(playhead_x, ruler_rect.bottom() - 4.0),
+                egui::vec2(9.0, 8.0),
+            ),
+            1.0,
+            theme::PLAYHEAD,
+        );
+    }
+
+    // Follow the playhead: when it moves out of view by itself (during
+    // playback, or after "go to start/end"), scroll so it is visible again.
+    // Not while the user drags it, which would make the view run away.
+    let has_playhead_moved = playhead_seconds != view.last_playhead_seconds;
+    if has_playhead_moved && !is_scrubbing && !timeline_rect.x_range().contains(playhead_x) {
+        let target = playhead_seconds as f32 * scale.pixels_per_second - FOLLOW_MARGIN;
+        view.pending_horizontal_scroll = Some(target.max(0.0));
+        ui.ctx().request_repaint();
+    }
+    view.last_playhead_seconds = playhead_seconds;
 
     ui.allocate_rect(panel_rect, Sense::hover());
 }
@@ -196,7 +235,7 @@ fn show_lanes(
     ui: &mut egui::Ui,
     session: &mut EditorSession,
     view: &mut TimelineView,
-    waveforms: &WaveformStore,
+    audio_store: &AudioStore,
     scale: &TimeScale,
     lanes_rect: Rect,
 ) -> egui::Vec2 {
@@ -279,22 +318,22 @@ fn show_lanes(
                 // Nothing drawn for a clip may spill outside of it.
                 let clip_painter = painter.with_clip_rect(clip_rect.intersect(painter.clip_rect()));
                 let source = session.project().media_source(clip.media);
-                let waveform = source.and_then(|source| waveforms.state(&source.path));
+                let waveform = source.and_then(|source| audio_store.state(&source.path));
 
                 let status = match waveform {
-                    Some(WaveformState::Ready(peaks)) => {
+                    Some(AudioState::Ready(loaded)) => {
                         draw_waveform(
                             &clip_painter,
                             clip_rect,
                             visible_left..=visible_right,
-                            peaks,
+                            &loaded.peaks,
                             scale.pixels_per_second,
                             color,
                         );
                         ""
                     }
-                    Some(WaveformState::Loading) => "  (reading waveform...)",
-                    Some(WaveformState::Failed(_)) => "  (waveform unavailable)",
+                    Some(AudioState::Loading) => "  (reading waveform...)",
+                    Some(AudioState::Failed(_)) => "  (waveform unavailable)",
                     None => "",
                 };
 
@@ -327,7 +366,26 @@ fn show_lanes(
     output.state.offset
 }
 
-fn show_ruler(ui: &egui::Ui, scale: &TimeScale, ruler_rect: Rect, scroll_x: f32) {
+/// Draws the time ruler. Clicking or dragging on it moves the playhead
+/// ("scrubbing"). Returns whether the user is doing that right now.
+fn show_ruler(
+    ui: &egui::Ui,
+    session: &mut EditorSession,
+    scale: &TimeScale,
+    ruler_rect: Rect,
+    scroll_x: f32,
+) -> bool {
+    let response = ui.interact(
+        ruler_rect,
+        ui.id().with("timeline_ruler"),
+        Sense::click_and_drag(),
+    );
+    let is_scrubbing = response.clicked() || response.dragged();
+    if is_scrubbing && let Some(pointer) = response.interact_pointer_pos() {
+        let seconds = (pointer.x - ruler_rect.left() + scroll_x) / scale.pixels_per_second;
+        session.set_playhead_seconds(f64::from(seconds));
+    }
+
     let painter = ui.painter_at(ruler_rect);
     painter.rect_filled(ruler_rect, 0.0, theme::PANEL_BACKGROUND);
 
@@ -361,6 +419,8 @@ fn show_ruler(ui: &egui::Ui, scale: &TimeScale, ruler_rect: Rect, scroll_x: f32)
             );
         }
     }
+
+    is_scrubbing
 }
 
 fn show_track_headers(

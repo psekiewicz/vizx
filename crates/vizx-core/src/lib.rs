@@ -5,13 +5,13 @@
 //! at, and it is where future subsystems (timeline, audio, composition,
 //! rendering) will be coordinated. It must never depend on a GUI library.
 
+mod audio_store;
 mod selection;
 mod session;
-mod waveforms;
 
+pub use audio_store::{AudioState, AudioStore, LoadedAudio};
 pub use selection::Selection;
 pub use session::{EditorSession, UNTITLED_PROJECT_NAME};
-pub use waveforms::{WaveformState, WaveformStore};
 
 /// Name of the application as shown to the user.
 pub const APP_NAME: &str = "VizX (Prototype)";
