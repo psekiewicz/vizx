@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use vizx_project::{Project, ProjectFileError};
+use vizx_project::{Project, ProjectFileError, Track, TrackId, TrackKind};
+
+use crate::Selection;
 
 /// The state of one open project while it is being edited.
 ///
@@ -13,15 +15,17 @@ pub struct EditorSession {
     /// Where the project is stored on disk. `None` until it is first saved.
     file_path: Option<PathBuf>,
     has_unsaved_changes: bool,
+    selection: Selection,
 }
 
 impl EditorSession {
     /// Starts a session with a new, never-saved project.
     pub fn new_untitled() -> Self {
         Self {
-            project: Project::new("Untitled Project"),
+            project: Project::with_starter_tracks("Untitled Project"),
             file_path: None,
             has_unsaved_changes: false,
+            selection: Selection::Nothing,
         }
     }
 
@@ -31,7 +35,44 @@ impl EditorSession {
             project: Project::load_from_file(path)?,
             file_path: Some(path.to_owned()),
             has_unsaved_changes: false,
+            selection: Selection::Nothing,
         })
+    }
+
+    pub fn selection(&self) -> Selection {
+        self.selection
+    }
+
+    /// Changes the selection. Selecting is not an edit, so it does not mark
+    /// the project as changed.
+    pub fn select(&mut self, selection: Selection) {
+        self.selection = selection;
+    }
+
+    /// The selected track, if a track is selected and still exists.
+    pub fn selected_track(&self) -> Option<&Track> {
+        match self.selection {
+            Selection::Track(id) => self.project.track(id),
+            Selection::Nothing => None,
+        }
+    }
+
+    /// Adds a track at the bottom of the timeline and selects it.
+    pub fn add_track(&mut self, kind: TrackKind) -> TrackId {
+        let id = self.project.add_default_named_track(kind);
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(id);
+        id
+    }
+
+    /// Removes a track, clearing the selection if it was selected.
+    pub fn remove_track(&mut self, id: TrackId) {
+        if self.project.remove_track(id) {
+            self.has_unsaved_changes = true;
+            if self.selection == Selection::Track(id) {
+                self.selection = Selection::Nothing;
+            }
+        }
     }
 
     /// Read-only access to the project.
@@ -107,6 +148,40 @@ mod tests {
         rename_project(&mut session, "Renamed");
         assert!(session.has_unsaved_changes());
         assert_eq!(session.project().metadata.name, "Renamed");
+    }
+
+    #[test]
+    fn adding_a_track_selects_it_and_marks_the_project_changed() {
+        let mut session = EditorSession::new_untitled();
+        let track_count_before = session.project().tracks().len();
+
+        let id = session.add_track(TrackKind::Text);
+
+        assert_eq!(session.project().tracks().len(), track_count_before + 1);
+        assert_eq!(session.selection(), Selection::Track(id));
+        assert_eq!(session.selected_track().unwrap().kind, TrackKind::Text);
+        assert!(session.has_unsaved_changes());
+    }
+
+    #[test]
+    fn removing_the_selected_track_clears_the_selection() {
+        let mut session = EditorSession::new_untitled();
+        let id = session.add_track(TrackKind::Audio);
+
+        session.remove_track(id);
+
+        assert_eq!(session.selection(), Selection::Nothing);
+        assert!(session.selected_track().is_none());
+    }
+
+    #[test]
+    fn selecting_does_not_count_as_a_change() {
+        let mut session = EditorSession::new_untitled();
+        let id = session.project().tracks()[0].id;
+
+        session.select(Selection::Track(id));
+
+        assert!(!session.has_unsaved_changes());
     }
 
     #[test]

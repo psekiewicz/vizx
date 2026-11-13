@@ -5,8 +5,10 @@
 //! at, and it is where future subsystems (timeline, audio, composition,
 //! rendering) will be coordinated. It must never depend on a GUI library.
 
+mod selection;
 mod session;
 
+pub use selection::Selection;
 pub use session::EditorSession;
 
 /// Name of the application as shown to the user.

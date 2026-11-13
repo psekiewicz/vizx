@@ -74,7 +74,11 @@ impl Project {
             });
         }
 
-        Ok(serde_json::from_str(content)?)
+        let mut project: Self = serde_json::from_str(content)?;
+        // An older file has now been upgraded in memory (fields it lacked
+        // received defaults), so it will be saved in the current layout.
+        project.format_version = CURRENT_FORMAT_VERSION;
+        Ok(project)
     }
 
     /// A file name for saving this project for the first time, derived from
@@ -184,6 +188,33 @@ mod tests {
             error,
             ProjectFileError::UnsupportedVersion { found, .. } if found == CURRENT_FORMAT_VERSION + 1
         ));
+    }
+
+    #[test]
+    fn version_1_file_loads_and_is_upgraded() {
+        // Exactly what VizX wrote before tracks and duration existed.
+        let version_1_content = r#"{
+            "format_version": 1,
+            "metadata": {
+                "name": "Old Project",
+                "author": "",
+                "description": "",
+                "created_with_version": "0.1.0"
+            },
+            "settings": {
+                "width": 1280,
+                "height": 720,
+                "frame_rate": { "numerator": 30, "denominator": 1 }
+            }
+        }"#;
+
+        let project = Project::from_vzx_str(version_1_content).unwrap();
+
+        assert_eq!(project.format_version, CURRENT_FORMAT_VERSION);
+        assert_eq!(project.metadata.name, "Old Project");
+        assert_eq!(project.settings.width, 1280);
+        assert_eq!(project.settings.duration_milliseconds, 180_000);
+        assert!(project.tracks().is_empty());
     }
 
     #[test]

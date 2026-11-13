@@ -33,6 +33,13 @@ fn file_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
         AppCommand::SaveProjectAs,
     );
     ui.separator();
+    command_item(
+        ui,
+        app,
+        "Project Settings...",
+        "",
+        AppCommand::OpenProjectSettings,
+    );
     unavailable_item(ui, "Export Video...", "");
     ui.separator();
     command_item(ui, app, "Exit", "", AppCommand::Exit);

@@ -105,6 +105,50 @@ A `.vzx` file is the `Project` struct as pretty-printed UTF-8 JSON.
 
 Native open/save dialogs come from the `rfd` crate, used only in `vizx-app`.
 
+Format versions: **1** had metadata and settings only. **2** added timeline
+tracks and the project duration. Version 1 files still load: the missing
+fields get default values (`#[serde(default)]`) and the project is saved in
+the current layout from then on.
+
+### Tracks and selection
+
+- A `Track` has a `TrackId`, a name and a `TrackKind` (Audio, Visualizer,
+  Animation, Text). Everything refers to a track by id, never by its
+  position in the list, and ids are never reused within a project.
+- The track list is private to `Project`; tracks are added, removed and
+  renamed through methods so ids stay consistent.
+- `Selection` lives in `vizx-core`'s `EditorSession`. It is shared editing
+  state (the timeline sets it, the Properties panel shows it) but it is not
+  project data and is not saved.
+
+### The timeline adapts to the project and to the panel
+
+Nothing in the timeline is a fixed drawing. Tracks and the length of the
+time axis come from the project. `TimelineView` (UI state in `vizx-app`,
+not saved) holds the zoom and scroll position:
+
+- In the default "fit" mode the whole project duration fills the panel
+  width, whatever size the panel has.
+- Ctrl + mouse wheel zooms around the cursor; zooming all the way out
+  returns to "fit" mode. The "Fit" button does the same.
+- Lanes scroll in both directions; the ruler and track names stay in place
+  and follow the scroll position.
+- The distance between ruler labels is chosen from a list of round
+  intervals so labels never overlap at any zoom level.
+
+### Properties panel vs. Project Settings window
+
+The Properties panel shows only the current selection. Settings of the
+project as a whole (name, author, composition size, frame rate, duration)
+are in the Project Settings window, opened on demand from File > Project
+Settings or the Preview panel's context menu. Rarely changed settings should
+not occupy permanent space. Such windows are egui windows inside the main
+window, never separate operating-system windows.
+
+Panels cannot run application commands themselves; they write an
+`AppCommand` into a slot passed down from `VizxApp`, the same path the menus
+use.
+
 ### Rendering the UI through wgpu
 
 eframe is built with its `wgpu` renderer (not the OpenGL-only `glow` one), so

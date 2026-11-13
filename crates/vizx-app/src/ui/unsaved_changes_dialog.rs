@@ -57,6 +57,8 @@ fn describe(command: AppCommand) -> &'static str {
         AppCommand::NewProject => "creating a new project",
         AppCommand::OpenProject => "opening another project",
         AppCommand::Exit => "exiting",
-        AppCommand::SaveProject | AppCommand::SaveProjectAs => "continuing",
+        AppCommand::SaveProject | AppCommand::SaveProjectAs | AppCommand::OpenProjectSettings => {
+            "continuing"
+        }
     }
 }

@@ -37,15 +37,35 @@ pub struct ProjectSettings {
     /// Composition height in pixels.
     pub height: u32,
     pub frame_rate: FrameRate,
+    /// Length of the project timeline in milliseconds.
+    ///
+    /// Milliseconds are a placeholder unit. The audio engine will need a
+    /// finer, sample-accurate project timebase, and this field will move to
+    /// it then.
+    #[serde(default = "default_duration_milliseconds")]
+    pub duration_milliseconds: u64,
+}
+
+impl ProjectSettings {
+    /// Timeline length in seconds, for display and layout.
+    pub fn duration_seconds(&self) -> f64 {
+        self.duration_milliseconds as f64 / 1000.0
+    }
+}
+
+/// Three minutes, a typical song length.
+fn default_duration_milliseconds() -> u64 {
+    180_000
 }
 
 impl Default for ProjectSettings {
-    /// 1920x1080 at 30 fps.
+    /// 1920x1080 at 30 fps, three minutes long.
     fn default() -> Self {
         Self {
             width: 1920,
             height: 1080,
             frame_rate: FrameRate::FPS_30,
+            duration_milliseconds: default_duration_milliseconds(),
         }
     }
 }

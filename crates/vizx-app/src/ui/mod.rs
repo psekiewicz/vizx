@@ -7,6 +7,7 @@
 pub mod about_window;
 pub mod menu_bar;
 pub mod panels;
+pub mod project_settings_window;
 pub mod status_bar;
 pub mod toolbar;
 pub mod unsaved_changes_dialog;

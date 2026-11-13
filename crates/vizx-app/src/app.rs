@@ -6,7 +6,9 @@ use vizx_project::{PROJECT_FILE_EXTENSION, with_project_extension};
 
 use crate::theme;
 use crate::ui::workspace::Workspace;
-use crate::ui::{about_window, menu_bar, status_bar, toolbar, unsaved_changes_dialog};
+use crate::ui::{
+    about_window, menu_bar, project_settings_window, status_bar, toolbar, unsaved_changes_dialog,
+};
 
 /// An action the user asked for through a menu, button or shortcut.
 ///
@@ -21,6 +23,7 @@ pub enum AppCommand {
     OpenProject,
     SaveProject,
     SaveProjectAs,
+    OpenProjectSettings,
     Exit,
 }
 
@@ -40,6 +43,7 @@ pub struct VizxApp {
     pub session: EditorSession,
     pub workspace: Workspace,
     pub is_about_window_open: bool,
+    pub is_project_settings_open: bool,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
     pub graphics_summary: String,
     /// Result of the last command, shown in the status bar.
@@ -65,6 +69,7 @@ impl VizxApp {
             session: EditorSession::new_untitled(),
             workspace: Workspace::new(),
             is_about_window_open: false,
+            is_project_settings_open: false,
             graphics_summary: describe_graphics_adapter(creation_context),
             status_message: "Ready".to_owned(),
             requested_command: None,
@@ -134,6 +139,7 @@ impl VizxApp {
             AppCommand::SaveProjectAs => {
                 self.save_project_as(frame);
             }
+            AppCommand::OpenProjectSettings => self.is_project_settings_open = true,
             AppCommand::Exit => {
                 self.is_exit_confirmed = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -295,9 +301,13 @@ impl eframe::App for VizxApp {
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
-            .show(ui, |ui| self.workspace.show(ui, &mut self.session));
+            .show(ui, |ui| {
+                self.workspace
+                    .show(ui, &mut self.session, &mut self.requested_command);
+            });
 
         about_window::show(&ctx, self);
+        project_settings_window::show(&ctx, self);
         if let Some(decision) = unsaved_changes_dialog::show(&ctx, self) {
             self.resolve_unsaved_changes(decision, &ctx, frame);
         }

@@ -1,6 +1,7 @@
 use eframe::egui::{self, Align2, Color32, FontId, Rect, Stroke, StrokeKind};
 use vizx_core::EditorSession;
 
+use crate::app::AppCommand;
 use crate::theme;
 
 /// Empty space kept between the composition frame and the panel edges.
@@ -11,7 +12,11 @@ const FRAME_MARGIN: f32 = 24.0;
 /// There is no renderer yet, so this only shows an empty frame. The frame
 /// does use the real composition size from the project settings, so changing
 /// the resolution in the Properties panel changes its shape here.
-pub fn show(ui: &mut egui::Ui, session: &EditorSession) {
+pub fn show(
+    ui: &mut egui::Ui,
+    session: &EditorSession,
+    requested_command: &mut Option<AppCommand>,
+) {
     let settings = &session.project().settings;
     let panel_rect = ui.available_rect_before_wrap();
     let painter = ui.painter_at(panel_rect);
@@ -48,8 +53,13 @@ pub fn show(ui: &mut egui::Ui, session: &EditorSession) {
         theme::TEXT_MUTED,
     );
 
-    // Tell egui this panel used all of its space.
-    ui.allocate_rect(panel_rect, egui::Sense::hover());
+    // Claim the whole panel and offer a context menu on right-click.
+    let response = ui.allocate_rect(panel_rect, egui::Sense::click());
+    response.context_menu(|ui| {
+        if ui.button("Project Settings...").clicked() {
+            *requested_command = Some(AppCommand::OpenProjectSettings);
+        }
+    });
 }
 
 /// Largest rectangle with the aspect ratio of `content_size` that fits

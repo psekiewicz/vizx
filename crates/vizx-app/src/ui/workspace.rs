@@ -4,8 +4,10 @@ use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex};
 use vizx_core::EditorSession;
 
+use crate::app::AppCommand;
 use crate::theme;
 use crate::ui::panels;
+use crate::ui::panels::timeline::TimelineView;
 
 /// Identifies one dockable panel.
 ///
@@ -42,12 +44,15 @@ impl PanelKind {
 /// Current arrangement of the dockable panels.
 pub struct Workspace {
     dock_state: DockState<PanelKind>,
+    /// Zoom and scroll position of the timeline panel.
+    timeline_view: TimelineView,
 }
 
 impl Workspace {
     pub fn new() -> Self {
         Self {
             dock_state: default_layout(),
+            timeline_view: TimelineView::default(),
         }
     }
 
@@ -71,9 +76,20 @@ impl Workspace {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, session: &mut EditorSession) {
+    /// Draws all panels. A panel that wants an application command executed
+    /// (for example "open project settings") writes it to equested_command.
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        session: &mut EditorSession,
+        requested_command: &mut Option<AppCommand>,
+    ) {
         let style = theme::dock_style(ui.style());
-        let mut panel_viewer = PanelViewer { session };
+        let mut panel_viewer = PanelViewer {
+            session,
+            timeline_view: &mut self.timeline_view,
+            requested_command,
+        };
 
         DockArea::new(&mut self.dock_state)
             .style(style)
@@ -115,6 +131,8 @@ fn default_layout() -> DockState<PanelKind> {
 /// data it points to.
 struct PanelViewer<'session> {
     session: &'session mut EditorSession,
+    timeline_view: &'session mut TimelineView,
+    requested_command: &'session mut Option<AppCommand>,
 }
 
 impl egui_dock::TabViewer for PanelViewer<'_> {
@@ -131,9 +149,13 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, panel: &mut PanelKind) {
         match panel {
             PanelKind::MediaLibrary => panels::media_library::show(ui),
-            PanelKind::Preview => panels::preview::show(ui, self.session),
+            PanelKind::Preview => {
+                panels::preview::show(ui, self.session, self.requested_command);
+            }
             PanelKind::Properties => panels::properties::show(ui, self.session),
-            PanelKind::Timeline => panels::timeline::show(ui),
+            PanelKind::Timeline => {
+                panels::timeline::show(ui, self.session, self.timeline_view);
+            }
         }
     }
 
