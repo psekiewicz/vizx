@@ -4,7 +4,7 @@
 use eframe::egui;
 use vizx_audio::{AudioPlayer, PlaybackError, PlaybackSource};
 use vizx_core::{AudioStore, EditorSession};
-use vizx_project::TrackKind;
+use vizx_project::{AudioInput, TrackKind};
 
 /// Everything on the project's audio tracks that can be heard right now:
 /// every audio clip whose file has finished loading, placed at its position
@@ -16,10 +16,29 @@ pub fn project_audio_sources(
     session: &EditorSession,
     audio_store: &AudioStore,
 ) -> (Vec<PlaybackSource>, usize) {
+    audio_sources_for(session, audio_store, AudioInput::Mix)
+}
+
+/// The loaded audio clips that `input` selects: all audio tracks for the
+/// mix, or the clips of one audio track. Also returns how many of the
+/// selected clips are not loaded yet.
+///
+/// An input naming a track that no longer exists selects the mix, so a
+/// visualizer never goes silent because of a stale reference.
+pub fn audio_sources_for(
+    session: &EditorSession,
+    audio_store: &AudioStore,
+    input: AudioInput,
+) -> (Vec<PlaybackSource>, usize) {
+    let only_track = match input {
+        AudioInput::Track(id) if session.project().track(id).is_some() => Some(id),
+        _ => None,
+    };
+
     let mut sources = Vec::new();
     let mut clips_still_loading = 0;
     for track in session.project().tracks() {
-        if track.kind != TrackKind::Audio {
+        if track.kind != TrackKind::Audio || only_track.is_some_and(|id| id != track.id) {
             continue;
         }
         for clip in &track.clips {

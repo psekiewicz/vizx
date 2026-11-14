@@ -12,7 +12,7 @@ use eframe::egui;
 use vizx_core::{AudioStore, EditorSession, MilkdropPrerender, PrerenderJob, resolve_preset_path};
 use vizx_project::ClipId;
 
-use crate::transport::project_audio_sources;
+use crate::transport::{audio_sources_for, project_audio_sources};
 
 /// Width of the preview picture in pixels. The height follows from the
 /// project's aspect ratio. Kept small so that rendering and storing every
@@ -84,7 +84,9 @@ impl MilkdropPreview {
         let project = session.project();
         let settings = &project.settings;
         let frames_per_second = settings.frame_rate.as_f64().round().max(1.0) as u32;
-        let (audio_sources, clips_still_loading) = project_audio_sources(session, audio_store);
+        // Rendering waits until all audio is loaded, not only the audio a
+        // clip reacts to, so that no clip is rendered twice.
+        let (_all_sources, clips_still_loading) = project_audio_sources(session, audio_store);
         let is_audio_ready = clips_still_loading == 0;
 
         // What should be rendered: one job per MilkDrop clip.
@@ -108,7 +110,9 @@ impl MilkdropPreview {
                         frames_per_second,
                         frame_count: (clip_seconds * f64::from(frames_per_second)).ceil() as u32,
                         start_seconds: clip.start_milliseconds as f64 / 1000.0,
-                        audio_sources: audio_sources.clone(),
+                        // Each visualizer hears only the audio it was told
+                        // to react to: the mix, or one audio track.
+                        audio_sources: audio_sources_for(session, audio_store, clip.audio_input).0,
                     },
                 ));
             }

@@ -27,8 +27,11 @@ projectM      separate DLL, loaded while VizX is running
   frame is read back as pixels and uploaded as a texture.
 - An OpenGL context belongs to one thread, so the renderer lives entirely on
   its own background thread. The UI never waits for it.
-- The visualizer reacts to the same mix the sound card receives
-  (`vizx_audio::mix_to_stereo`).
+- Each visualizer clip has an audio input (**Reacts to** in the Properties
+  panel): the whole mix, which is the default and is what the sound card
+  receives, or a single audio track. With stems on separate audio tracks
+  (vocals, melody, bass), each visualizer can follow one of them. Playback
+  always plays the whole mix.
 - `vizx-milkdrop` is the only crate that contains `unsafe` code, C function
   declarations or OpenGL. Its off-screen context is currently implemented
   for Windows only (WGL); Linux will need an EGL version.
@@ -51,8 +54,8 @@ and keeps the frames:
   name projectM's development version uses, so the patch can be dropped once
   a release contains it. Without the patch pre-rendering reports an error.
 - **Audio comes from the timeline.** For each frame projectM receives exactly
-  the audio between the previous frame and this one, from the same mix that
-  is played.
+  the audio between the previous frame and this one, taken from the clip's
+  audio input (the mix or one audio track).
 - **Two threads.** One draws frames with projectM (graphics card), the other
   compresses them as JPEG and appends them to a file (processor). A small
   buffer between them keeps memory use flat.
@@ -197,7 +200,8 @@ original MilkDrop presets are a separate collection of about 550
   search paths, which VizX does not set yet; those presets render without
   their textures.
 - **One preset at a time.** The topmost visual layer with a clip at the
-  playhead is shown. Layers are not composited yet.
+  playhead is shown. Layers are not composited yet, so several visualizers
+  that follow different stems cannot be seen together yet.
 - **Integrated graphics on hybrid laptops.** The off-screen OpenGL context
   is created on whichever GPU Windows picks by default, usually the
   integrated one.

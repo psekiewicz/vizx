@@ -1,6 +1,6 @@
 use eframe::egui;
 use vizx_core::EditorSession;
-use vizx_project::Track;
+use vizx_project::{AudioInput, Clip, Track};
 
 use crate::theme;
 use crate::ui::format_duration;
@@ -61,6 +61,9 @@ fn track_properties(ui: &mut egui::Ui, session: &mut EditorSession, track: &Trac
                     .small()
                     .color(theme::TEXT_MUTED),
             );
+            if source.is_milkdrop_preset() {
+                audio_input_selector(ui, session, clip);
+            }
         }
     }
 
@@ -68,6 +71,38 @@ fn track_properties(ui: &mut egui::Ui, session: &mut EditorSession, track: &Trac
     if ui.button("Delete Track").clicked() {
         session.remove_track(track.id);
     }
+}
+
+/// Lets the user choose which audio a visualizer reacts to: everything, or
+/// one audio track (for example only the vocals).
+fn audio_input_selector(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {
+    const MIX_LABEL: &str = "All audio (mix)";
+
+    // Collected first, so the session can be modified afterwards.
+    let audio_tracks: Vec<(AudioInput, String)> = session
+        .project()
+        .audio_tracks()
+        .map(|track| (AudioInput::Track(track.id), track.name.clone()))
+        .collect();
+    let current_label = audio_tracks
+        .iter()
+        .find(|(input, _)| *input == clip.audio_input)
+        .map_or(MIX_LABEL, |(_, name)| name.as_str());
+
+    let mut chosen = clip.audio_input;
+    ui.horizontal(|ui| {
+        ui.label("Reacts to")
+            .on_hover_text("The audio this visualizer follows");
+        egui::ComboBox::from_id_salt(("audio_input", clip.id))
+            .selected_text(current_label)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut chosen, AudioInput::Mix, MIX_LABEL);
+                for (input, name) in &audio_tracks {
+                    ui.selectable_value(&mut chosen, *input, name);
+                }
+            });
+    });
+    session.edit_project(|project| project.set_clip_audio_input(clip.id, chosen));
 }
 
 fn nothing_selected(ui: &mut egui::Ui) {

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AudioProperties, CURRENT_FORMAT_VERSION, Clip, ClipId, MediaContent, MediaId, MediaSource,
-    ProjectMetadata, ProjectSettings, Track, TrackId, TrackKind,
+    AudioInput, AudioProperties, CURRENT_FORMAT_VERSION, Clip, ClipId, MediaContent, MediaId,
+    MediaSource, ProjectMetadata, ProjectSettings, Track, TrackId, TrackKind,
 };
 
 /// Root of all data that belongs to one VizX project.
@@ -112,10 +112,54 @@ impl Project {
     }
 
     /// Removes a track. Returns `false` if no track has this id.
+    ///
+    /// Clips that reacted to the audio of the removed track go back to
+    /// reacting to the whole mix, so nothing is left pointing at a track
+    /// that no longer exists.
     pub fn remove_track(&mut self, id: TrackId) -> bool {
         let count_before = self.tracks.len();
         self.tracks.retain(|track| track.id != id);
-        self.tracks.len() != count_before
+        let was_removed = self.tracks.len() != count_before;
+
+        if was_removed {
+            for clip in self.tracks.iter_mut().flat_map(|track| &mut track.clips) {
+                if clip.audio_input == AudioInput::Track(id) {
+                    clip.audio_input = AudioInput::Mix;
+                }
+            }
+        }
+        was_removed
+    }
+
+    /// The audio tracks, from top to bottom.
+    pub fn audio_tracks(&self) -> impl Iterator<Item = &Track> {
+        self.tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Audio)
+    }
+
+    /// Chooses which audio a clip reacts to. Returns `true` only if this
+    /// changed something. An input naming a track that is not an audio
+    /// track of this project is refused.
+    pub fn set_clip_audio_input(&mut self, clip_id: ClipId, input: AudioInput) -> bool {
+        if let AudioInput::Track(track_id) = input
+            && !self.audio_tracks().any(|track| track.id == track_id)
+        {
+            return false;
+        }
+
+        let clip = self
+            .tracks
+            .iter_mut()
+            .flat_map(|track| &mut track.clips)
+            .find(|clip| clip.id == clip_id);
+        match clip {
+            Some(clip) if clip.audio_input != input => {
+                clip.audio_input = input;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// All media sources, in the order they were imported.
@@ -162,6 +206,7 @@ impl Project {
             media: media_id,
             start_milliseconds: 0,
             duration_milliseconds: properties.duration_milliseconds,
+            audio_input: AudioInput::Mix,
         };
         self.next_clip_id += 1;
         let clip_end = clip.end_milliseconds();
@@ -207,6 +252,7 @@ impl Project {
             media: media_id,
             start_milliseconds: 0,
             duration_milliseconds: self.settings.duration_milliseconds,
+            audio_input: AudioInput::Mix,
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -437,6 +483,34 @@ mod tests {
         assert_eq!(project.milkdrop_preset_at(5_000).unwrap().path, "top.milk");
         // The clip covers 0..10000; its end is not part of it.
         assert!(project.milkdrop_preset_at(10_000).is_none());
+    }
+
+    #[test]
+    fn a_visualizer_can_react_to_one_audio_track() {
+        let mut project = Project::with_starter_tracks();
+        let (_, vocals) = project.import_audio("vocals.wav", audio(10_000));
+        let (_, bass) = project.import_audio("bass.wav", audio(10_000));
+        let (_, layer) = project.add_milkdrop_preset("a.milk");
+        let clip_id = project.track(layer).unwrap().clips[0].id;
+        let input_of = |project: &Project| project.track(layer).unwrap().clips[0].audio_input;
+
+        // A new visualizer reacts to everything.
+        assert_eq!(input_of(&project), AudioInput::Mix);
+
+        assert!(project.set_clip_audio_input(clip_id, AudioInput::Track(bass)));
+        assert!(!project.set_clip_audio_input(clip_id, AudioInput::Track(bass)));
+        assert_eq!(input_of(&project), AudioInput::Track(bass));
+
+        // A visual layer is not an audio input.
+        assert!(!project.set_clip_audio_input(clip_id, AudioInput::Track(layer)));
+        assert_eq!(input_of(&project), AudioInput::Track(bass));
+
+        // Removing another track changes nothing; removing the chosen one
+        // falls back to the mix.
+        project.remove_track(vocals);
+        assert_eq!(input_of(&project), AudioInput::Track(bass));
+        project.remove_track(bass);
+        assert_eq!(input_of(&project), AudioInput::Mix);
     }
 
     #[test]

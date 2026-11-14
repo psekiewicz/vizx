@@ -234,6 +234,37 @@ mod tests {
     }
 
     #[test]
+    fn version_6_clip_without_audio_input_reacts_to_the_mix() {
+        let version_6_content = r#"{
+            "format_version": 6,
+            "metadata": { "author": "", "description": "", "created_with_version": "0.1.0" },
+            "settings": {
+                "width": 1920,
+                "height": 1080,
+                "frame_rate": { "numerator": 30, "denominator": 1 },
+                "duration_milliseconds": 60000
+            },
+            "tracks": [
+                { "id": 1, "name": "Layer 1", "kind": "Visual", "clips": [
+                    { "id": 0, "media": 0, "start_milliseconds": 0, "duration_milliseconds": 60000 }
+                ] }
+            ],
+            "next_track_id": 2,
+            "media": [ { "id": 0, "path": "a.milk", "content": "MilkdropPreset" } ],
+            "next_media_id": 1,
+            "next_clip_id": 1
+        }"#;
+
+        let project = Project::from_vzx_str(version_6_content).unwrap();
+
+        assert_eq!(
+            project.tracks()[0].clips[0].audio_input,
+            crate::AudioInput::Mix
+        );
+        assert_eq!(project.format_version, CURRENT_FORMAT_VERSION);
+    }
+
+    #[test]
     fn text_that_is_not_a_project_is_rejected() {
         let error = Project::from_vzx_str("this is not a project").unwrap_err();
 

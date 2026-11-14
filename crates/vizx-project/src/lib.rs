@@ -21,7 +21,7 @@ pub use media::{AudioProperties, MediaContent, MediaId, MediaSource};
 pub use metadata::ProjectMetadata;
 pub use project::Project;
 pub use settings::{FrameRate, ProjectSettings};
-pub use track::{Clip, ClipId, Track, TrackId, TrackKind};
+pub use track::{AudioInput, Clip, ClipId, Track, TrackId, TrackKind};
 
 /// File extension of native VizX project files, without the leading dot.
 pub const PROJECT_FILE_EXTENSION: &str = "vzx";
@@ -42,4 +42,6 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 /// - 5: the project name is no longer stored in the file; the file name is
 ///   the project's name. A `name` in older files is ignored.
 /// - 6: MilkDrop presets as a kind of media.
-pub const CURRENT_FORMAT_VERSION: u32 = 6;
+/// - 7: a clip records which audio it reacts to (`audio_input`). Older
+///   files load with every clip reacting to the whole mix.
+pub const CURRENT_FORMAT_VERSION: u32 = 7;

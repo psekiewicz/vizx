@@ -88,6 +88,27 @@ pub struct Clip {
     /// Where on the project timeline the clip begins.
     pub start_milliseconds: u64,
     pub duration_milliseconds: u64,
+    /// Which audio a visual clip reacts to. Not used by audio clips.
+    ///
+    /// `#[serde(default)]` lets files written before this field existed
+    /// (format version 6 and older) load: there, every visualizer reacted
+    /// to the whole mix.
+    #[serde(default)]
+    pub audio_input: AudioInput,
+}
+
+/// The audio a visual element reacts to.
+///
+/// This is what separate stems are for: with the vocals, the melody and the
+/// bass on three audio tracks, three visualizers can each follow one of
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum AudioInput {
+    /// Everything that is audible: all audio tracks together.
+    #[default]
+    Mix,
+    /// Only the audio on one audio track.
+    Track(TrackId),
 }
 
 impl Clip {

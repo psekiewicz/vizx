@@ -122,7 +122,8 @@ the current layout from then on.
 
 Version **3** reduced the track kinds to two; the former `Visualizer`,
 `Animation` and `Text` kinds load as `Visual`. Version **4** added media
-sources and clips. Version **6** added MilkDrop presets as a kind of media.
+sources and clips. Version **6** added MilkDrop presets as a kind of media. Version **7** added
+the audio a clip reacts to (`audio_input`); older files load with the mix.
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -173,7 +174,9 @@ is optional and loaded at run time, and everything else in VizX only sees
 the design, setup, licensing (LGPL) and limitations.
 
 In the project, a preset is a kind of media (`MediaContent::MilkdropPreset`)
-placed as a clip on a visual layer. Each such clip is pre-rendered in the
+placed as a clip on a visual layer. The clip records which audio it reacts
+to (`AudioInput`: the mix or one audio track), which is what separate stems
+are for. Each such clip is pre-rendered in the
 background to a temporary frame file, and the preview shows the stored frame
 for the playhead.
 
