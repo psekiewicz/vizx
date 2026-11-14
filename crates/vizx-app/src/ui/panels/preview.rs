@@ -50,7 +50,14 @@ pub fn show(
             None
         }
         MilkdropView::NotActive => Some("Nothing to show at this time".to_owned()),
-        MilkdropView::Waiting => Some("Starting MilkDrop...".to_owned()),
+        MilkdropView::Rendering { finished, total } if *total > 0 => Some(format!(
+            "Pre-rendering MilkDrop: {}%\n({finished} of {total} frames)",
+            u64::from(*finished) * 100 / u64::from(*total)
+        )),
+        MilkdropView::Rendering { .. } => Some("Waiting to pre-render MilkDrop...".to_owned()),
+        MilkdropView::WaitingForAudio => {
+            Some("Loading audio before pre-rendering MilkDrop...".to_owned())
+        }
         MilkdropView::Failed(reason) => Some(reason.clone()),
     };
     if let Some(message) = message {
@@ -83,9 +90,7 @@ pub fn show(
     // Claim the whole panel and offer a context menu on right-click.
     let response = ui.allocate_rect(panel_rect, egui::Sense::click());
     response.context_menu(|ui| {
-        if ui.button("Add MilkDrop Preset...").clicked() {
-            *requested_command = Some(AppCommand::AddMilkdropPreset);
-        }
+        crate::ui::add_submenu(ui, requested_command);
         ui.separator();
         if ui.button("Project Settings...").clicked() {
             *requested_command = Some(AppCommand::OpenProjectSettings);

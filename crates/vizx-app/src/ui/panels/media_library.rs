@@ -15,14 +15,7 @@ pub fn show(
     session: &EditorSession,
     requested_command: &mut Option<AppCommand>,
 ) {
-    if ui.button("Import Audio...").clicked() {
-        *requested_command = Some(AppCommand::ImportAudio);
-    }
-    ui.add_space(4.0);
-
-    if ui.button("Add MilkDrop Preset...").clicked() {
-        *requested_command = Some(AppCommand::AddMilkdropPreset);
-    }
+    crate::ui::add_submenu(ui, requested_command);
     ui.add_space(4.0);
 
     let media = session.project().media();

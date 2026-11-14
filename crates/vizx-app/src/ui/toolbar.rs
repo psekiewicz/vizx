@@ -29,6 +29,16 @@ pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
 
         ui.separator();
 
+        ui.menu_button("Add", |ui| {
+            if let Some(command) = crate::ui::add_menu_items(ui) {
+                app.request(command);
+            }
+        })
+        .response
+        .on_hover_text("Add audio, a visualizer, a layer...");
+
+        ui.separator();
+
         // Transport controls. The play button turns into a pause button
         // while playing.
         let (play_symbol, play_tooltip) = if app.is_playing() {

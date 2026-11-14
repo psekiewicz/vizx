@@ -10,7 +10,7 @@
 //! It feeds projectM a test tone and writes a few frames as BMP images.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use vizx_milkdrop::MilkdropRenderer;
 
@@ -18,9 +18,9 @@ const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
 const FRAMES_PER_SECOND: u32 = 30;
 const SAMPLE_RATE: u32 = 44_100;
-const FRAME_COUNT: u32 = 90;
+const FRAME_COUNT: u32 = 300;
 /// Frames written to disk; the others are only rendered.
-const SAVED_FRAMES: [u32; 3] = [15, 45, 89];
+const SAVED_FRAMES: [u32; 3] = [15, 89, 299];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = std::env::args().skip(1);
@@ -36,12 +36,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     renderer.load_preset(Path::new(&preset))?;
 
     let samples_per_frame = (SAMPLE_RATE / FRAMES_PER_SECOND) as usize;
-    let frame_duration = Duration::from_secs_f64(1.0 / f64::from(FRAMES_PER_SECOND));
     let mut pixels = Vec::new();
     let mut sample_index = 0u64;
     let started = Instant::now();
 
     for frame in 0..FRAME_COUNT {
+        // The frame's time is set explicitly, so the result does not depend
+        // on how fast this loop runs.
+        renderer.set_frame_time(f64::from(frame) / f64::from(FRAMES_PER_SECOND))?;
         renderer.add_stereo_audio(&test_tone(sample_index, samples_per_frame));
         sample_index += samples_per_frame as u64;
         renderer.render_frame(&mut pixels);
@@ -54,13 +56,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 path.display(),
                 non_black_percentage(&pixels)
             );
-        }
-
-        // projectM 4.1 animates by the real clock, so frames are produced
-        // at real-time speed.
-        let next_frame_at = frame_duration * (frame + 1);
-        if let Some(wait) = next_frame_at.checked_sub(started.elapsed()) {
-            std::thread::sleep(wait);
         }
     }
 

@@ -10,7 +10,7 @@ single project and share one timeline.
 > **Status: early prototype.**
 > The application window, dockable panel layout, project files (`.vzx`), an
 > adaptive timeline with tracks, audio import, waveform display, audio
-> playback and a live MilkDrop visualizer preview exist. There is no export
+> playback and a pre-rendered MilkDrop visualizer preview exist. There is no export
 > yet.
 
 ## Technology

@@ -14,7 +14,7 @@
 //! here is `unsafe` to call; the safe wrapper is in `renderer.rs`.
 
 use std::env;
-use std::ffi::{c_char, c_float, c_int, c_uint, c_void};
+use std::ffi::{c_char, c_double, c_float, c_int, c_uint, c_void};
 use std::path::{Path, PathBuf};
 
 use libloading::Library;
@@ -66,6 +66,11 @@ pub struct Api {
     pub pcm_get_max_samples: unsafe extern "C" fn() -> c_uint,
     pub pcm_add_float: unsafe extern "C" fn(*mut ProjectM, *const c_float, c_uint, c_int),
     pub opengl_render_frame: unsafe extern "C" fn(*mut ProjectM),
+    /// `projectm_set_frame_time`: sets the time of the next frame instead of
+    /// letting projectM read the system clock. Not part of projectM 4.1; it
+    /// is added by the patch in `patches/`. `None` if the loaded library
+    /// does not have it.
+    pub set_frame_time: Option<unsafe extern "C" fn(*mut ProjectM, c_double)>,
     /// GLEW, the helper library projectM uses on Windows to reach OpenGL.
     /// `None` on systems where projectM does not need it.
     glew: Option<Glew>,
@@ -131,6 +136,10 @@ impl Api {
             pcm_get_max_samples: function!("projectm_pcm_get_max_samples"),
             pcm_add_float: function!("projectm_pcm_add_float"),
             opengl_render_frame: function!("projectm_opengl_render_frame"),
+            // SAFETY: the signature matches the declaration added by the patch.
+            set_frame_time: unsafe { library.get(b"projectm_set_frame_time\0") }
+                .ok()
+                .map(|symbol| *symbol),
             glew: load_glew(path)?,
             _library: library,
         })

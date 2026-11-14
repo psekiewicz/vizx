@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use eframe::egui;
 use vizx_core::{AudioStore, EditorSession};
-use vizx_project::{PROJECT_FILE_EXTENSION, with_project_extension};
+use vizx_project::{PROJECT_FILE_EXTENSION, TrackKind, with_project_extension};
 
 use crate::milkdrop_preview::MilkdropPreview;
 use crate::theme;
@@ -27,6 +27,8 @@ pub enum AppCommand {
     SaveProjectAs,
     ImportAudio,
     AddMilkdropPreset,
+    AddVisualLayer,
+    AddAudioTrack,
     OpenProjectSettings,
     /// Start playback, or pause it if it is running.
     TogglePlayback,
@@ -95,6 +97,11 @@ impl VizxApp {
             window_title: String::new(),
             has_maximized_on_startup: false,
         }
+    }
+
+    /// Pre-render progress of the MilkDrop clips, for the status bar.
+    pub fn prerender_progress(&self) -> Option<crate::milkdrop_preview::PrerenderProgress> {
+        self.milkdrop_preview.progress()
     }
 
     pub fn is_playing(&self) -> bool {
@@ -175,6 +182,12 @@ impl VizxApp {
             }
             AppCommand::ImportAudio => self.import_audio(frame),
             AppCommand::AddMilkdropPreset => self.add_milkdrop_preset(frame),
+            AppCommand::AddVisualLayer => {
+                self.session.add_track(TrackKind::Visual);
+            }
+            AppCommand::AddAudioTrack => {
+                self.session.add_track(TrackKind::Audio);
+            }
             AppCommand::OpenProjectSettings => self.is_project_settings_open = true,
             AppCommand::TogglePlayback => self.toggle_playback(),
             AppCommand::StopPlayback => {

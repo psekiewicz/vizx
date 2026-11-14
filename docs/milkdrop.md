@@ -12,9 +12,10 @@ on the timeline then shows a message in the preview instead of a picture.
 ## How it fits together
 
 ```text
-vizx-app      MilkdropPreview: asks for a frame when the playhead moves,
-              shows the newest finished frame in the Preview panel
-vizx-core     MilkdropWorker: a background thread that owns the renderer
+vizx-app      MilkdropPreview: starts a pre-render for every MilkDrop clip
+              and shows the stored frame that belongs to the playhead
+vizx-core     MilkdropPrerender: renders all frames of a clip in the
+              background and stores them in a temporary file
 vizx-milkdrop MilkdropRenderer: projectM + an off-screen OpenGL context,
               returns frames as RGBA pixels
 projectM      separate DLL, loaded while VizX is running
@@ -25,12 +26,57 @@ projectM      separate DLL, loaded while VizX is running
   own OpenGL context on a window that is never shown, and each finished
   frame is read back as pixels and uploaded as a texture.
 - An OpenGL context belongs to one thread, so the renderer lives entirely on
-  its own thread. The UI sends requests through a channel and never waits.
+  its own background thread. The UI never waits for it.
 - The visualizer reacts to the same mix the sound card receives
   (`vizx_audio::mix_to_stereo`).
 - `vizx-milkdrop` is the only crate that contains `unsafe` code, C function
   declarations or OpenGL. Its off-screen context is currently implemented
   for Windows only (WGL); Linux will need an EGL version.
+
+## Pre-rendering
+
+A MilkDrop picture builds on the previous one: each frame is the last frame,
+warped and faded, with something new drawn on top. A frame is therefore only
+correct if every frame before it was rendered too. Drawing "live" at the
+playhead cannot show the right picture after a jump, and it would make the
+result depend on how fast the computer is.
+
+So VizX renders each MilkDrop clip once, from its first frame to its last,
+and keeps the frames:
+
+- **Time comes from the frame number.** Before each frame VizX tells projectM
+  what time it is (`frame / frames per second`). projectM 4.1 has no function
+  for that; it is added by the small patch in
+  [`patches/`](../patches/projectm-4.1.8-frame-time.patch), under the same
+  name projectM's development version uses, so the patch can be dropped once
+  a release contains it. Without the patch pre-rendering reports an error.
+- **Audio comes from the timeline.** For each frame projectM receives exactly
+  the audio between the previous frame and this one, from the same mix that
+  is played.
+- **Two threads.** One draws frames with projectM (graphics card), the other
+  compresses them as JPEG and appends them to a file (processor). A small
+  buffer between them keeps memory use flat.
+- **Frames live on disk.** The frames of one song are far too large for
+  memory, so they go into one temporary file per clip, in the system's
+  temporary folder under `vizx-prerender`. Only each frame's position in the
+  file is kept in memory. The file is deleted when it is no longer needed;
+  leftovers from a crash are removed after a day.
+- **Re-rendering.** A pre-render belongs to a "key" made of everything that
+  affects the frames: preset, size, frame rate, clip position and length, and
+  the audio. If any of these change, the frames are thrown away and rendered
+  again. Clips are rendered one at a time.
+
+While a clip is being pre-rendered, the preview shows the frames that are
+done and a progress message for the rest; the status bar shows overall
+progress and the disk space used.
+
+Measured on the development laptop (Intel HD Graphics 4600, 640x360,
+30 fps): a detailed preset renders at roughly 95 frames per second, so a
+four-minute song takes about 80 seconds and about 600 MB of temporary disk
+space. Simple presets are faster and smaller.
+
+Two renders of the same clip are visually the same but not identical to the
+last bit: projectM seeds some noise textures randomly.
 
 ## Licensing
 
@@ -61,7 +107,12 @@ $tools = "D:\tools"
 #    the libprojectM-4.x source archive into $tools\cmake, $tools\glew and
 #    $tools\projectm-src.
 
-# 2. Configure. Use the generator matching your Visual Studio.
+# 2. Apply the VizX patch that pre-rendering needs (see "Pre-rendering").
+Push-Location "$tools\projectm-src"
+git apply "<vizx repository>\patches\projectm-4.1.8-frame-time.patch"
+Pop-Location
+
+# 3. Configure. Use the generator matching your Visual Studio.
 & "$tools\cmake\bin\cmake.exe" -S "$tools\projectm-src" -B "$tools\projectm-build" `
     -G "Visual Studio 15 2017" -A x64 `
     "-DCMAKE_INSTALL_PREFIX=$tools\projectm" `
@@ -71,10 +122,10 @@ $tools = "D:\tools"
     -DENABLE_PLAYLIST=OFF -DENABLE_SDL_UI=OFF -DBUILD_TESTING=OFF `
     -DBUILD_SHARED_LIBS=ON -DENABLE_SYSTEM_PROJECTM_EVAL=OFF
 
-# 3. Build and install (a few minutes).
+# 4. Build and install (a few minutes).
 & "$tools\cmake\bin\cmake.exe" --build "$tools\projectm-build" --config Release --target install
 
-# 4. Put GLEW's DLL next to projectM's.
+# 5. Put GLEW's DLL next to projectM's.
 Copy-Item "$tools\glew\bin\Release\x64\glew32.dll" "$tools\projectm\bin\"
 ```
 
@@ -93,28 +144,29 @@ To check the setup without the VizX window:
 cargo run -p vizx-milkdrop --example render_frames -- "path\to\preset.milk" "output folder"
 ```
 
-It prints the projectM and OpenGL versions and writes three frames as BMP
-images.
+It prints the projectM and OpenGL versions, renders 300 frames as fast as it
+can and writes three of them as BMP images.
 
-Presets: the original MilkDrop collection is available at
-<https://github.com/projectM-visualizer/presets-milkdrop-original>.
+Presets: projectM maintains two collections, the original MilkDrop presets
+(<https://github.com/projectM-visualizer/presets-milkdrop-original>, about
+550) and "Cream of the Crop"
+(<https://github.com/projectM-visualizer/presets-cream-of-the-crop>, about
+9800, sorted by style).
 
 ## Known limitations
 
-- **Live preview only.** A frame is drawn when the playhead moves. Because a
-  MilkDrop picture builds on the previous one, scrubbing or seeking shows an
-  approximation; the picture is only "correct" when played from a point
-  onward.
-- **Real-time animation clock.** projectM 4.1 advances its animation by the
-  computer's clock, not by project time. This is fine for live preview but
-  not for export: rendering faster or slower than real time would change the
-  animation speed. Deterministic, pre-rendered frames need a projectM with a
-  settable frame time.
-- **Preview resolution** is 640 pixels wide, to keep reading back and
-  uploading each frame cheap.
+- **Preview resolution** is 640 pixels wide, to keep rendering and storing
+  every frame affordable. Export will need its own full-size render.
+- **Disk space.** A pre-rendered clip of song length takes hundreds of
+  megabytes in the temporary folder while the project is open.
+- **Nothing is kept between sessions.** Opening a project renders its
+  MilkDrop clips again.
 - **Textures.** Presets that use image textures need projectM's texture
   search paths, which VizX does not set yet; those presets render without
   their textures.
-- **One preset at a time.** The topmost visual layer with a preset at the
+- **One preset at a time.** The topmost visual layer with a clip at the
   playhead is shown. Layers are not composited yet.
+- **Integrated graphics on hybrid laptops.** The off-screen OpenGL context
+  is created on whichever GPU Windows picks by default, usually the
+  integrated one.
 - **Windows only** for now.

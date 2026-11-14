@@ -216,18 +216,29 @@ impl Project {
         (media_id, track_id)
     }
 
-    /// The MilkDrop preset shown at a point in time: the one on the topmost
-    /// visual layer that has a preset clip covering that time.
-    pub fn milkdrop_preset_at(&self, milliseconds: u64) -> Option<&MediaSource> {
+    /// Every MilkDrop preset clip with its preset, from the topmost visual
+    /// layer down.
+    pub fn milkdrop_clips(&self) -> impl Iterator<Item = (&Clip, &MediaSource)> {
         self.tracks
             .iter()
             .filter(|track| track.kind == TrackKind::Visual)
             .flat_map(|track| &track.clips)
-            .filter(|clip| {
-                milliseconds >= clip.start_milliseconds && milliseconds < clip.end_milliseconds()
-            })
-            .filter_map(|clip| self.media_source(clip.media))
-            .find(|source| source.is_milkdrop_preset())
+            .filter_map(|clip| Some((clip, self.media_source(clip.media)?)))
+            .filter(|(_, source)| source.is_milkdrop_preset())
+    }
+
+    /// The MilkDrop clip shown at a point in time: the one on the topmost
+    /// visual layer that covers that time.
+    pub fn milkdrop_clip_at(&self, milliseconds: u64) -> Option<(&Clip, &MediaSource)> {
+        self.milkdrop_clips().find(|(clip, _)| {
+            milliseconds >= clip.start_milliseconds && milliseconds < clip.end_milliseconds()
+        })
+    }
+
+    /// The MilkDrop preset shown at a point in time.
+    pub fn milkdrop_preset_at(&self, milliseconds: u64) -> Option<&MediaSource> {
+        self.milkdrop_clip_at(milliseconds)
+            .map(|(_, source)| source)
     }
 
     /// Renames a track. Returns `true` only if the name actually changed.

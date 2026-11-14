@@ -173,7 +173,17 @@ is optional and loaded at run time, and everything else in VizX only sees
 the design, setup, licensing (LGPL) and limitations.
 
 In the project, a preset is a kind of media (`MediaContent::MilkdropPreset`)
-placed as a clip on a visual layer.
+placed as a clip on a visual layer. Each such clip is pre-rendered in the
+background to a temporary frame file, and the preview shows the stored frame
+for the playhead.
+
+### One "Add" menu
+
+Everything that can be added to a project (audio file, MilkDrop preset,
+visual layer, audio track) is listed in one function, `ui::add_menu_items`.
+The menu bar, toolbar, Media Library and the context menus all show that
+same list under "Add", so a new kind of content appears everywhere by
+adding one line, and no panel grows its own row of "add this" buttons.
 
 ### Playback and the project clock
 
@@ -316,7 +326,8 @@ crate. Cross-crate integration tests will go into the relevant crate's own
 ### Minimal dependencies
 
 Direct dependencies: `eframe`, `egui_dock`, `rfd`, `serde`, `serde_json`,
-`symphonia`, `cpal`, `libloading` and (Windows only) `windows-sys`.
+`symphonia`, `cpal`, `libloading`, `image` and `jpeg-encoder` (reading and
+writing pre-rendered frames) and, on Windows only, `windows-sys`.
 Planned libraries (cpal, RustFFT, FFmpeg bindings) are added in the
 milestone that first uses them.
 

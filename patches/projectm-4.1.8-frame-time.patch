@@ -1,0 +1,133 @@
+Adds projectm_set_frame_time() to libprojectM 4.1.8, so an application can
+set the time of each frame instead of projectM reading the system clock.
+VizX needs this to pre-render frames at a fixed frame rate.
+
+The function has the same name and meaning as the one in projectM's
+development branch; drop this patch once a release contains it.
+
+Apply from the libprojectM source folder:  git apply <this file>
+
+diff --git a/src/api/include/projectM-4/parameters.h b/src/api/include/projectM-4/parameters.h
+index 2d9c70c..c238a92 100644
+--- a/src/api/include/projectM-4/parameters.h
++++ b/src/api/include/projectM-4/parameters.h
+@@ -229,6 +229,19 @@ PROJECTM_EXPORT bool projectm_get_aspect_correction(projectm_handle instance);
+  */
+ PROJECTM_EXPORT void projectm_set_easter_egg(projectm_handle instance, float value);
+ 
++/**
++ * @brief Sets the time of the next rendered frame.
++ *
++ * <p>By default, projectM measures time with the system clock. For offline rendering at a
++ * fixed frame rate, set the time of each frame explicitly before rendering it, so the result
++ * does not depend on how long rendering takes.</p>
++ *
++ * @param instance The projectM instance handle.
++ * @param seconds_since_first_frame Time in seconds since the first frame. Pass a negative
++ *                                  value to return to the system clock.
++ */
++PROJECTM_EXPORT void projectm_set_frame_time(projectm_handle instance, double seconds_since_first_frame);
++
+ /**
+  * @brief Returns the current "easter egg" value.
+  * @param instance The projectM instance handle.
+diff --git a/src/libprojectM/ProjectM.cpp b/src/libprojectM/ProjectM.cpp
+index 88fa014..e2d338d 100644
+--- a/src/libprojectM/ProjectM.cpp
++++ b/src/libprojectM/ProjectM.cpp
+@@ -384,6 +384,11 @@ void ProjectM::SetEasterEgg(float value)
+     m_timeKeeper->ChangeEasterEgg(value);
+ }
+ 
++void ProjectM::SetFrameTime(double secondsSinceFirstFrame)
++{
++    m_timeKeeper->SetFrameTime(secondsSinceFirstFrame);
++}
++
+ void ProjectM::MeshSize(uint32_t& meshResolutionX, uint32_t& meshResolutionY) const
+ {
+     meshResolutionX = m_meshX;
+diff --git a/src/libprojectM/ProjectM.hpp b/src/libprojectM/ProjectM.hpp
+index b84e293..ff983c4 100644
+--- a/src/libprojectM/ProjectM.hpp
++++ b/src/libprojectM/ProjectM.hpp
+@@ -151,6 +151,8 @@ public:
+ 
+     void SetEasterEgg(float value);
+ 
++    void SetFrameTime(double secondsSinceFirstFrame);
++
+     void MeshSize(uint32_t& meshResolutionX, uint32_t& meshResolutionY) const;
+ 
+     void SetMeshSize(uint32_t meshResolutionX, uint32_t meshResolutionY);
+diff --git a/src/libprojectM/ProjectMCWrapper.cpp b/src/libprojectM/ProjectMCWrapper.cpp
+index d58f123..8dc54a2 100644
+--- a/src/libprojectM/ProjectMCWrapper.cpp
++++ b/src/libprojectM/ProjectMCWrapper.cpp
+@@ -288,6 +288,12 @@ void projectm_set_easter_egg(projectm_handle instance, float value)
+     projectMInstance->SetEasterEgg(value);
+ }
+ 
++void projectm_set_frame_time(projectm_handle instance, double seconds_since_first_frame)
++{
++    auto projectMInstance = handle_to_instance(instance);
++    projectMInstance->SetFrameTime(seconds_since_first_frame);
++}
++
+ float projectm_get_easter_egg(projectm_handle instance)
+ {
+     auto projectMInstance = handle_to_instance(instance);
+diff --git a/src/libprojectM/TimeKeeper.cpp b/src/libprojectM/TimeKeeper.cpp
+index 612b0ab..2895da0 100644
+--- a/src/libprojectM/TimeKeeper.cpp
++++ b/src/libprojectM/TimeKeeper.cpp
+@@ -16,9 +16,17 @@ TimeKeeper::TimeKeeper(double presetDuration, double smoothDuration, double hard
+ 
+ void TimeKeeper::UpdateTimers()
+ {
+-    auto currentTime = std::chrono::high_resolution_clock::now();
+-
+-    double currentFrameTime = std::chrono::duration<double>(currentTime - m_startTime).count();
++    double currentFrameTime{};
++    if (m_userSpecifiedTime >= 0.0)
++    {
++        // The application drives the clock, e.g. for offline rendering at a fixed frame rate.
++        currentFrameTime = m_userSpecifiedTime;
++    }
++    else
++    {
++        auto currentTime = std::chrono::high_resolution_clock::now();
++        currentFrameTime = std::chrono::duration<double>(currentTime - m_startTime).count();
++    }
+     m_secondsSinceLastFrame = currentFrameTime - m_currentTime;
+     m_currentTime = currentFrameTime;
+     m_presetFrameA++;
+diff --git a/src/libprojectM/TimeKeeper.hpp b/src/libprojectM/TimeKeeper.hpp
+index 23d17df..beded1a 100644
+--- a/src/libprojectM/TimeKeeper.hpp
++++ b/src/libprojectM/TimeKeeper.hpp
+@@ -81,6 +81,15 @@ public:
+         m_easterEgg = value;
+     }
+ 
++    /**
++     * @brief Sets the time of the next frame instead of reading the system clock.
++     * @param secondsSinceFirstFrame Time in seconds. A negative value returns to the system clock.
++     */
++    inline void SetFrameTime(double secondsSinceFirstFrame)
++    {
++        m_userSpecifiedTime = secondsSinceFirstFrame;
++    }
++
+     inline auto SecondsSinceLastFrame() const -> double
+     {
+         return m_secondsSinceLastFrame;
+@@ -93,6 +102,8 @@ private:
+     std::random_device m_randomDevice{};
+     std::mt19937 m_randomGenerator{m_randomDevice()};
+ 
++    double m_userSpecifiedTime{-1.0}; //!< Frame time set by the application, negative if the system clock is used.
++
+     double m_secondsSinceLastFrame{};
+ 
+     double m_easterEgg{};

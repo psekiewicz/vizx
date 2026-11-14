@@ -34,6 +34,11 @@ eframe = { version = "0.36", default-features = false, features = [
 egui_dock = "0.21"
 # Native open/save file dialogs of the operating system.
 rfd = "0.18"
+# Compresses pre-rendered frames as JPEG images. Several times faster than
+# the encoder in `image`, which matters when storing thousands of frames.
+jpeg-encoder = { version = "0.7", features = ["simd"] }
+# Decompresses those frames again for display.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # Loads a dynamic library (DLL / .so) at run time; used for projectM.
 libloading = "0.8"
 # Raw Windows API, used only to create the off-screen OpenGL context for
@@ -68,6 +73,13 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 2
 
-# The per-sample loops of the audio crate need the same treatment.
+# VizX's own crates that process audio samples or pixels in tight loops need
+# the same treatment: unoptimized, those loops are many times slower.
 [profile.dev.package.vizx-audio]
+opt-level = 2
+
+[profile.dev.package.vizx-core]
+opt-level = 2
+
+[profile.dev.package.vizx-milkdrop]
 opt-level = 2

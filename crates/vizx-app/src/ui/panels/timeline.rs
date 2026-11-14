@@ -14,7 +14,9 @@ use vizx_audio::WaveformPeaks;
 use vizx_core::{AudioState, AudioStore, EditorSession, Selection};
 use vizx_project::{Track, TrackId, TrackKind};
 
+use crate::app::AppCommand;
 use crate::theme;
+use crate::ui::add_submenu;
 
 const RULER_HEIGHT: f32 = 22.0;
 const VISUAL_TRACK_HEIGHT: f32 = 28.0;
@@ -64,6 +66,7 @@ pub fn show(
     session: &mut EditorSession,
     view: &mut TimelineView,
     audio_store: &AudioStore,
+    requested_command: &mut Option<AppCommand>,
 ) {
     let panel_rect = ui.available_rect_before_wrap();
     ui.painter_at(panel_rect)
@@ -90,11 +93,25 @@ pub fn show(
     let scale = TimeScale::new(view, duration_seconds, lanes_rect.width());
     handle_zoom_input(ui, view, &scale, ruler_rect.union(lanes_rect));
 
-    let scroll_offset = show_lanes(ui, session, view, audio_store, &scale, lanes_rect);
+    let scroll_offset = show_lanes(
+        ui,
+        session,
+        view,
+        audio_store,
+        requested_command,
+        &scale,
+        lanes_rect,
+    );
     view.scroll_offset = scroll_offset;
 
     let is_scrubbing = show_ruler(ui, session, &scale, ruler_rect, scroll_offset.x);
-    show_track_headers(ui, session, headers_rect, scroll_offset.y);
+    show_track_headers(
+        ui,
+        session,
+        requested_command,
+        headers_rect,
+        scroll_offset.y,
+    );
     show_corner(ui, view, corner_rect);
 
     let separator = Stroke::new(1.0, theme::SEPARATOR);
@@ -236,6 +253,7 @@ fn show_lanes(
     session: &mut EditorSession,
     view: &mut TimelineView,
     audio_store: &AudioStore,
+    requested_command: &mut Option<AppCommand>,
     scale: &TimeScale,
     lanes_rect: Rect,
 ) -> egui::Vec2 {
@@ -250,7 +268,7 @@ fn show_lanes(
     if background.clicked() {
         session.select(Selection::Nothing);
     }
-    background.context_menu(|ui| add_track_menu(ui, session));
+    background.context_menu(|ui| add_submenu(ui, requested_command));
 
     let mut scroll_area = egui::ScrollArea::both()
         .id_salt("timeline_lanes")
@@ -360,7 +378,7 @@ fn show_lanes(
                 .map(|track| track.id);
             session.select(clicked_track.map_or(Selection::Nothing, Selection::Track));
         }
-        response.context_menu(|ui| add_track_menu(ui, session));
+        response.context_menu(|ui| add_submenu(ui, requested_command));
     });
 
     output.state.offset
@@ -426,6 +444,7 @@ fn show_ruler(
 fn show_track_headers(
     ui: &mut egui::Ui,
     session: &mut EditorSession,
+    requested_command: &mut Option<AppCommand>,
     headers_rect: Rect,
     scroll_y: f32,
 ) {
@@ -437,7 +456,6 @@ fn show_track_headers(
     // the track list from the session.
     let mut clicked_track: Option<TrackId> = None;
     let mut track_to_remove: Option<TrackId> = None;
-    let mut kind_to_add: Option<TrackKind> = None;
     let selection = session.selection();
     let rows = TrackRows::new(session.project().tracks());
 
@@ -489,11 +507,11 @@ fn show_track_headers(
                 track_to_remove = Some(track.id);
             }
             ui.separator();
-            kind_to_add = kind_to_add.or(add_track_buttons(ui));
+            add_submenu(ui, requested_command);
         });
     }
 
-    // The empty space under the last header also offers "add track".
+    // The empty space under the last header also offers the Add menu.
     let empty_top = headers_rect.top() - scroll_y + rows.total_height;
     let empty_rect = Rect::from_min_max(
         egui::pos2(headers_rect.left(), empty_top.max(headers_rect.top())),
@@ -508,7 +526,7 @@ fn show_track_headers(
         if response.clicked() {
             session.select(Selection::Nothing);
         }
-        response.context_menu(|ui| kind_to_add = kind_to_add.or(add_track_buttons(ui)));
+        response.context_menu(|ui| add_submenu(ui, requested_command));
     }
 
     if let Some(id) = clicked_track {
@@ -516,9 +534,6 @@ fn show_track_headers(
     }
     if let Some(id) = track_to_remove {
         session.remove_track(id);
-    }
-    if let Some(kind) = kind_to_add {
-        session.add_track(kind);
     }
 }
 
@@ -611,24 +626,6 @@ fn show_corner(ui: &mut egui::Ui, view: &mut TimelineView, corner_rect: Rect) {
         view.zoom = Zoom::FitProject;
         view.pending_horizontal_scroll = Some(0.0);
     }
-}
-
-/// Context menu content for adding a track directly through the session.
-fn add_track_menu(ui: &mut egui::Ui, session: &mut EditorSession) {
-    if let Some(kind) = add_track_buttons(ui) {
-        session.add_track(kind);
-    }
-}
-
-/// One "Add ..." button per track kind. Returns the kind clicked.
-fn add_track_buttons(ui: &mut egui::Ui) -> Option<TrackKind> {
-    let mut clicked_kind = None;
-    for kind in TrackKind::ALL {
-        if ui.button(format!("Add {}", kind.label())).clicked() {
-            clicked_kind = Some(kind);
-        }
-    }
-    clicked_kind
 }
 
 fn track_color(kind: TrackKind) -> Color32 {

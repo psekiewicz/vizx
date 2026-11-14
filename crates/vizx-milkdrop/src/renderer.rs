@@ -123,6 +123,27 @@ impl MilkdropRenderer {
         }
     }
 
+    /// Sets the time of the next frame, in seconds since the first frame.
+    ///
+    /// Without this, projectM animates by the computer's clock, so a frame
+    /// would look different depending on how long rendering happens to
+    /// take. With it, a frame depends only on its position in time, which
+    /// is what rendering ahead of time (and export) needs.
+    ///
+    /// Fails if the loaded projectM library does not offer this function
+    /// (it comes from the patch described in `docs/milkdrop.md`).
+    pub fn set_frame_time(&mut self, seconds: f64) -> Result<(), MilkdropError> {
+        let Some(set_frame_time) = self.api.set_frame_time else {
+            return Err(MilkdropError::new(
+                "this projectM library cannot set the frame time; \
+                 it must be built with the patch from the VizX repository (see docs/milkdrop.md)",
+            ));
+        };
+        // SAFETY: the instance is valid; the function only stores the value.
+        unsafe { set_frame_time(self.instance, seconds.max(0.0)) };
+        Ok(())
+    }
+
     /// Gives projectM the audio to react to: stereo samples in interleaved
     /// order (left, right, left, right, ...).
     ///

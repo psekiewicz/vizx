@@ -27,6 +27,23 @@ pub fn show(ui: &mut egui::Ui, app: &VizxApp) {
         // the right edge, so the first one below ends up rightmost.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(muted(&format!("v{}", vizx_core::APP_VERSION)));
+            if let Some(progress) = app.prerender_progress() {
+                ui.separator();
+                let megabytes = progress.stored_bytes as f64 / (1024.0 * 1024.0);
+                let text = if progress.finished_frames < progress.total_frames {
+                    format!(
+                        "MilkDrop pre-render {}%",
+                        u64::from(progress.finished_frames) * 100
+                            / u64::from(progress.total_frames.max(1))
+                    )
+                } else {
+                    format!("MilkDrop ready ({megabytes:.0} MB)")
+                };
+                ui.label(muted(&text)).on_hover_text(format!(
+                    "{} of {} frames pre-rendered, using {megabytes:.0} MB of temporary disk space",
+                    progress.finished_frames, progress.total_frames
+                ));
+            }
             ui.separator();
             ui.label(muted(&app.graphics_summary))
                 .on_hover_text("Graphics backend and adapter selected by wgpu");
