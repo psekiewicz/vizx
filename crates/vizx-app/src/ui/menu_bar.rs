@@ -33,13 +33,6 @@ fn file_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
         AppCommand::SaveProjectAs,
     );
     ui.separator();
-    // Everything that can be added to the project is in one submenu.
-    ui.menu_button("Add", |ui| {
-        if let Some(command) = crate::ui::add_menu_items(ui) {
-            app.request(command);
-        }
-    });
-    ui.separator();
     command_item(
         ui,
         app,

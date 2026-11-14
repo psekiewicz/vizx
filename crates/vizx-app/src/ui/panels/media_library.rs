@@ -1,7 +1,6 @@
 use eframe::egui;
 use vizx_core::EditorSession;
 
-use crate::app::AppCommand;
 use crate::theme;
 use crate::ui::format_duration;
 
@@ -10,14 +9,7 @@ const EMPTY_CATEGORIES: [&str; 3] = ["Images", "Animations", "Effects"];
 
 /// Lists the files the project uses. The list is read from the project, so
 /// it always matches what is on the timeline and what gets saved.
-pub fn show(
-    ui: &mut egui::Ui,
-    session: &EditorSession,
-    requested_command: &mut Option<AppCommand>,
-) {
-    crate::ui::add_submenu(ui, requested_command);
-    ui.add_space(4.0);
-
+pub fn show(ui: &mut egui::Ui, session: &EditorSession) {
     let media = session.project().media();
 
     egui::CollapsingHeader::new("Audio Sources")

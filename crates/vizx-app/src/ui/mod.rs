@@ -19,10 +19,10 @@ pub mod workspace;
 /// The entries of the "Add" menu. Returns the command of the entry that
 /// was clicked.
 ///
-/// Everything that can be added to a project is listed here and only here,
-/// so every "Add" menu in the application (menu bar, toolbar, media
-/// library, context menus) offers the same things in the same order. A new
-/// kind of content becomes available everywhere by adding one line.
+/// Everything that can be added to a project is listed here and only here.
+/// The menu is offered in one place: the context menu of the timeline
+/// (right-click on a track, a lane or the empty area). The entries with a
+/// shortcut can also be reached from the keyboard.
 pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
     let mut chosen = None;
     let mut item = |ui: &mut eframe::egui::Ui, label: &str, shortcut: &str, command| {
@@ -52,14 +52,25 @@ pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
     chosen
 }
 
-/// An "Add" entry that opens the [`add_menu_items`] as a submenu, for use
-/// inside other menus. A chosen command is written to `requested_command`.
+/// An "Add" entry that opens the [`add_menu_items`] as a submenu of the
+/// timeline's context menus. A chosen command is written to `requested_command`.
 pub fn add_submenu(ui: &mut eframe::egui::Ui, requested_command: &mut Option<AppCommand>) {
     ui.menu_button("Add", |ui| {
         if let Some(command) = add_menu_items(ui) {
             *requested_command = Some(command);
         }
     });
+}
+
+/// The [`add_menu_items`] listed directly under an "Add" heading, for a
+/// context menu that offers nothing else. This saves the extra step of
+/// opening a submenu that would be the menu's only entry.
+pub fn add_menu_section(ui: &mut eframe::egui::Ui, requested_command: &mut Option<AppCommand>) {
+    ui.label(eframe::egui::RichText::new("Add").strong());
+    ui.separator();
+    if let Some(command) = add_menu_items(ui) {
+        *requested_command = Some(command);
+    }
 }
 
 /// Formats a length of time as `m:ss`, e.g. `3:35`.

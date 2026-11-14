@@ -187,8 +187,10 @@ indexes the collection for the preset browser window.
 
 Everything that can be added to a project (audio file, MilkDrop preset,
 visual layer, audio track) is listed in one function, `ui::add_menu_items`.
-The menu bar, toolbar, Media Library and the context menus all show that
-same list under "Add", so a new kind of content appears everywhere by
+It is shown in exactly one place, the context menu of the timeline
+(right-click a track, a lane or the empty area), plus keyboard shortcuts
+(Ctrl+I, Ctrl+M). The toolbar holds only the transport, and New, Open and
+Save are only in the File menu. A new kind of content becomes available by
 adding one line, and no panel grows its own row of "add this" buttons.
 
 ### Playback and the project clock

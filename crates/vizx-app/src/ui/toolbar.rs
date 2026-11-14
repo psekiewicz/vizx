@@ -3,42 +3,11 @@ use eframe::egui;
 use crate::app::{AppCommand, VizxApp};
 use crate::theme;
 
+/// The toolbar holds the transport controls and the time display. Project
+/// commands (New, Open, Save) are only in the File menu, and adding content
+/// is only in the timeline's context menu.
 pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
     ui.horizontal(|ui| {
-        command_button(
-            ui,
-            app,
-            "New",
-            "New project (Ctrl+N)",
-            AppCommand::NewProject,
-        );
-        command_button(
-            ui,
-            app,
-            "Open",
-            "Open project (Ctrl+O)",
-            AppCommand::OpenProject,
-        );
-        command_button(
-            ui,
-            app,
-            "Save",
-            "Save project (Ctrl+S)",
-            AppCommand::SaveProject,
-        );
-
-        ui.separator();
-
-        ui.menu_button("Add", |ui| {
-            if let Some(command) = crate::ui::add_menu_items(ui) {
-                app.request(command);
-            }
-        })
-        .response
-        .on_hover_text("Add audio, a visualizer, a layer...");
-
-        ui.separator();
-
         // Transport controls. The play button turns into a pause button
         // while playing.
         let (play_symbol, play_tooltip) = if app.is_playing() {

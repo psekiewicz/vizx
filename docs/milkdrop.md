@@ -81,10 +81,10 @@ last bit: projectM seeds some noise textures randomly.
 ## Bundled presets
 
 VizX ships with projectM's "Cream of the Crop" collection: 9795 presets,
-curated by ISOSCELES and sorted into folders by style. **Add > MilkDrop
-Preset...** (Ctrl+M) opens a browser for it, with a search field and a
-category list. **Add > MilkDrop Preset File...** adds a `.milk` file of your
-own instead.
+curated by ISOSCELES and sorted into folders by style. Right-click the
+timeline and choose **Add > MilkDrop Preset...** (or press Ctrl+M) to open a
+browser for it, with a search field and a category list. **Add > MilkDrop
+Preset File...** in the same menu adds a `.milk` file of your own instead.
 
 - **In the repository** the collection is a git submodule in
   `assets/presets/cream-of-the-crop`. It is a link to projectM's repository

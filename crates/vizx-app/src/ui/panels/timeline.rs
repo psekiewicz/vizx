@@ -16,7 +16,7 @@ use vizx_project::{Track, TrackId, TrackKind};
 
 use crate::app::AppCommand;
 use crate::theme;
-use crate::ui::add_submenu;
+use crate::ui::{add_menu_section, add_submenu};
 
 const RULER_HEIGHT: f32 = 22.0;
 const VISUAL_TRACK_HEIGHT: f32 = 28.0;
@@ -268,7 +268,7 @@ fn show_lanes(
     if background.clicked() {
         session.select(Selection::Nothing);
     }
-    background.context_menu(|ui| add_submenu(ui, requested_command));
+    background.context_menu(|ui| add_menu_section(ui, requested_command));
 
     let mut scroll_area = egui::ScrollArea::both()
         .id_salt("timeline_lanes")
@@ -378,7 +378,7 @@ fn show_lanes(
                 .map(|track| track.id);
             session.select(clicked_track.map_or(Selection::Nothing, Selection::Track));
         }
-        response.context_menu(|ui| add_submenu(ui, requested_command));
+        response.context_menu(|ui| add_menu_section(ui, requested_command));
     });
 
     output.state.offset
@@ -526,7 +526,7 @@ fn show_track_headers(
         if response.clicked() {
             session.select(Selection::Nothing);
         }
-        response.context_menu(|ui| add_submenu(ui, requested_command));
+        response.context_menu(|ui| add_menu_section(ui, requested_command));
     }
 
     if let Some(id) = clicked_track {

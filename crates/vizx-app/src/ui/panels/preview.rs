@@ -90,8 +90,6 @@ pub fn show(
     // Claim the whole panel and offer a context menu on right-click.
     let response = ui.allocate_rect(panel_rect, egui::Sense::click());
     response.context_menu(|ui| {
-        crate::ui::add_submenu(ui, requested_command);
-        ui.separator();
         if ui.button("Project Settings...").clicked() {
             *requested_command = Some(AppCommand::OpenProjectSettings);
         }
