@@ -7,9 +7,11 @@ use vizx_project::{PROJECT_FILE_EXTENSION, TrackKind, with_project_extension};
 use crate::milkdrop_preview::MilkdropPreview;
 use crate::theme;
 use crate::transport::Transport;
+use crate::ui::preset_browser::PresetBrowser;
 use crate::ui::workspace::Workspace;
 use crate::ui::{
-    about_window, menu_bar, project_settings_window, status_bar, toolbar, unsaved_changes_dialog,
+    about_window, menu_bar, preset_browser, project_settings_window, status_bar, toolbar,
+    unsaved_changes_dialog,
 };
 
 /// An action the user asked for through a menu, button or shortcut.
@@ -26,6 +28,9 @@ pub enum AppCommand {
     SaveProject,
     SaveProjectAs,
     ImportAudio,
+    /// Open the browser for the presets that ship with VizX.
+    BrowseMilkdropPresets,
+    /// Pick a preset file of the user's own.
     AddMilkdropPreset,
     AddVisualLayer,
     AddAudioTrack,
@@ -58,6 +63,7 @@ pub struct VizxApp {
     audio_store: AudioStore,
     transport: Transport,
     milkdrop_preview: MilkdropPreview,
+    pub preset_browser: PresetBrowser,
     pub is_about_window_open: bool,
     pub is_project_settings_open: bool,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
@@ -80,13 +86,16 @@ pub struct VizxApp {
 impl VizxApp {
     pub fn new(creation_context: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&creation_context.egui_ctx);
+        // Looked up once: both the preset browser and the preview need it.
+        let bundled_presets = vizx_core::find_bundled_presets();
 
         Self {
             session: EditorSession::new_untitled(),
             workspace: Workspace::new(),
             audio_store: AudioStore::default(),
             transport: Transport::default(),
-            milkdrop_preview: MilkdropPreview::default(),
+            milkdrop_preview: MilkdropPreview::new(bundled_presets.clone()),
+            preset_browser: PresetBrowser::new(bundled_presets),
             is_about_window_open: false,
             is_project_settings_open: false,
             graphics_summary: describe_graphics_adapter(creation_context),
@@ -181,6 +190,7 @@ impl VizxApp {
                 self.save_project_as(frame);
             }
             AppCommand::ImportAudio => self.import_audio(frame),
+            AppCommand::BrowseMilkdropPresets => self.preset_browser.open(ctx),
             AppCommand::AddMilkdropPreset => self.add_milkdrop_preset(frame),
             AppCommand::AddVisualLayer => {
                 self.session.add_track(TrackKind::Visual);
@@ -336,7 +346,7 @@ impl VizxApp {
             ),
             (
                 KeyboardShortcut::new(Modifiers::COMMAND, Key::M),
-                AppCommand::AddMilkdropPreset,
+                AppCommand::BrowseMilkdropPresets,
             ),
         ];
 
@@ -474,6 +484,7 @@ impl eframe::App for VizxApp {
 
         about_window::show(&ctx, self);
         project_settings_window::show(&ctx, self);
+        preset_browser::show(&ctx, self);
         if let Some(decision) = unsaved_changes_dialog::show(&ctx, self) {
             self.resolve_unsaved_changes(decision, &ctx, frame);
         }

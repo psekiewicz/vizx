@@ -78,14 +78,48 @@ space. Simple presets are faster and smaller.
 Two renders of the same clip are visually the same but not identical to the
 last bit: projectM seeds some noise textures randomly.
 
-## Licensing
+## Bundled presets
 
+VizX ships with projectM's "Cream of the Crop" collection: 9795 presets,
+curated by ISOSCELES and sorted into folders by style. **Add > MilkDrop
+Preset...** (Ctrl+M) opens a browser for it, with a search field and a
+category list. **Add > MilkDrop Preset File...** adds a `.milk` file of your
+own instead.
+
+- **In the repository** the collection is a git submodule in
+  `assets/presets/cream-of-the-crop`. It is a link to projectM's repository
+  at one fixed commit, not a copy, so VizX's history stays small and the
+  collection can be updated with one command. After cloning VizX, download
+  it with `git submodule update --init`.
+- **Where VizX looks:** in a `presets` folder next to the executable (an
+  installed VizX), then in `assets/presets` of the source tree (development).
+  Every folder inside is one preset pack; a pack's top-level folders are the
+  categories. Without the folder VizX still runs; the browser then says the
+  presets are missing.
+- **In a project** a bundled preset is stored as
+  `bundled-presets:/cream-of-the-crop/<category>/.../<name>.milk`. The
+  location on the current computer is only worked out when the preset is
+  rendered, so a project made on Windows opens on Linux and the other way
+  round. A reference that tries to leave the presets folder (`..`) is
+  refused.
+- **Indexing** all files takes a moment on a hard disk, so it happens on a
+  background thread the first time the browser is opened. The list draws
+  only its visible rows.
+
+## Licensing
 projectM is licensed under the **LGPL**. VizX loads it as a separate library
 at run time and does not link it statically, so it stays a replaceable file.
 When distributing VizX, `projectM-4.dll` and `glew32.dll` must be shipped as
 separate files next to the executable, together with projectM's license.
 
-Preset files have their own authors and are not part of VizX.
+The presets were written by many authors and almost none of them carries a
+license. The collection's `LICENSE.md` explains that they were released
+freely and have been redistributed for two decades, so projectM treats them
+as public domain, and offers to remove a preset if its author asks. That is
+an assumption, not a formal grant. VizX follows it: the presets are shipped
+unmodified together with that `LICENSE.md`, and because they are a
+submodule, a preset removed upstream disappears from VizX with the next
+update.
 
 ## Setting up projectM on Windows
 
@@ -147,11 +181,9 @@ cargo run -p vizx-milkdrop --example render_frames -- "path\to\preset.milk" "out
 It prints the projectM and OpenGL versions, renders 300 frames as fast as it
 can and writes three of them as BMP images.
 
-Presets: projectM maintains two collections, the original MilkDrop presets
-(<https://github.com/projectM-visualizer/presets-milkdrop-original>, about
-550) and "Cream of the Crop"
-(<https://github.com/projectM-visualizer/presets-cream-of-the-crop>, about
-9800, sorted by style).
+Presets: "Cream of the Crop" ships with VizX (see "Bundled presets"). The
+original MilkDrop presets are a separate collection of about 550
+(<https://github.com/projectM-visualizer/presets-milkdrop-original>).
 
 ## Known limitations
 

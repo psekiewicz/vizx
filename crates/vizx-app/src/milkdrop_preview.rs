@@ -6,9 +6,10 @@
 //! right picture and playback is cheap.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use eframe::egui;
-use vizx_core::{AudioStore, EditorSession, MilkdropPrerender, PrerenderJob};
+use vizx_core::{AudioStore, EditorSession, MilkdropPrerender, PrerenderJob, resolve_preset_path};
 use vizx_project::ClipId;
 
 use crate::transport::project_audio_sources;
@@ -48,8 +49,10 @@ enum Shown {
     Failed(String),
 }
 
-#[derive(Default)]
 pub struct MilkdropPreview {
+    /// Folder of the presets that ship with VizX, if this installation has
+    /// one. Projects refer to those presets by their place in this folder.
+    bundled_presets: Option<PathBuf>,
     /// Pre-rendered frames of every MilkDrop clip in the project.
     prerenders: HashMap<ClipId, MilkdropPrerender>,
     /// The frame currently uploaded to the graphics card.
@@ -61,6 +64,16 @@ pub struct MilkdropPreview {
 }
 
 impl MilkdropPreview {
+    pub fn new(bundled_presets: Option<PathBuf>) -> Self {
+        Self {
+            bundled_presets,
+            prerenders: HashMap::new(),
+            texture: None,
+            texture_content: None,
+            shown: Shown::default(),
+        }
+    }
+
     /// Call once per frame, before the UI is drawn.
     pub fn update(
         &mut self,
@@ -78,11 +91,18 @@ impl MilkdropPreview {
         let mut wanted: Vec<(ClipId, PrerenderJob)> = Vec::new();
         if is_audio_ready {
             for (clip, preset) in project.milkdrop_clips() {
+                // A bundled preset this installation does not have cannot
+                // be rendered; the preview says so further down.
+                let Some(preset_file) =
+                    resolve_preset_path(&preset.path, self.bundled_presets.as_deref())
+                else {
+                    continue;
+                };
                 let clip_seconds = clip.duration_milliseconds as f64 / 1000.0;
                 wanted.push((
                     clip.id,
                     PrerenderJob {
-                        preset_path: preset.path.clone(),
+                        preset_path: preset_file.to_string_lossy().into_owned(),
                         width: PREVIEW_WIDTH,
                         height: preview_height(settings.width, settings.height),
                         frames_per_second,
@@ -128,10 +148,17 @@ impl MilkdropPreview {
         let last_millisecond = settings.duration_milliseconds.saturating_sub(1);
         let playhead_seconds = session.playhead_seconds();
         let lookup_milliseconds = ((playhead_seconds * 1000.0) as u64).min(last_millisecond);
-        let Some((clip, _preset)) = project.milkdrop_clip_at(lookup_milliseconds) else {
+        let Some((clip, preset)) = project.milkdrop_clip_at(lookup_milliseconds) else {
             self.shown = Shown::NotActive;
             return;
         };
+        if resolve_preset_path(&preset.path, self.bundled_presets.as_deref()).is_none() {
+            self.shown = Shown::Failed(format!(
+                "{} ships with VizX, but the bundled presets were not found on this computer.",
+                preset.file_name()
+            ));
+            return;
+        }
         let Some(prerender) = self.prerenders.get(&clip.id) else {
             self.shown = if is_audio_ready {
                 // Queued behind another clip's render.

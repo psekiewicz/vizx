@@ -177,6 +177,12 @@ placed as a clip on a visual layer. Each such clip is pre-rendered in the
 background to a temporary frame file, and the preview shows the stored frame
 for the playhead.
 
+VizX ships with a preset collection (`assets/presets`, a git submodule). A
+project refers to one of those presets by its place in the collection
+(`bundled-presets:/pack/category/name.milk`), not by a path on one computer,
+so the project opens on any machine with VizX. `vizx-core::PresetLibrary`
+indexes the collection for the preset browser window.
+
 ### One "Add" menu
 
 Everything that can be added to a project (audio file, MilkDrop preset,

@@ -7,11 +7,15 @@
 
 mod audio_store;
 mod milkdrop_prerender;
+mod preset_library;
 mod selection;
 mod session;
 
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
 pub use milkdrop_prerender::{MilkdropPrerender, PrerenderJob, PrerenderedFrame};
+pub use preset_library::{
+    BUNDLED_PRESET_PREFIX, PresetEntry, PresetLibrary, find_bundled_presets, resolve_preset_path,
+};
 pub use selection::Selection;
 pub use session::{EditorSession, UNTITLED_PROJECT_NAME};
 

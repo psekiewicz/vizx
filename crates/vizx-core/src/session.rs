@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use vizx_audio::AudioFileError;
 use vizx_project::{AudioProperties, Project, ProjectFileError, Track, TrackId, TrackKind};
 
-use crate::Selection;
+use crate::{PresetEntry, PresetLibrary, Selection};
 
 /// Name shown for a project that has not been saved to a file yet.
 pub const UNTITLED_PROJECT_NAME: &str = "Untitled";
@@ -134,6 +134,20 @@ impl EditorSession {
         Ok(track_id)
     }
 
+    /// Adds a preset that ships with VizX and places it on a visual layer,
+    /// which becomes selected.
+    ///
+    /// The project stores where the preset is inside the bundled collection
+    /// instead of a path on this computer, so the project also opens on
+    /// other machines (see [`BUNDLED_PRESET_PREFIX`](crate::BUNDLED_PRESET_PREFIX)).
+    pub fn add_bundled_milkdrop_preset(&mut self, entry: &PresetEntry) -> TrackId {
+        let reference = PresetLibrary::project_reference(entry);
+        let (_media_id, track_id) = self.project.add_milkdrop_preset(reference);
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        track_id
+    }
+
     /// Removes a track, clearing the selection if it was selected.
     pub fn remove_track(&mut self, id: TrackId) {
         if self.project.remove_track(id) {
@@ -212,6 +226,29 @@ mod tests {
             project.metadata.author = name.to_owned();
             true
         });
+    }
+
+    #[test]
+    fn bundled_preset_is_stored_by_its_place_in_the_collection() {
+        let root =
+            std::env::temp_dir().join(format!("vizx-session-bundled-{}", std::process::id()));
+        let preset_file = root.join("pack/Fractal/Swirl.milk");
+        std::fs::create_dir_all(preset_file.parent().unwrap()).unwrap();
+        std::fs::write(&preset_file, "[preset00]").unwrap();
+        let library = PresetLibrary::scan(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        let mut session = EditorSession::new_untitled();
+        session.add_bundled_milkdrop_preset(&library.entries()[0]);
+
+        assert!(session.has_unsaved_changes());
+        let (_clip, preset) = session.project().milkdrop_clips().next().unwrap();
+        // No folder of this computer ends up in the project file.
+        assert_eq!(preset.path, "bundled-presets:/pack/Fractal/Swirl.milk");
+        assert_eq!(
+            crate::resolve_preset_path(&preset.path, Some(&root)),
+            Some(root.join("pack/Fractal/Swirl.milk"))
+        );
     }
 
     #[test]

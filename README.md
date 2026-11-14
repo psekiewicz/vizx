@@ -10,8 +10,8 @@ single project and share one timeline.
 > **Status: early prototype.**
 > The application window, dockable panel layout, project files (`.vzx`), an
 > adaptive timeline with tracks, audio import, waveform display, audio
-> playback and a pre-rendered MilkDrop visualizer preview exist. There is no export
-> yet.
+> playback and a pre-rendered MilkDrop visualizer preview with a bundled preset
+> collection exist. There is no export yet.
 
 ## Technology
 
@@ -38,7 +38,7 @@ vizx/
 │   ├── vizx-milkdrop/     MilkDrop presets through projectM (no GUI)
 │   ├── vizx-core/         Shared application logic (no GUI)
 │   └── vizx-app/          Desktop application: window and interface
-├── assets/                Icons, fonts and shaders (empty for now)
+├── assets/                Bundled MilkDrop presets (git submodule); icons, fonts, shaders
 └── docs/
     └── architecture.md    Architecture and design decisions
 ```
@@ -58,6 +58,10 @@ No dedicated GPU is required.
 
 Optional: the [projectM](docs/milkdrop.md) library, for MilkDrop presets.
 VizX builds and runs without it.
+
+The bundled MilkDrop presets are a git submodule. Clone with
+`git clone --recurse-submodules`, or run `git submodule update --init` in an
+existing clone.
 
 ## Build, run, test
 

@@ -9,6 +9,7 @@ use crate::app::AppCommand;
 pub mod about_window;
 pub mod menu_bar;
 pub mod panels;
+pub mod preset_browser;
 pub mod project_settings_window;
 pub mod status_bar;
 pub mod toolbar;
@@ -36,6 +37,12 @@ pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
         ui,
         "MilkDrop Preset...",
         "Ctrl+M",
+        AppCommand::BrowseMilkdropPresets,
+    );
+    item(
+        ui,
+        "MilkDrop Preset File...",
+        "",
         AppCommand::AddMilkdropPreset,
     );
     ui.separator();
