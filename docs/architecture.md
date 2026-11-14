@@ -129,7 +129,8 @@ sources and clips. Version **6** added MilkDrop presets as a kind of media. Vers
 the audio a clip reacts to (`audio_input`); older files load with the mix.
 Version **8** added a clip's `placement`; older files load filling the frame.
 Version **9** added visualizer plugins as a kind of media and a clip's
-parameter values for them.
+parameter values for them. Version **10** added images as a kind of media
+and a clip's `opacity` and `reaction`.
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -202,8 +203,29 @@ project refers to one of those presets by its place in the collection
 so the project opens on any machine with VizX. `vizx-core::PresetLibrary`
 indexes the collection for the preset browser window.
 
-### Visualizer plugins
+### Images, opacity and reacting to sound
 
+This is the first part of the animation and behavior engine.
+
+- **Images** (PNG, JPEG) are a kind of media (`MediaContent::Image`) placed
+  as clips on visual layers, like visualizers. `vizx_core::ImageStore`
+  decodes them in the background (scaled down to at most 1920 pixels for the
+  preview). They are not pre-rendered; the preview draws the decoded picture
+  into the clip's placement.
+- **Transparency.** Every picture in VizX (image, plugin frame, MilkDrop
+  frame) is RGBA with premultiplied alpha, and the preview lays the layers
+  over each other from the bottom up. Plugins return an opacity per pixel;
+  MilkDrop frames are as opaque as they are bright.
+- **Clip opacity** (`Clip::opacity`) fades a whole clip.
+- **Reaction** (`Clip::reaction`, an `AudioReaction`) makes a clip larger
+  and/or more visible the louder a chosen part of the sound is (volume,
+  bass, mid or treble of the clip's audio input). The level is measured from
+  the audio leading up to the playhead and nothing else, so a moment of the
+  song always looks the same, whether played or jumped to. Position, size
+  and opacity are stored on the clip; rotation and keyframes are not
+  implemented yet.
+
+### Visualizer plugins
 Visualizers other than MilkDrop presets are **plugins**: a folder with a
 `visualizer.json` (name and adjustable parameters) and a `shader.wgsl` (a
 function that returns the color of a pixel). The visualizers that ship with
@@ -237,11 +259,11 @@ VizX are plugins too, in `assets/visualizers`. See
 
 ### One "Add" menu
 
-Everything that can be added to a project (audio file, MilkDrop preset,
+Everything that can be added to a project (audio file, image, MilkDrop preset,
 visualizer plugin, visual layer, audio track) is listed in one function, `ui::add_menu_items`.
 It is shown in exactly one place, the context menu of the timeline
 (right-click a track, a lane or the empty area), plus keyboard shortcuts
-(Ctrl+I, Ctrl+M, Ctrl+Shift+M). The toolbar holds only the transport, and New, Open and
+(Ctrl+I, Ctrl+Shift+I, Ctrl+M, Ctrl+Shift+M). The toolbar holds only the transport, and New, Open and
 Save are only in the File menu. A new kind of content becomes available by
 adding one line, and no panel grows its own row of "add this" buttons.
 

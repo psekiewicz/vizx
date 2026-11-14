@@ -19,5 +19,11 @@ fn visualize(uv: vec2f) -> vec4f {
     }
 
     let level = clamp(spectrum_history(uv.x, age * p_span()) * p_gain(), 0.0, 1.0);
-    return vec4f(heat(level), 1.0);
+
+    // Quiet parts fade out, unless the user wants a solid picture.
+    var opacity = 1.0;
+    if p_see_through() > 0.5 {
+        opacity = smoothstep(0.0, 0.3, level);
+    }
+    return vec4f(heat(level), opacity);
 }

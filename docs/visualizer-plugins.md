@@ -38,8 +38,10 @@ files, and VizX reloads it whenever you save one of them.
        let distance = length(point);
 
        let radius = p_size() * (0.5 + vizx.bass);
+       // 1 inside the disc, 0 outside: the disc is opaque and everything
+       // around it is transparent.
        let inside = 1.0 - smoothstep(radius - 0.01, radius, distance);
-       return vec4f(p_color() * inside, 1.0);
+       return vec4f(p_color(), inside);
    }
    ```
 
@@ -52,9 +54,11 @@ files, and VizX reloads it whenever you save one of them.
 
 ## How a visualizer works
 
-VizX calls `visualize(uv)` once for every pixel of every frame and uses the
-returned color (red, green, blue from 0 to 1; the fourth value is ignored
-for now, the picture is opaque).
+VizX calls `visualize(uv)` once for every pixel of every frame. The result
+is a color (red, green, blue from 0 to 1) and, as the fourth value, its
+**opacity**: 1 covers whatever is on the layers below, 0 is fully
+transparent and lets it show through. Leave the background transparent, so
+the visualizer can lie on top of an image or another visualizer.
 
 `uv` says which pixel is being asked about: `(0, 0)` is the top left corner
 and `(1, 1)` the bottom right, whatever the size of the picture. A
@@ -94,7 +98,8 @@ mix or a single audio track.
 | `vizx.frame` | Number of the frame, starting at 0. |
 | `vizx.resolution` | Size of the picture in pixels (`vec2f`). |
 | `aspect_ratio()` | Width divided by height. |
-| `previous_frame(uv)` | The color this visualizer drew at `uv` one frame ago; black in the first frame. Use it for trails and echoes (see Oscilloscope and Core). |
+| `previous_frame(uv)` | The color and opacity this visualizer returned at `uv` one frame ago; transparent in the first frame. Use it for trails and echoes (see Oscilloscope and Core). |
+| `from_light(rgb)` | Turns "light on a black background" into a color with opacity: black becomes transparent, bright becomes opaque. Handy for glows: add up light as if on black, then `return from_light(color);`. |
 | `PI`, `TAU` | 3.14159..., 6.28318... |
 
 A clip that covers only part of the frame is rendered at that size and
@@ -146,9 +151,9 @@ on every computer. To add a plugin to VizX itself, put its folder there.
 
 ## Current limits
 
-- **Opaque pictures.** A visualizer cannot yet be transparent or blended
-  with the layers below it; where two overlap, the upper one hides the
-  lower one.
+- **One way of blending.** A visualizer is laid over the layers below
+  according to its opacity. Other blend modes (add, multiply, ...) do not
+  exist yet.
 - **No textures or images** of your own in a plugin yet.
 - **Preview size.** The preview renders a full-frame clip 640 pixels wide.
   Use `vizx.resolution` for anything measured in pixels, so the visualizer

@@ -1,6 +1,6 @@
 use eframe::egui;
 use vizx_core::{EditorSession, ParameterKind, VisualizerCatalog};
-use vizx_project::{AudioInput, Clip, Placement, Track};
+use vizx_project::{AudioInput, AudioReaction, Clip, Placement, ReactionBand, Track};
 
 use crate::theme;
 use crate::ui::format_duration;
@@ -10,11 +10,16 @@ use crate::ui::format_duration;
 /// This panel is only about the current selection. Settings of the project
 /// as a whole live in the Project Settings window instead.
 pub fn show(ui: &mut egui::Ui, session: &mut EditorSession, catalog: &mut VisualizerCatalog) {
-    // The track is cloned so the session is free to be modified below.
-    match session.selected_track().cloned() {
-        Some(track) => track_properties(ui, session, catalog, &track),
-        None => nothing_selected(ui),
-    }
+    // A clip with many settings can be taller than the panel.
+    egui::ScrollArea::vertical()
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            // The track is cloned so the session is free to be modified below.
+            match session.selected_track().cloned() {
+                Some(track) => track_properties(ui, session, catalog, &track),
+                None => nothing_selected(ui),
+            }
+        });
 }
 
 fn track_properties(
@@ -55,16 +60,19 @@ fn track_properties(
                     audio.sample_rate,
                     audio.channel_count
                 ),
-                None => format!(
-                    "{}  |  Length {}",
-                    if source.is_milkdrop_preset() {
-                        "MilkDrop preset"
-                    } else {
-                        "Visualizer plugin"
-                    },
-                    format_duration(clip.duration_milliseconds)
-                ),
+                None => {
+                    let kind = match source.image() {
+                        Some(image) => format!("Image {} x {}", image.width, image.height),
+                        None if source.is_milkdrop_preset() => "MilkDrop preset".to_owned(),
+                        None => "Visualizer plugin".to_owned(),
+                    };
+                    format!(
+                        "{kind}  |  Length {}",
+                        format_duration(clip.duration_milliseconds)
+                    )
+                }
             };
+            let is_visualizer = source.is_visualizer();
             let plugin_path = source.is_visualizer_plugin().then(|| source.path.clone());
             let is_visual = source.is_visual();
             ui.label(source.file_name()).on_hover_text(&source.path);
@@ -73,9 +81,12 @@ fn track_properties(
                     .small()
                     .color(theme::TEXT_MUTED),
             );
-            if is_visual {
+            if is_visualizer {
                 audio_input_selector(ui, session, clip);
+            }
+            if is_visual {
                 placement_editor(ui, session, clip);
+                opacity_and_reaction_editor(ui, session, clip, is_visualizer);
             }
             if let Some(plugin_path) = plugin_path {
                 plugin_parameters(ui, session, catalog, clip, &plugin_path);
@@ -171,6 +182,73 @@ fn placement_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
     .any(|(new, old)| (new - old).abs() > 1e-9);
     if has_changed {
         session.edit_project(|project| project.set_clip_placement(clip.id, edited));
+    }
+}
+
+/// The opacity of a visual clip and how it moves with the music.
+///
+/// A visualizer already has a "Reacts to" list above; for anything else
+/// (an image) the list is shown here, next to the reaction it belongs to.
+fn opacity_and_reaction_editor(
+    ui: &mut egui::Ui,
+    session: &mut EditorSession,
+    clip: &Clip,
+    has_audio_input_above: bool,
+) {
+    let mut opacity_percent = clip.opacity * 100.0;
+    ui.horizontal(|ui| {
+        ui.label("Opacity");
+        ui.add(egui::Slider::new(&mut opacity_percent, 0.0..=100.0).suffix(" %"));
+    });
+    if (opacity_percent / 100.0 - clip.opacity).abs() > 1e-6 {
+        session.edit_project(|project| project.set_clip_opacity(clip.id, opacity_percent / 100.0));
+    }
+
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("Reaction to Sound").strong())
+        .on_hover_text("Makes this element grow or appear with the music");
+    ui.separator();
+    if !has_audio_input_above {
+        audio_input_selector(ui, session, clip);
+    }
+
+    let mut band = clip.reaction.band;
+    let mut pulse_percent = clip.reaction.scale * 100.0;
+    let mut fade_percent = clip.reaction.fade * 100.0;
+    egui::Grid::new(("reaction", clip.id))
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.label("Follows");
+            egui::ComboBox::from_id_salt(("reaction_band", clip.id))
+                .selected_text(band.label())
+                .show_ui(ui, |ui| {
+                    for choice in ReactionBand::ALL {
+                        ui.selectable_value(&mut band, choice, choice.label());
+                    }
+                });
+            ui.end_row();
+
+            ui.label("Pulse")
+                .on_hover_text("How much larger the element gets when the sound is loud");
+            ui.add(egui::Slider::new(&mut pulse_percent, 0.0..=100.0).suffix(" %"));
+            ui.end_row();
+
+            ui.label("Fade")
+                .on_hover_text("How much of the element disappears when the sound is quiet");
+            ui.add(egui::Slider::new(&mut fade_percent, 0.0..=100.0).suffix(" %"));
+            ui.end_row();
+        });
+
+    let edited = AudioReaction {
+        band,
+        scale: pulse_percent / 100.0,
+        fade: fade_percent / 100.0,
+    };
+    let has_changed = edited.band != clip.reaction.band
+        || (edited.scale - clip.reaction.scale).abs() > 1e-6
+        || (edited.fade - clip.reaction.fade).abs() > 1e-6;
+    if has_changed {
+        session.edit_project(|project| project.set_clip_reaction(clip.id, edited));
     }
 }
 

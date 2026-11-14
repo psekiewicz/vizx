@@ -41,7 +41,26 @@ pub enum FrameSource {
     },
 }
 
+/// Where the opacity of a stored frame comes from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Opacity {
+    /// The renderer delivers it with every pixel; it is stored.
+    Stored,
+    /// The renderer only knows colors. A pixel is as opaque as it is
+    /// bright, so black is transparent and the picture lies on the layers
+    /// below like light. Nothing extra is stored.
+    FromBrightness,
+}
+
 impl FrameSource {
+    /// MilkDrop draws on black and has no notion of transparency; plugins
+    /// return an opacity for every pixel.
+    fn opacity(&self) -> Opacity {
+        match self {
+            Self::Milkdrop { .. } => Opacity::FromBrightness,
+            Self::Plugin { .. } => Opacity::Stored,
+        }
+    }
     /// A text that is equal exactly when two sources draw the same frames.
     fn description(&self) -> String {
         match self {
@@ -101,7 +120,9 @@ impl PrerenderJob {
 pub struct PrerenderedFrame {
     pub width: u32,
     pub height: u32,
-    /// RGBA bytes, top row first, fully opaque.
+    /// RGBA bytes, top row first. The fourth byte is the opacity and the
+    /// color bytes are already multiplied by it ("premultiplied alpha"),
+    /// which is the form used for drawing one picture over another.
     pub pixels: Vec<u8>,
 }
 
@@ -109,7 +130,11 @@ pub struct PrerenderedFrame {
 #[derive(Clone, Copy)]
 struct FrameLocation {
     offset: u64,
+    /// Size of the JPEG with the colors.
     length: u32,
+    /// Size of the JPEG with the opacity, which follows the colors. 0 if
+    /// the frame has none (it is fully opaque, or opacity is not stored).
+    opacity_length: u32,
 }
 
 #[derive(Default)]
@@ -134,6 +159,8 @@ struct State {
 /// The frames of a whole song are far too large for memory (a detailed
 /// preset needs over a gigabyte even when compressed), so each frame is
 /// compressed as a JPEG image and appended to one temporary file on disk.
+/// JPEG has no transparency, so a frame's opacity is stored as a second,
+/// grey JPEG right after its colors.
 /// Only the position of every frame in that file is kept in memory. The
 /// file is deleted when the pre-render is dropped.
 ///
@@ -149,6 +176,7 @@ pub struct Prerender {
     width: u32,
     height: u32,
     frame_count: u32,
+    opacity: Opacity,
     state: Arc<Mutex<State>>,
     /// Set to make the threads stop early.
     is_cancelled: Arc<AtomicBool>,
@@ -167,6 +195,7 @@ impl Prerender {
             width: job.width,
             height: job.height,
             frame_count: job.frame_count,
+            opacity: job.source.opacity(),
             state: Arc::new(Mutex::new(State::default())),
             is_cancelled: Arc::new(AtomicBool::new(false)),
             frame_file_path: new_frame_file_path(),
@@ -184,10 +213,17 @@ impl Prerender {
             let on_progress = Arc::clone(&on_progress);
             let path = prerender.frame_file_path.clone();
             let (width, height) = (job.width, job.height);
+            let stores_opacity = prerender.opacity == Opacity::Stored;
             thread::spawn(move || {
-                if let Err(message) =
-                    store_frames(&pixel_receiver, &path, width, height, &state, &*on_progress)
-                {
+                let size = (width, height);
+                if let Err(message) = store_frames(
+                    &pixel_receiver,
+                    &path,
+                    size,
+                    stores_opacity,
+                    &state,
+                    &*on_progress,
+                ) {
                     set_error(&state, message);
                 }
                 on_progress();
@@ -245,7 +281,8 @@ impl Prerender {
     pub fn frame(&self, index: u32) -> Option<PrerenderedFrame> {
         let location = *self.state.lock().ok()?.frames.get(index as usize)?;
 
-        let mut jpeg = vec![0; location.length as usize];
+        // The colors, directly followed by the opacity (if stored).
+        let mut stored = vec![0; (location.length + location.opacity_length) as usize];
         {
             let mut reader = self.frame_reader.lock().ok()?;
             if reader.is_none() {
@@ -253,14 +290,27 @@ impl Prerender {
             }
             let file = reader.as_mut()?;
             file.seek(SeekFrom::Start(location.offset)).ok()?;
-            file.read_exact(&mut jpeg).ok()?;
+            file.read_exact(&mut stored).ok()?;
         }
+        let (color_jpeg, opacity_jpeg) = stored.split_at(location.length as usize);
 
-        let image = image::load_from_memory_with_format(&jpeg, ImageFormat::Jpeg).ok()?;
+        let mut pixels = image::load_from_memory_with_format(color_jpeg, ImageFormat::Jpeg)
+            .ok()?
+            .into_rgba8()
+            .into_raw();
+        if !opacity_jpeg.is_empty() {
+            let opacity = image::load_from_memory_with_format(opacity_jpeg, ImageFormat::Jpeg)
+                .ok()?
+                .into_luma8()
+                .into_raw();
+            apply_stored_opacity(&mut pixels, &opacity);
+        } else if self.opacity == Opacity::FromBrightness {
+            apply_opacity_from_brightness(&mut pixels);
+        }
         Some(PrerenderedFrame {
             width: self.width,
             height: self.height,
-            pixels: image.into_rgba8().into_raw(),
+            pixels,
         })
     }
 }
@@ -449,8 +499,8 @@ fn draw_milkdrop_frames(
 fn store_frames(
     pixel_receiver: &Receiver<Vec<u8>>,
     path: &Path,
-    width: u32,
-    height: u32,
+    (width, height): (u32, u32),
+    stores_opacity: bool,
     state: &Mutex<State>,
     on_progress: &dyn Fn(),
 ) -> Result<(), String> {
@@ -462,7 +512,24 @@ fn store_frames(
     // `recv` fails once the drawing thread is done and has dropped its end
     // of the channel, which ends the loop.
     while let Ok(pixels) = pixel_receiver.recv() {
-        let jpeg = encode_jpeg(&pixels, width, height)?;
+        let mut jpeg = encode_jpeg(&pixels, width, height, ColorType::Rgba)?;
+        let color_length = jpeg.len();
+        // A fully opaque frame needs no opacity picture.
+        if stores_opacity
+            && pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] != 255)
+        {
+            let opacity: Vec<u8> = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|pixel| pixel[3])
+                .collect();
+            jpeg.extend(encode_jpeg(&opacity, width, height, ColorType::Luma)?);
+        }
         file.write_all(&jpeg)
             .map_err(|error| format!("could not write {}: {error}", path.display()))?;
 
@@ -471,7 +538,8 @@ fn store_frames(
             .map_err(|_| "the frame store is no longer usable".to_owned())?;
         state.frames.push(FrameLocation {
             offset,
-            length: jpeg.len() as u32,
+            length: color_length as u32,
+            opacity_length: (jpeg.len() - color_length) as u32,
         });
         offset += jpeg.len() as u64;
         state.stored_bytes = offset;
@@ -489,16 +557,44 @@ fn seconds_to_audio_frames(seconds: f64) -> u64 {
     (seconds.max(0.0) * f64::from(ANALYSIS_SAMPLE_RATE)) as u64
 }
 
-/// Compresses RGBA pixels as a JPEG image. JPEG has no transparency, so the
-/// fourth byte of each pixel is ignored.
-fn encode_jpeg(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+/// Puts a separately stored opacity into the fourth byte of each pixel.
+///
+/// JPEG changes values slightly. A color brighter than its opacity would
+/// add light where the picture should be transparent, so each color byte is
+/// limited to the opacity.
+fn apply_stored_opacity(rgba: &mut [u8], opacity: &[u8]) {
+    for (pixel, opacity) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(opacity) {
+        for part in &mut pixel[..3] {
+            *part = (*part).min(*opacity);
+        }
+        pixel[3] = *opacity;
+    }
+}
+
+/// Makes each pixel as opaque as its brightest color part: black becomes
+/// transparent, and the picture adds its light to what lies below.
+fn apply_opacity_from_brightness(rgba: &mut [u8]) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        pixel[3] = pixel[0].max(pixel[1]).max(pixel[2]);
+    }
+}
+
+/// Compresses pixels as a JPEG image: `ColorType::Rgba` for colors (JPEG
+/// has no transparency, so the fourth byte of each pixel is ignored) or
+/// `ColorType::Luma` for one byte per pixel.
+fn encode_jpeg(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    color_type: ColorType,
+) -> Result<Vec<u8>, String> {
     let (Ok(width), Ok(height)) = (u16::try_from(width), u16::try_from(height)) else {
         return Err("the picture is too large to store as a JPEG".to_owned());
     };
 
     let mut jpeg = Vec::new();
     Encoder::new(&mut jpeg, JPEG_QUALITY)
-        .encode(rgba, width, height, ColorType::Rgba)
+        .encode(pixels, width, height, color_type)
         .map_err(|error| format!("could not store a frame: {error}"))?;
     Ok(jpeg)
 }
@@ -641,7 +737,7 @@ mod tests {
             }
         }
 
-        let jpeg = encode_jpeg(&rgba, 4, 2).unwrap();
+        let jpeg = encode_jpeg(&rgba, 4, 2, ColorType::Rgba).unwrap();
         let decoded = image::load_from_memory_with_format(&jpeg, ImageFormat::Jpeg)
             .unwrap()
             .into_rgba8();
@@ -656,6 +752,52 @@ mod tests {
             "right pixel was {right:?}"
         );
         assert_eq!(left[3], 255);
+    }
+
+    #[test]
+    fn opacity_comes_from_storage_or_from_brightness() {
+        // Two pixels: one stored brighter than its opacity allows.
+        let mut stored = vec![200, 100, 0, 255, 90, 90, 90, 255];
+        apply_stored_opacity(&mut stored, &[255, 40]);
+        assert_eq!(stored, [200, 100, 0, 255, 40, 40, 40, 40]);
+
+        // Black is transparent, a bright pixel is opaque, colors stay.
+        let mut lit = vec![0, 0, 0, 255, 10, 250, 30, 255];
+        apply_opacity_from_brightness(&mut lit);
+        assert_eq!(lit, [0, 0, 0, 0, 10, 250, 30, 250]);
+    }
+
+    #[test]
+    fn a_frame_with_transparency_is_stored_with_its_opacity() {
+        // 16x16: left half transparent, right half opaque white.
+        let mut frame = Vec::new();
+        for _row in 0..16 {
+            for column in 0..16 {
+                frame.extend_from_slice(if column < 8 { &[0; 4] } else { &[255; 4] });
+            }
+        }
+        let path = std::env::temp_dir().join(format!(
+            "vizx-prerender-opacity-test-{}.frames",
+            std::process::id()
+        ));
+        let state = Mutex::new(State::default());
+        let (sender, receiver) = mpsc::sync_channel(2);
+        sender.send(frame).unwrap();
+        sender.send(vec![255; 16 * 16 * 4]).unwrap(); // a fully opaque frame
+        drop(sender);
+
+        store_frames(&receiver, &path, (16, 16), true, &state, &|| {}).unwrap();
+        let _ = fs::remove_file(&path);
+
+        let frames = state.lock().unwrap().frames.clone();
+        assert_eq!(frames.len(), 2);
+        assert!(frames[0].opacity_length > 0);
+        // Nothing extra is stored for a frame without transparency.
+        assert_eq!(frames[1].opacity_length, 0);
+        assert_eq!(
+            frames[1].offset,
+            u64::from(frames[0].length + frames[0].opacity_length)
+        );
     }
 
     #[test]

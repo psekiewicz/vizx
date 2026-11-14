@@ -36,8 +36,23 @@ impl MediaSource {
     pub fn audio(&self) -> Option<&AudioProperties> {
         match &self.content {
             MediaContent::Audio(audio) => Some(audio),
-            MediaContent::MilkdropPreset | MediaContent::VisualizerPlugin => None,
+            MediaContent::MilkdropPreset
+            | MediaContent::VisualizerPlugin
+            | MediaContent::Image(_) => None,
         }
+    }
+
+    /// The image properties, if this is an image file.
+    pub fn image(&self) -> Option<&ImageProperties> {
+        match &self.content {
+            MediaContent::Image(image) => Some(image),
+            _ => None,
+        }
+    }
+
+    /// Whether this source is a visualizer: a MilkDrop preset or a plugin.
+    pub fn is_visualizer(&self) -> bool {
+        self.is_milkdrop_preset() || self.is_visualizer_plugin()
     }
 
     pub fn is_milkdrop_preset(&self) -> bool {
@@ -50,7 +65,7 @@ impl MediaSource {
 
     /// Whether this source produces a picture (as opposed to sound).
     pub fn is_visual(&self) -> bool {
-        self.is_milkdrop_preset() || self.is_visualizer_plugin()
+        self.is_visualizer() || self.image().is_some()
     }
 }
 
@@ -66,6 +81,17 @@ pub enum MediaContent {
     /// `shader.wgsl`. `path` is that folder. Like a preset it has no length
     /// of its own.
     VisualizerPlugin,
+    /// A still image (PNG or JPEG). It is shown for as long as its clip
+    /// lasts.
+    Image(ImageProperties),
+}
+
+/// Properties of an image file, read once when it is imported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageProperties {
+    /// Size in pixels.
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Properties of an audio file, read once when it is imported.

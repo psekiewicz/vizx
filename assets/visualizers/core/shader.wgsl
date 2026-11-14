@@ -40,9 +40,12 @@ fn visualize(uv: vec2f) -> vec4f {
     var color = p_color_core() * core * core_shade;
     color += p_color_rays() * (rays + halo * (1.0 - core));
 
-    // Echo: last frame's picture, slightly enlarged and darker, which makes
-    // the rays fly outwards.
-    let echo = previous_frame((uv - 0.5) * 0.985 + 0.5).rgb * p_echo();
+    // Echo: last frame's picture, slightly enlarged and fainter, which
+    // makes the rays fly outwards.
+    let previous = previous_frame((uv - 0.5) * 0.985 + 0.5);
+    let echo = previous.rgb * previous.a * p_echo();
 
-    return vec4f(max(color, echo), 1.0);
+    // Everything above was drawn as light on black; from_light makes the
+    // black transparent.
+    return from_light(max(color, echo));
 }

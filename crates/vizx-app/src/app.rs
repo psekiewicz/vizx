@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use vizx_core::{AudioStore, EditorSession, VisualizerCatalog};
+use vizx_core::{AudioStore, EditorSession, ImageStore, VisualizerCatalog};
 use vizx_project::{PROJECT_FILE_EXTENSION, TrackKind, with_project_extension};
 
 use crate::theme;
@@ -29,6 +29,7 @@ pub enum AppCommand {
     SaveProject,
     SaveProjectAs,
     ImportAudio,
+    ImportImage,
     /// Open the browser for the presets that ship with VizX.
     BrowseMilkdropPresets,
     /// Pick a preset file of the user's own.
@@ -66,6 +67,8 @@ pub struct VizxApp {
     pub workspace: Workspace,
     /// Decoded audio of the project's files, loaded in the background.
     audio_store: AudioStore,
+    /// Decoded images of the project's files, loaded in the background.
+    image_store: ImageStore,
     transport: Transport,
     visual_preview: VisualPreview,
     pub preset_browser: PresetBrowser,
@@ -101,6 +104,7 @@ impl VizxApp {
             session: EditorSession::new_untitled(),
             workspace: Workspace::new(),
             audio_store: AudioStore::default(),
+            image_store: ImageStore::default(),
             transport: Transport::default(),
             visual_preview: VisualPreview::new(bundled_presets.clone()),
             preset_browser: PresetBrowser::new(bundled_presets),
@@ -200,6 +204,7 @@ impl VizxApp {
                 self.save_project_as(frame);
             }
             AppCommand::ImportAudio => self.import_audio(frame),
+            AppCommand::ImportImage => self.import_images(frame),
             AppCommand::BrowseMilkdropPresets => self.preset_browser.open(ctx),
             AppCommand::AddMilkdropPreset => self.add_milkdrop_preset(frame),
             AppCommand::BrowseVisualizers => self.visualizer_browser.is_open = true,
@@ -259,6 +264,34 @@ impl VizxApp {
         self.status_message = match self.session.add_milkdrop_preset(&path) {
             Ok(_) => format!("Added preset {}", path.display()),
             Err(reason) => format!("Could not add {}: {reason}", path.display()),
+        };
+    }
+
+    /// Lets the user pick one or more image files and imports each of them
+    /// onto a visual layer of its own.
+    fn import_images(&mut self, frame: &eframe::Frame) {
+        let Some(paths) = rfd::FileDialog::new()
+            .add_filter("Image", &vizx_core::SUPPORTED_IMAGE_EXTENSIONS)
+            .set_parent(frame)
+            .pick_files()
+        else {
+            return; // dialog cancelled
+        };
+
+        let mut imported_count = 0;
+        let mut last_error = None;
+        for path in &paths {
+            match self.session.import_image(path) {
+                Ok(_) => imported_count += 1,
+                Err(problem) => {
+                    last_error = Some(format!("Could not import {}: {problem}", path.display()));
+                }
+            }
+        }
+        self.status_message = match (last_error, imported_count) {
+            (Some(error), _) => error,
+            (None, 1) => format!("Imported {}", paths[0].display()),
+            (None, count) => format!("Imported {count} images"),
         };
     }
 
@@ -361,6 +394,10 @@ impl VizxApp {
         // Ctrl+Shift+M and Ctrl+M.
         let shortcuts = [
             (
+                KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::I),
+                AppCommand::ImportImage,
+            ),
+            (
                 KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::M),
                 AppCommand::BrowseVisualizers,
             ),
@@ -439,6 +476,26 @@ impl VizxApp {
         }
     }
 
+    /// The same for images: collects finished ones and starts loading the
+    /// ones the project needs.
+    fn load_project_images(&mut self, ctx: &egui::Context) {
+        self.image_store.collect_finished();
+
+        let image_sources = self
+            .session
+            .project()
+            .media()
+            .iter()
+            .filter(|source| source.image().is_some());
+        for source in image_sources {
+            if self.image_store.state(&source.path).is_none() {
+                let ctx = ctx.clone();
+                self.image_store
+                    .request(&source.path, move || ctx.request_repaint());
+            }
+        }
+    }
+
     /// Intercepts the window's close button while there are unsaved changes
     /// and routes it through the same confirmation as File > Exit.
     fn handle_window_close_request(&mut self, ctx: &egui::Context) {
@@ -501,11 +558,13 @@ impl eframe::App for VizxApp {
         self.transport.begin_frame(&mut self.session, &ctx);
         self.handle_keyboard_shortcuts(&ctx);
         self.load_project_audio(&ctx);
+        self.load_project_images(&ctx);
         self.visual_preview.update(
             &ctx,
             &self.session,
             &self.audio_store,
             &mut self.visualizer_catalog,
+            &self.image_store,
         );
 
         // Fixed bars are added first; each one takes space from an edge of

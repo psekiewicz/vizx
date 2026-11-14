@@ -109,6 +109,99 @@ pub struct Clip {
     /// project stores them without interpreting them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, Vec<f64>>,
+    /// How opaque a visual clip is as a whole: 1 hides what is below it
+    /// (where the clip itself is not transparent), 0 makes it invisible.
+    #[serde(default = "full_opacity")]
+    pub opacity: f64,
+    /// How a visual clip moves with the music.
+    #[serde(default)]
+    pub reaction: AudioReaction,
+}
+
+fn full_opacity() -> f64 {
+    1.0
+}
+
+/// A simple, direct reaction of a visual element to the sound: it grows
+/// and/or becomes more visible the louder its chosen part of the sound is.
+/// This is what lets a still image "breathe" with the music without any
+/// frame-by-frame animation. The sound itself is chosen with the clip's
+/// [`AudioInput`].
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct AudioReaction {
+    /// Which part of the sound is followed.
+    pub band: ReactionBand,
+    /// How much larger the element is at full loudness, as a fraction of
+    /// its size (0.2 means 20 % larger). 0 turns pulsing off.
+    pub scale: f64,
+    /// How much of its opacity the element loses in silence (1 means it is
+    /// invisible when silent and fully visible at full loudness). 0 turns
+    /// fading off.
+    pub fade: f64,
+}
+
+impl AudioReaction {
+    /// Largest allowed `scale`.
+    pub const MAX_SCALE: f64 = 2.0;
+
+    /// Whether the element reacts at all.
+    pub fn is_active(self) -> bool {
+        self.scale != 0.0 || self.fade != 0.0
+    }
+
+    /// The nearest valid reaction; values that are not numbers become 0.
+    pub fn sanitized(self) -> Self {
+        let within = |value: f64, max: f64| {
+            if value.is_finite() {
+                value.clamp(0.0, max)
+            } else {
+                0.0
+            }
+        };
+        Self {
+            band: self.band,
+            scale: within(self.scale, Self::MAX_SCALE),
+            fade: within(self.fade, 1.0),
+        }
+    }
+
+    /// Size factor and opacity factor for a loudness `level` from 0 to 1.
+    pub fn at_level(self, level: f64) -> (f64, f64) {
+        let level = if level.is_finite() {
+            level.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (1.0 + self.scale * level, 1.0 - self.fade * (1.0 - level))
+    }
+}
+
+/// The part of the sound an [`AudioReaction`] follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ReactionBand {
+    /// Overall loudness.
+    #[default]
+    Volume,
+    /// Low frequencies: kick drum, bass.
+    Bass,
+    /// Middle frequencies: voice, most instruments.
+    Mid,
+    /// High frequencies: cymbals, hi-hats.
+    Treble,
+}
+
+impl ReactionBand {
+    pub const ALL: [Self; 4] = [Self::Volume, Self::Bass, Self::Mid, Self::Treble];
+
+    /// Name shown to the user.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Volume => "Volume",
+            Self::Bass => "Bass",
+            Self::Mid => "Mid",
+            Self::Treble => "Treble",
+        }
+    }
 }
 
 /// The rectangle of the composition a visual clip is drawn into.

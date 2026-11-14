@@ -44,8 +44,9 @@ rfd = "0.18"
 # Compresses pre-rendered frames as JPEG images. Several times faster than
 # the encoder in `image`, which matters when storing thousands of frames.
 jpeg-encoder = { version = "0.7", features = ["simd"] }
-# Decompresses those frames again for display.
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# Decompresses those frames again for display, and reads the image files
+# (PNG, JPEG) a project uses.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # Loads a dynamic library (DLL / .so) at run time; used for projectM.
 libloading = "0.8"
 # Raw Windows API, used only to create the off-screen OpenGL context for

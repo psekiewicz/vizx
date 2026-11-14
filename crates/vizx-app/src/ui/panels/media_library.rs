@@ -5,7 +5,7 @@ use crate::theme;
 use crate::ui::format_duration;
 
 /// Categories that have no content yet in this prototype.
-const EMPTY_CATEGORIES: [&str; 3] = ["Images", "Animations", "Effects"];
+const EMPTY_CATEGORIES: [&str; 2] = ["Animations", "Effects"];
 
 /// Lists the files the project uses. The list is read from the project, so
 /// it always matches what is on the timeline and what gets saved.
@@ -43,7 +43,7 @@ pub fn show(ui: &mut egui::Ui, session: &EditorSession) {
         .default_open(true)
         .show(ui, |ui| {
             let mut is_empty = true;
-            for source in media.iter().filter(|source| source.is_visual()) {
+            for source in media.iter().filter(|source| source.is_visualizer()) {
                 is_empty = false;
                 ui.label(source.file_name()).on_hover_text(&source.path);
                 ui.label(
@@ -54,6 +54,28 @@ pub fn show(ui: &mut egui::Ui, session: &EditorSession) {
                     })
                     .small()
                     .color(theme::TEXT_MUTED),
+                );
+                ui.add_space(2.0);
+            }
+            if is_empty {
+                empty_hint(ui);
+            }
+        });
+
+    egui::CollapsingHeader::new("Images")
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut is_empty = true;
+            for source in media {
+                let Some(image) = source.image() else {
+                    continue;
+                };
+                is_empty = false;
+                ui.label(source.file_name()).on_hover_text(&source.path);
+                ui.label(
+                    egui::RichText::new(format!("{} x {}", image.width, image.height))
+                        .small()
+                        .color(theme::TEXT_MUTED),
                 );
                 ui.add_space(2.0);
             }

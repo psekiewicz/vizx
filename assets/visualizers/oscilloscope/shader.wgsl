@@ -19,10 +19,14 @@ fn visualize(uv: vec2f) -> vec4f {
     let half_thickness = p_thickness() * 0.5;
     let line = 1.0 - smoothstep(half_thickness, half_thickness + 1.5, distance);
     let glow = p_glow() * 0.6 * exp(-distance / (p_thickness() * 5.0 + 1.0));
-    let fresh = p_color() * (line + glow);
+    let fresh = clamp(line + glow, 0.0, 1.0);
 
-    // The trail is last frame's picture, a little darker each time.
-    let trail = previous_frame(uv).rgb * p_trail();
-
-    return vec4f(max(fresh, trail), 1.0);
+    // The trail is last frame's picture, a little more transparent each
+    // time. Whichever is stronger here, the new line or the trail, wins.
+    let previous = previous_frame(uv);
+    let trail = previous.a * p_trail();
+    if fresh >= trail {
+        return vec4f(p_color(), fresh);
+    }
+    return vec4f(previous.rgb, trail);
 }

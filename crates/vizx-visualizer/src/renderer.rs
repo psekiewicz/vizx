@@ -242,7 +242,8 @@ impl ShaderRenderer {
     }
 
     /// Draws the next frame and writes it into `pixels` as RGBA bytes, top
-    /// row first, fully opaque.
+    /// row first. The fourth byte is the opacity, and the color bytes are
+    /// already multiplied by it ("premultiplied alpha").
     pub fn render(&mut self, input: &FrameInput<'_>, pixels: &mut Vec<u8>) -> Result<(), String> {
         let target = (self.frame_number % 2) as usize;
 
@@ -261,7 +262,7 @@ impl ShaderRenderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(Color::BLACK),
+                        load: LoadOp::Clear(Color::TRANSPARENT),
                         store: StoreOp::Store,
                     },
                 })],
@@ -379,8 +380,8 @@ impl ShaderRenderer {
         Ok(())
     }
 
-    /// Makes both pictures black, so the first frame's "previous frame" is
-    /// defined.
+    /// Makes both pictures fully transparent, so the first frame's
+    /// "previous frame" is defined.
     fn clear_targets(&self) {
         let mut encoder = self
             .device
@@ -393,7 +394,7 @@ impl ShaderRenderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(Color::BLACK),
+                        load: LoadOp::Clear(Color::TRANSPARENT),
                         store: StoreOp::Store,
                     },
                 })],
@@ -644,10 +645,10 @@ mod tests {
     }
 
     #[test]
-    fn uv_starts_at_the_top_left_and_the_picture_is_opaque() {
+    fn uv_starts_at_the_top_left() {
         // Red grows to the right, green grows downwards.
         let Some(renderer) = renderer(
-            "fn visualize(uv: vec2f) -> vec4f { return vec4f(uv.x, uv.y, 0.0, 0.0); }",
+            "fn visualize(uv: vec2f) -> vec4f { return vec4f(uv.x, uv.y, 0.0, 1.0); }",
             // An odd width, so rows need padding when read back.
             (70, 40),
         ) else {
@@ -716,6 +717,63 @@ mod tests {
         assert!(echoed[0] > 245, "previous frame: {echoed:?}");
     }
 
+    #[test]
+    fn opacity_is_kept_and_the_color_is_multiplied_by_it() {
+        // Left half: transparent. Right half: white at half opacity. The
+        // previous frame is read back unchanged, so a second frame that
+        // only repeats it gives the same picture.
+        let Some(renderer) = renderer(
+            "fn visualize(uv: vec2f) -> vec4f {
+                if vizx.frame > 0.5 { return previous_frame(uv); }
+                if uv.x < 0.5 { return vec4f(1.0, 1.0, 1.0, 0.0); }
+                return vec4f(1.0, 1.0, 1.0, 0.5);
+            }",
+            (32, 8),
+        ) else {
+            return;
+        };
+        let mut renderer = renderer.unwrap();
+        let mut pixels = Vec::new();
+
+        for _frame in 0..2 {
+            renderer.render(&input(&[], &[]), &mut pixels).unwrap();
+
+            assert_eq!(pixel(&pixels, 32, 4, 4), [0, 0, 0, 0]);
+            let half = pixel(&pixels, 32, 28, 4);
+            assert!(
+                half.iter().all(|part| (126..=130).contains(part)),
+                "{half:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn light_on_black_becomes_transparent_black() {
+        let Some(renderer) = renderer(
+            "fn visualize(uv: vec2f) -> vec4f {
+                if uv.x < 0.5 { return from_light(vec3f(0.0)); }
+                return from_light(vec3f(0.5, 0.25, 0.0));
+            }",
+            (32, 8),
+        ) else {
+            return;
+        };
+        let mut pixels = Vec::new();
+        renderer
+            .unwrap()
+            .render(&input(&[], &[]), &mut pixels)
+            .unwrap();
+
+        assert_eq!(pixel(&pixels, 32, 4, 4), [0, 0, 0, 0]);
+        // The light itself is unchanged; its brightest part is the opacity.
+        let lit = pixel(&pixels, 32, 28, 4);
+        assert!(
+            (126..=130).contains(&lit[0]) && (62..=66).contains(&lit[1]),
+            "{lit:?}"
+        );
+        assert!(lit[2] == 0 && (126..=130).contains(&lit[3]), "{lit:?}");
+    }
+
     /// Every plugin that ships with VizX must load, compile and draw.
     #[test]
     fn bundled_plugins_compile_and_draw_something() {
@@ -746,6 +804,9 @@ mod tests {
                 .chunks(4)
                 .any(|pixel| pixel[..3].iter().any(|part| *part > 40));
             assert!(is_lit, "{name} drew only black");
+            // No bundled plugin paints a solid background.
+            let has_transparency = pixels.chunks(4).any(|pixel| pixel[3] < 40);
+            assert!(has_transparency, "{name} has no transparent pixels");
             checked += 1;
         }
         assert!(

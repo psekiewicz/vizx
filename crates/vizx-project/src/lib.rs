@@ -17,11 +17,13 @@ mod settings;
 mod track;
 
 pub use file::{ProjectFileError, with_project_extension};
-pub use media::{AudioProperties, MediaContent, MediaId, MediaSource};
+pub use media::{AudioProperties, ImageProperties, MediaContent, MediaId, MediaSource};
 pub use metadata::ProjectMetadata;
 pub use project::Project;
 pub use settings::{FrameRate, ProjectSettings};
-pub use track::{AudioInput, Clip, ClipId, Placement, Track, TrackId, TrackKind};
+pub use track::{
+    AudioInput, AudioReaction, Clip, ClipId, Placement, ReactionBand, Track, TrackId, TrackKind,
+};
 
 /// File extension of native VizX project files, without the leading dot.
 pub const PROJECT_FILE_EXTENSION: &str = "vzx";
@@ -48,4 +50,6 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 ///   Older files load with every clip filling the frame.
 /// - 9: visualizer plugins as a kind of media, and a clip's values for the
 ///   plugin's parameters (`parameters`).
-pub const CURRENT_FORMAT_VERSION: u32 = 9;
+/// - 10: images as a kind of media, and a clip's `opacity` and audio
+///   `reaction`. Older files load fully opaque and without a reaction.
+pub const CURRENT_FORMAT_VERSION: u32 = 10;

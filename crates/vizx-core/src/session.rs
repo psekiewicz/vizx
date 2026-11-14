@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use vizx_audio::AudioFileError;
-use vizx_project::{AudioProperties, Project, ProjectFileError, Track, TrackId, TrackKind};
+use vizx_project::{
+    AudioProperties, ImageProperties, Project, ProjectFileError, Track, TrackId, TrackKind,
+};
 
 use crate::{PresetEntry, PresetLibrary, Selection};
 
@@ -146,6 +148,24 @@ impl EditorSession {
         self.has_unsaved_changes = true;
         self.selection = Selection::Track(track_id);
         track_id
+    }
+
+    /// Imports an image: reads its size, adds it to the project's media and
+    /// places it on a visual layer, which becomes selected.
+    ///
+    /// The project is left untouched if the file cannot be read.
+    pub fn import_image(&mut self, path: &Path) -> Result<TrackId, String> {
+        if !crate::has_supported_image_extension(path) {
+            return Err("not a PNG or JPEG image".to_owned());
+        }
+        let (width, height) = crate::image_store::image_file_size(path)?;
+
+        let (_media_id, track_id) = self
+            .project
+            .add_image(path.to_string_lossy(), ImageProperties { width, height });
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        Ok(track_id)
     }
 
     /// Adds a visualizer plugin and places it on a visual layer, which

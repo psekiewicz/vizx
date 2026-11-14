@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AudioInput, AudioProperties, CURRENT_FORMAT_VERSION, Clip, ClipId, MediaContent, MediaId,
-    MediaSource, Placement, ProjectMetadata, ProjectSettings, Track, TrackId, TrackKind,
+    AudioInput, AudioProperties, AudioReaction, CURRENT_FORMAT_VERSION, Clip, ClipId,
+    ImageProperties, MediaContent, MediaId, MediaSource, Placement, ProjectMetadata,
+    ProjectSettings, Track, TrackId, TrackKind,
 };
 
 /// Root of all data that belongs to one VizX project.
@@ -211,6 +212,8 @@ impl Project {
             audio_input: AudioInput::Mix,
             placement: Placement::FULL,
             parameters: BTreeMap::new(),
+            opacity: 1.0,
+            reaction: AudioReaction::default(),
         };
         self.next_clip_id += 1;
         let clip_end = clip.end_milliseconds();
@@ -244,6 +247,30 @@ impl Project {
         self.add_visual(path.into(), MediaContent::VisualizerPlugin)
     }
 
+    /// Adds an image to the media library and places it on a visual layer
+    /// for the whole project. It is shown as large as fits into the frame
+    /// without changing its shape, in the middle.
+    pub fn add_image(
+        &mut self,
+        path: impl Into<String>,
+        properties: ImageProperties,
+    ) -> (MediaId, TrackId) {
+        let (media_id, track_id) = self.add_visual(path.into(), MediaContent::Image(properties));
+        let placement = fitted_placement(
+            (properties.width, properties.height),
+            (self.settings.width, self.settings.height),
+        );
+        let new_clip = self
+            .tracks
+            .iter_mut()
+            .flat_map(|track| &mut track.clips)
+            .find(|clip| clip.media == media_id);
+        if let Some(clip) = new_clip {
+            clip.placement = placement;
+        }
+        (media_id, track_id)
+    }
+
     fn add_visual(&mut self, path: String, content: MediaContent) -> (MediaId, TrackId) {
         let media_id = MediaId(self.next_media_id);
         self.next_media_id += 1;
@@ -269,6 +296,8 @@ impl Project {
             audio_input: AudioInput::Mix,
             placement: Placement::FULL,
             parameters: BTreeMap::new(),
+            opacity: 1.0,
+            reaction: AudioReaction::default(),
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -338,6 +367,43 @@ impl Project {
         }
     }
 
+    /// Sets how opaque a clip is as a whole (0 to 1). Returns `true` only
+    /// if this changed something.
+    pub fn set_clip_opacity(&mut self, clip_id: ClipId, opacity: f64) -> bool {
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        match self.clip_mut(clip_id) {
+            Some(clip) if clip.opacity != opacity => {
+                clip.opacity = opacity;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Sets how a clip reacts to the sound. Returns `true` only if this
+    /// changed something.
+    pub fn set_clip_reaction(&mut self, clip_id: ClipId, reaction: AudioReaction) -> bool {
+        let reaction = reaction.sanitized();
+        match self.clip_mut(clip_id) {
+            Some(clip) if clip.reaction != reaction => {
+                clip.reaction = reaction;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn clip_mut(&mut self, clip_id: ClipId) -> Option<&mut Clip> {
+        self.tracks
+            .iter_mut()
+            .flat_map(|track| &mut track.clips)
+            .find(|clip| clip.id == clip_id)
+    }
+
     /// Sets the values of one plugin parameter on a clip. Returns `true`
     /// only if this changed something.
     pub fn set_clip_parameter(&mut self, clip_id: ClipId, id: &str, values: Vec<f64>) -> bool {
@@ -390,10 +456,31 @@ impl Project {
     }
 }
 
+/// The largest placement with the shape of `content` that fits into a
+/// frame of size `frame` (both in pixels), centered.
+fn fitted_placement(content: (u32, u32), frame: (u32, u32)) -> Placement {
+    let (content_width, content_height) = (f64::from(content.0), f64::from(content.1));
+    let (frame_width, frame_height) = (f64::from(frame.0), f64::from(frame.1));
+    if content_width <= 0.0 || content_height <= 0.0 || frame_width <= 0.0 || frame_height <= 0.0 {
+        return Placement::FULL;
+    }
+
+    let scale = (frame_width / content_width).min(frame_height / content_height);
+    let width = content_width * scale / frame_width;
+    let height = content_height * scale / frame_height;
+    Placement {
+        x: (1.0 - width) / 2.0,
+        y: (1.0 - height) / 2.0,
+        width,
+        height,
+    }
+    .sanitized()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FrameRate;
+    use crate::{FrameRate, ReactionBand};
 
     #[test]
     fn new_project_uses_current_format_and_defaults() {
@@ -692,6 +779,84 @@ mod tests {
 
         assert!(project.reset_clip_parameters(clip_id));
         assert!(!project.reset_clip_parameters(clip_id));
+    }
+
+    #[test]
+    fn an_image_is_fitted_into_the_frame_keeping_its_shape() {
+        let mut project = Project::with_starter_tracks(); // 1920 x 1080
+        project.settings.duration_milliseconds = 10_000;
+
+        // A square image: as tall as the frame, centered horizontally.
+        let (media_id, layer) = project.add_image(
+            "cover.png",
+            ImageProperties {
+                width: 1000,
+                height: 1000,
+            },
+        );
+
+        let clip = &project.track(layer).unwrap().clips[0];
+        assert_eq!(clip.duration_milliseconds, 10_000);
+        assert!((clip.placement.height - 1.0).abs() < 1e-9);
+        assert!((clip.placement.width - 0.5625).abs() < 1e-9); // 1080 / 1920
+        assert!((clip.placement.x - 0.21875).abs() < 1e-9);
+        assert_eq!(clip.placement.y, 0.0);
+
+        let source = project.media_source(media_id).unwrap();
+        assert!(source.is_visual() && !source.is_visualizer());
+        assert_eq!(source.image().unwrap().width, 1000);
+        assert_eq!(project.visual_layers_at(0).len(), 1);
+
+        // A very wide image: as wide as the frame, centered vertically.
+        let wide = fitted_placement((4000, 500), (1920, 1080));
+        assert!((wide.width - 1.0).abs() < 1e-9 && wide.x == 0.0);
+        assert!((wide.y + wide.height / 2.0 - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn opacity_and_reaction_are_kept_within_limits() {
+        let mut project = Project::with_starter_tracks();
+        let (_, layer) = project.add_milkdrop_preset("a.milk");
+        let clip_id = project.track(layer).unwrap().clips[0].id;
+        let clip = |project: &Project| project.track(layer).unwrap().clips[0].clone();
+
+        // A new clip is fully opaque and does not react.
+        assert_eq!(clip(&project).opacity, 1.0);
+        assert!(!clip(&project).reaction.is_active());
+
+        assert!(project.set_clip_opacity(clip_id, 0.4));
+        assert!(!project.set_clip_opacity(clip_id, 0.4));
+        assert!(project.set_clip_opacity(clip_id, 7.0));
+        assert_eq!(clip(&project).opacity, 1.0);
+
+        let wild = AudioReaction {
+            band: ReactionBand::Bass,
+            scale: 50.0,
+            fade: -3.0,
+        };
+        assert!(project.set_clip_reaction(clip_id, wild));
+        let stored = clip(&project).reaction;
+        assert_eq!(stored.band, ReactionBand::Bass);
+        assert_eq!(stored.scale, AudioReaction::MAX_SCALE);
+        assert_eq!(stored.fade, 0.0);
+        assert!(stored.is_active());
+    }
+
+    #[test]
+    fn a_reaction_grows_and_reveals_with_loudness() {
+        let reaction = AudioReaction {
+            band: ReactionBand::Volume,
+            scale: 0.2,
+            fade: 0.5,
+        };
+
+        // Silent: normal size, half visible. Full loudness: 20 % larger,
+        // fully visible.
+        assert_eq!(reaction.at_level(0.0), (1.0, 0.5));
+        assert_eq!(reaction.at_level(1.0), (1.2, 1.0));
+        assert_eq!(reaction.at_level(f64::NAN), (1.0, 0.5));
+        // No reaction leaves the element alone at any loudness.
+        assert_eq!(AudioReaction::default().at_level(0.7), (1.0, 1.0));
     }
 
     #[test]

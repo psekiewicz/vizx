@@ -34,6 +34,7 @@ pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
     };
 
     item(ui, "Audio File...", "Ctrl+I", AppCommand::ImportAudio);
+    item(ui, "Image File...", "Ctrl+Shift+I", AppCommand::ImportImage);
     item(
         ui,
         "MilkDrop Preset...",

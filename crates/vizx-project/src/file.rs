@@ -257,10 +257,12 @@ mod tests {
 
         let project = Project::from_vzx_str(version_6_content).unwrap();
 
-        assert_eq!(
-            project.tracks()[0].clips[0].audio_input,
-            crate::AudioInput::Mix
-        );
+        let clip = &project.tracks()[0].clips[0];
+        assert_eq!(clip.audio_input, crate::AudioInput::Mix);
+        // Fields added after version 6 get their neutral values.
+        assert_eq!(clip.placement, crate::Placement::FULL);
+        assert_eq!(clip.opacity, 1.0);
+        assert!(!clip.reaction.is_active());
         assert_eq!(project.format_version, CURRENT_FORMAT_VERSION);
     }
 

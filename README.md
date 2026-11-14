@@ -11,8 +11,8 @@ single project and share one timeline.
 > The application window, dockable panel layout, project files (`.vzx`), an
 > adaptive timeline with tracks, audio import, waveform display, audio
 > playback, pre-rendered MilkDrop presets with a bundled preset collection, and
-> visualizer plugins (WGSL shaders) that can be moved and resized in the
-> preview exist. There is no export yet.
+> visualizer plugins (WGSL shaders) and images, all with transparency, that can
+> be moved and resized in the preview and react to the sound, exist. There is no export yet.
 
 ## Technology
 

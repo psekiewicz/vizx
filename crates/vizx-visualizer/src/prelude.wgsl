@@ -45,10 +45,29 @@ fn spectrum_history(x: f32, age: f32) -> f32 {
     return textureSampleLevel(vizx_history, vizx_sampler, vec2f(x, age), 0.0).r;
 }
 
-// The color this visualizer drew at uv in the previous frame. Black for
-// the first frame. Use it for trails, echoes and other feedback effects.
+// The color and opacity this visualizer returned at uv in the previous
+// frame. Fully transparent for the first frame. Use it for trails, echoes
+// and other feedback effects.
 fn previous_frame(uv: vec2f) -> vec4f {
-    return textureSampleLevel(vizx_previous, vizx_sampler, uv, 0.0);
+    // Pictures are stored with the color already multiplied by the opacity;
+    // undo that, so this returns what visualize() returned.
+    let stored = textureSampleLevel(vizx_previous, vizx_sampler, uv, 0.0);
+    if stored.a <= 0.0 {
+        return vec4f(0.0);
+    }
+    return vec4f(stored.rgb / stored.a, stored.a);
+}
+
+// Turns "light on a black background" into a color with opacity: black
+// becomes fully transparent and bright light fully opaque. Draw glows and
+// other additive effects as if the background were black, then return
+// from_light(color) to get a visualizer that can lie on top of anything.
+fn from_light(light: vec3f) -> vec4f {
+    let opacity = clamp(max(light.r, max(light.g, light.b)), 0.0, 1.0);
+    if opacity <= 0.0 {
+        return vec4f(0.0);
+    }
+    return vec4f(light / opacity, opacity);
 }
 
 // Width of the picture divided by its height.
@@ -75,5 +94,9 @@ fn vizx_vertex(@builtin(vertex_index) index: u32) -> VizxVertexOutput {
 @fragment
 fn vizx_fragment(input: VizxVertexOutput) -> @location(0) vec4f {
     let color = visualize(input.uv);
-    return vec4f(clamp(color.rgb, vec3f(0.0), vec3f(1.0)), 1.0);
+    // The fourth value is the opacity: 0 lets the layers below show
+    // through, 1 hides them. The picture is stored "premultiplied" (color
+    // times opacity), which is what compositing needs.
+    let opacity = clamp(color.a, 0.0, 1.0);
+    return vec4f(clamp(color.rgb, vec3f(0.0), vec3f(1.0)) * opacity, opacity);
 }

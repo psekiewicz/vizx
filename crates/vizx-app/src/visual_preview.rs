@@ -1,5 +1,5 @@
-//! Shows the visualizers (MilkDrop presets and visualizer plugins) in the
-//! preview, from pre-rendered frames.
+//! Shows the visual clips in the preview: visualizers (MilkDrop presets and
+//! visualizer plugins) from pre-rendered frames, and images.
 //!
 //! Each visual clip on the timeline is rendered ahead of time in the
 //! background (see `Prerender`). The preview then only looks up the
@@ -14,11 +14,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
+use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer};
 use vizx_core::{
-    AudioStore, EditorSession, FrameSource, Prerender, PrerenderJob, VisualizerCatalog,
-    resolve_preset_path,
+    AudioStore, EditorSession, FrameSource, ImageState, ImageStore, Prerender, PrerenderJob,
+    VisualizerCatalog, resolve_preset_path,
 };
-use vizx_project::{Clip, ClipId, MediaSource, Placement, TrackId};
+use vizx_project::{Clip, ClipId, MediaSource, Placement, ReactionBand, TrackId};
 
 use crate::transport::{audio_sources_for, project_audio_sources};
 
@@ -34,13 +35,21 @@ const RENDER_EDGE_RANGE: (u32, u32) = (16, 1920);
 /// long. Dragging a size value changes them many times per second, and
 /// each change would otherwise start and throw away a render.
 const RENDER_START_DELAY: Duration = Duration::from_millis(350);
+/// Sample rate at which audio is analysed for clips that react to it.
+const REACTION_SAMPLE_RATE: u32 = 44_100;
 
-/// One visualizer in the picture at the playhead.
+/// One visual clip in the picture at the playhead.
 pub struct LayerView<'a> {
     pub clip_id: ClipId,
     /// The visual layer the clip is on.
     pub track_id: TrackId,
     pub placement: Placement,
+    /// How opaque the clip is drawn right now, 0 to 1: its own opacity
+    /// combined with its reaction to the sound.
+    pub opacity: f32,
+    /// How much larger than its placement the clip is drawn right now,
+    /// because of its reaction to the sound. 1 is its normal size.
+    pub scale: f32,
     pub content: LayerContent<'a>,
 }
 
@@ -53,6 +62,8 @@ pub enum LayerContent<'a> {
     Rendering { finished: u32, total: u32 },
     /// Rendering cannot start until the project's audio has been loaded.
     WaitingForAudio,
+    /// The image file is still being read.
+    LoadingImage,
     /// The clip cannot be rendered; the text says why.
     Failed(String),
 }
@@ -63,6 +74,7 @@ enum Shown {
     Picture,
     Rendering { finished: u32, total: u32 },
     WaitingForAudio,
+    LoadingImage,
     Failed(String),
 }
 
@@ -70,14 +82,17 @@ struct ShownLayer {
     clip_id: ClipId,
     track_id: TrackId,
     placement: Placement,
+    opacity: f32,
+    scale: f32,
     shown: Shown,
 }
 
-/// The frame of one clip that is currently uploaded to the graphics card.
+/// The picture of one clip that is currently uploaded to the graphics card.
 struct LayerTexture {
     handle: egui::TextureHandle,
     /// Which frame it shows, and for which render (its key), so the same
-    /// frame is not decoded and uploaded again every frame.
+    /// frame is not decoded and uploaded again every frame. For an image,
+    /// the key is its file and the frame is always 0.
     frame_index: u32,
     render_key: String,
 }
@@ -92,8 +107,10 @@ pub struct VisualPreview {
     /// job and since when it has been wanted unchanged.
     waiting_since: HashMap<ClipId, (String, Instant)>,
     textures: HashMap<ClipId, LayerTexture>,
-    /// The visualizers at the playhead, bottom layer first.
+    /// The visual clips at the playhead, bottom layer first.
     layers: Vec<ShownLayer>,
+    /// Measures the sound at the playhead for clips that react to it.
+    analyzer: AudioAnalyzer,
 }
 
 impl VisualPreview {
@@ -104,6 +121,7 @@ impl VisualPreview {
             waiting_since: HashMap::new(),
             textures: HashMap::new(),
             layers: Vec::new(),
+            analyzer: AudioAnalyzer::new(REACTION_SAMPLE_RATE),
         }
     }
 
@@ -114,8 +132,12 @@ impl VisualPreview {
         session: &EditorSession,
         audio_store: &AudioStore,
         catalog: &mut VisualizerCatalog,
+        image_store: &ImageStore,
     ) {
         let project = session.project();
+        // Pictures of clips that no longer exist are not needed any more.
+        self.textures
+            .retain(|clip_id, _| project.visual_clips().any(|(clip, _)| clip.id == *clip_id));
         let settings = &project.settings;
         let frames_per_second = settings.frame_rate.as_f64().round().max(1.0) as u32;
         // Rendering waits until all audio is loaded, not only the audio a
@@ -127,6 +149,10 @@ impl VisualPreview {
             // What should be rendered: one job per visual clip.
             let mut wanted: Vec<(ClipId, PrerenderJob)> = Vec::new();
             for (clip, media) in project.visual_clips() {
+                // An image is shown as it is; nothing is rendered for it.
+                if media.image().is_some() {
+                    continue;
+                }
                 // A clip that cannot be rendered at all (for example a
                 // bundled preset this installation does not have) gets no
                 // job; the preview says why further down.
@@ -171,8 +197,21 @@ impl VisualPreview {
             .into_iter()
             .rev()
         {
-            let problem = frame_source(media, clip, self.bundled_presets.as_deref(), catalog).err();
-            let shown = if let Some(problem) = problem {
+            let (scale, reaction_opacity) = if clip.reaction.is_active() {
+                let level = self.reaction_level(session, audio_store, clip, playhead_seconds);
+                clip.reaction.at_level(level)
+            } else {
+                (1.0, 1.0)
+            };
+
+            let problem = if media.image().is_some() {
+                None
+            } else {
+                frame_source(media, clip, self.bundled_presets.as_deref(), catalog).err()
+            };
+            let shown = if media.image().is_some() {
+                self.show_image(ctx, clip.id, &media.path, image_store)
+            } else if let Some(problem) = problem {
                 Shown::Failed(problem)
             } else if !is_audio_ready {
                 Shown::WaitingForAudio
@@ -185,9 +224,95 @@ impl VisualPreview {
                 clip_id: clip.id,
                 track_id: track.id,
                 placement: clip.placement,
+                opacity: (clip.opacity * reaction_opacity) as f32,
+                scale: scale as f32,
                 shown,
             });
         }
+    }
+
+    /// How loud the part of the sound is that a clip reacts to, at the
+    /// playhead, from 0 to 1.
+    ///
+    /// It is measured from the audio leading up to the playhead and from
+    /// nothing else, so the same moment of the song always gives the same
+    /// value, whether it is reached by playing or by jumping there.
+    fn reaction_level(
+        &mut self,
+        session: &EditorSession,
+        audio_store: &AudioStore,
+        clip: &Clip,
+        playhead_seconds: f64,
+    ) -> f64 {
+        let (sources, _) = audio_sources_for(session, audio_store, clip.audio_input);
+        let window_end = (playhead_seconds.max(0.0) * f64::from(REACTION_SAMPLE_RATE)) as u64;
+        let window_start = window_end.saturating_sub(ANALYSIS_WINDOW as u64);
+        let stereo = vizx_audio::mix_to_stereo(
+            &sources,
+            REACTION_SAMPLE_RATE,
+            window_start,
+            (window_end - window_start) as usize,
+        );
+        let mono: Vec<f32> = stereo
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[left, right]| (left + right) * 0.5)
+            .collect();
+
+        // "Infinitely long ago": the analyzer's memory of earlier calls has
+        // faded completely, so only this moment counts.
+        let sound = self.analyzer.analyze(&mono, f32::MAX);
+        f64::from(match clip.reaction.band {
+            ReactionBand::Volume => sound.volume,
+            ReactionBand::Bass => sound.bass,
+            ReactionBand::Mid => sound.mid,
+            ReactionBand::Treble => sound.treble,
+        })
+    }
+
+    /// Makes sure the texture of an image clip shows its file, and says
+    /// what can be drawn for the clip.
+    fn show_image(
+        &mut self,
+        ctx: &egui::Context,
+        clip_id: ClipId,
+        path: &str,
+        image_store: &ImageStore,
+    ) -> Shown {
+        let key = format!("image:{path}");
+        if self
+            .textures
+            .get(&clip_id)
+            .is_some_and(|texture| texture.render_key == key)
+        {
+            return Shown::Picture;
+        }
+        let image = match image_store.state(path) {
+            Some(ImageState::Ready(image)) => image,
+            Some(ImageState::Failed(problem)) => {
+                return Shown::Failed(format!("Could not read {path}: {problem}"));
+            }
+            Some(ImageState::Loading) | None => return Shown::LoadingImage,
+        };
+
+        let handle = ctx.load_texture(
+            format!("visual_preview_{clip_id:?}"),
+            egui::ColorImage::from_rgba_premultiplied(
+                [image.width as usize, image.height as usize],
+                &image.pixels,
+            ),
+            egui::TextureOptions::LINEAR,
+        );
+        self.textures.insert(
+            clip_id,
+            LayerTexture {
+                handle,
+                frame_index: 0,
+                render_key: key,
+            },
+        );
+        Shown::Picture
     }
 
     /// Forgets renders that no longer match the project and starts the
@@ -200,8 +325,6 @@ impl VisualPreview {
                 .iter()
                 .any(|(wanted_id, job)| wanted_id == clip_id && job.key() == prerender.key())
         });
-        self.textures
-            .retain(|clip_id, _| wanted.iter().any(|(wanted_id, _)| wanted_id == clip_id));
 
         // Note since when each missing render has been wanted unchanged.
         let now = Instant::now();
@@ -275,7 +398,7 @@ impl VisualPreview {
             };
         };
 
-        let image = egui::ColorImage::from_rgba_unmultiplied(
+        let image = egui::ColorImage::from_rgba_premultiplied(
             [frame.width as usize, frame.height as usize],
             &frame.pixels,
         );
@@ -322,12 +445,15 @@ impl VisualPreview {
                         total: *total,
                     },
                     (Shown::WaitingForAudio, _) => LayerContent::WaitingForAudio,
+                    (Shown::LoadingImage, _) => LayerContent::LoadingImage,
                     (Shown::Failed(reason), _) => LayerContent::Failed(reason.clone()),
                 };
                 LayerView {
                     clip_id: layer.clip_id,
                     track_id: layer.track_id,
                     placement: layer.placement,
+                    opacity: layer.opacity,
+                    scale: layer.scale,
                     content,
                 }
             })

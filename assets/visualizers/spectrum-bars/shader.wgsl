@@ -30,5 +30,7 @@ fn visualize(uv: vec2f) -> vec4f {
     let below_top = 1.0 - smoothstep(level - pixel_y, level + pixel_y, height);
 
     let color = mix(p_color_bottom(), p_color_top(), height);
-    return vec4f(color * inside_bar * below_top, 1.0);
+    // The fourth value is the opacity: 1 inside a bar, 0 (transparent)
+    // everywhere else, so whatever is on the layers below stays visible.
+    return vec4f(color, inside_bar * below_top);
 }

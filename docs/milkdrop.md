@@ -59,6 +59,9 @@ and keeps the frames:
 - **Two threads.** One draws frames with projectM (graphics card), the other
   compresses them as JPEG and appends them to a file (processor). A small
   buffer between them keeps memory use flat.
+- **Opacity** of a plugin's frame is stored as a second, grey JPEG next to
+  its colors (JPEG itself has no transparency). MilkDrop frames store
+  nothing extra; their opacity is worked out from the colors.
 - **Frames live on disk.** The frames of one song are far too large for
   memory, so they go into one temporary file per clip, in the system's
   temporary folder under `vizx-prerender`. Only each frame's position in the
@@ -203,10 +206,11 @@ original MilkDrop presets are a separate collection of about 550
 - **Textures.** Presets that use image textures need projectM's texture
   search paths, which VizX does not set yet; those presets render without
   their textures.
-- **No blending.** Every visualizer at the playhead is drawn into its
-  placement, lower layers first, but each picture is opaque: where two
-  overlap, the upper one hides the lower one. Opacity and blend modes do
-  not exist yet.
+- **Transparency by brightness.** MilkDrop draws on black and knows no
+  transparency, so VizX treats a preset's picture as light: a pixel is as
+  opaque as it is bright, and black is transparent. A preset therefore lies
+  over the layers below it like a projection. Presets that fill the whole
+  picture with bright color still cover what is below.
 - **Integrated graphics on hybrid laptops.** The off-screen OpenGL context
   is created on whichever GPU Windows picks by default, usually the
   integrated one.

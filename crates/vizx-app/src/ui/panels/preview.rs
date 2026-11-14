@@ -81,7 +81,12 @@ pub fn show(
     for layer in layers {
         let placement = shown_placement(layer, drag);
         let layer_rect = to_screen(placement, composition_rect);
-        draw_layer(&layer_painter, layer_rect, &layer.content);
+        // A clip that reacts to the sound is drawn larger around its own
+        // middle. Its frame and handles stay where the placement is, so
+        // they do not jump around while the music plays.
+        let drawn_rect =
+            Rect::from_center_size(layer_rect.center(), layer_rect.size() * layer.scale);
+        draw_layer(&layer_painter, drawn_rect, &layer.content, layer.opacity);
 
         let response = ui.interact(
             layer_rect.intersect(panel_rect),
@@ -391,12 +396,15 @@ fn to_screen(placement: Placement, composition_rect: Rect) -> Rect {
     )
 }
 
-fn draw_layer(painter: &egui::Painter, layer_rect: Rect, content: &LayerContent<'_>) {
+fn draw_layer(painter: &egui::Painter, layer_rect: Rect, content: &LayerContent<'_>, opacity: f32) {
     let message = match content {
         LayerContent::Picture(texture) => {
             // The whole texture (0,0 to 1,1) drawn over the whole placement.
             let whole_texture = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-            painter.image(texture.id(), layer_rect, whole_texture, Color32::WHITE);
+            // Multiplying by a white of the wanted opacity fades the
+            // picture, its own transparency included.
+            let tint = Color32::from_white_alpha((opacity.clamp(0.0, 1.0) * 255.0).round() as u8);
+            painter.image(texture.id(), layer_rect, whole_texture, tint);
             return;
         }
         LayerContent::Rendering { finished, total } if *total > 0 => format!(
@@ -405,6 +413,7 @@ fn draw_layer(painter: &egui::Painter, layer_rect: Rect, content: &LayerContent<
         ),
         LayerContent::Rendering { .. } => "Waiting to pre-render...".to_owned(),
         LayerContent::WaitingForAudio => "Loading audio before pre-rendering...".to_owned(),
+        LayerContent::LoadingImage => "Loading image...".to_owned(),
         LayerContent::Failed(reason) => reason.clone(),
     };
     // No picture yet: a dark box with the reason, so the clip's place in

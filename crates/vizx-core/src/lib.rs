@@ -6,6 +6,7 @@
 //! rendering) will be coordinated. It must never depend on a GUI library.
 
 mod audio_store;
+mod image_store;
 mod prerender;
 mod preset_library;
 mod selection;
@@ -13,6 +14,9 @@ mod session;
 mod visualizer_catalog;
 
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
+pub use image_store::{
+    DecodedImage, ImageState, ImageStore, SUPPORTED_IMAGE_EXTENSIONS, has_supported_image_extension,
+};
 pub use prerender::{FrameSource, Prerender, PrerenderJob, PrerenderedFrame};
 pub use preset_library::{
     BUNDLED_PRESET_PREFIX, PresetEntry, PresetLibrary, find_bundled_presets, resolve_preset_path,
