@@ -12,7 +12,7 @@
 use eframe::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke};
 use vizx_audio::WaveformPeaks;
 use vizx_core::{AudioState, AudioStore, EditorSession, Selection};
-use vizx_project::{Track, TrackId, TrackKind};
+use vizx_project::{LayerMove, Track, TrackId, TrackKind};
 
 use crate::app::AppCommand;
 use crate::theme;
@@ -456,6 +456,7 @@ fn show_track_headers(
     // the track list from the session.
     let mut clicked_track: Option<TrackId> = None;
     let mut track_to_remove: Option<TrackId> = None;
+    let mut layer_to_move: Option<(TrackId, LayerMove)> = None;
     let selection = session.selection();
     let rows = TrackRows::new(session.project().tracks());
 
@@ -503,6 +504,21 @@ fn show_track_headers(
         response.context_menu(|ui| {
             ui.label(egui::RichText::new(&track.name).strong());
             ui.separator();
+            // The order of the layers decides what is in front: a layer
+            // higher in the list is drawn over the ones below it.
+            if track.kind == TrackKind::Visual {
+                for (label, to) in [
+                    ("Bring to Front", LayerMove::ToFront),
+                    ("Move Up", LayerMove::Up),
+                    ("Move Down", LayerMove::Down),
+                    ("Send to Back", LayerMove::ToBack),
+                ] {
+                    if ui.button(label).clicked() {
+                        layer_to_move = Some((track.id, to));
+                    }
+                }
+                ui.separator();
+            }
             if ui.button("Delete Track").clicked() {
                 track_to_remove = Some(track.id);
             }
@@ -534,6 +550,9 @@ fn show_track_headers(
     }
     if let Some(id) = track_to_remove {
         session.remove_track(id);
+    }
+    if let Some((id, to)) = layer_to_move {
+        session.edit_project(|project| project.move_layer(id, to));
     }
 }
 

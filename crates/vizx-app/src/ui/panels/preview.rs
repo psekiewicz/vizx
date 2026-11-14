@@ -84,9 +84,19 @@ pub fn show(
         // A clip that reacts to the sound is drawn larger around its own
         // middle. Its frame and handles stay where the placement is, so
         // they do not jump around while the music plays.
+        let shift = egui::vec2(
+            layer.offset[0] * composition_rect.width(),
+            layer.offset[1] * composition_rect.height(),
+        );
         let drawn_rect =
-            Rect::from_center_size(layer_rect.center(), layer_rect.size() * layer.scale);
-        draw_layer(&layer_painter, drawn_rect, &layer.content, layer.opacity);
+            Rect::from_center_size(layer_rect.center() + shift, layer_rect.size() * layer.scale);
+        draw_layer(
+            &layer_painter,
+            drawn_rect,
+            &layer.content,
+            layer.opacity,
+            layer.rotation_degrees,
+        );
 
         let response = ui.interact(
             layer_rect.intersect(panel_rect),
@@ -396,7 +406,13 @@ fn to_screen(placement: Placement, composition_rect: Rect) -> Rect {
     )
 }
 
-fn draw_layer(painter: &egui::Painter, layer_rect: Rect, content: &LayerContent<'_>, opacity: f32) {
+fn draw_layer(
+    painter: &egui::Painter,
+    layer_rect: Rect,
+    content: &LayerContent<'_>,
+    opacity: f32,
+    rotation_degrees: f32,
+) {
     let message = match content {
         LayerContent::Picture(texture) => {
             // The whole texture (0,0 to 1,1) drawn over the whole placement.
@@ -404,7 +420,17 @@ fn draw_layer(painter: &egui::Painter, layer_rect: Rect, content: &LayerContent<
             // Multiplying by a white of the wanted opacity fades the
             // picture, its own transparency included.
             let tint = Color32::from_white_alpha((opacity.clamp(0.0, 1.0) * 255.0).round() as u8);
-            painter.image(texture.id(), layer_rect, whole_texture, tint);
+            // A "mesh" is the picture as two triangles; unlike a plain
+            // image it can be turned around its middle.
+            let mut mesh = egui::Mesh::with_texture(texture.id());
+            mesh.add_rect_with_uv(layer_rect, whole_texture, tint);
+            if rotation_degrees != 0.0 {
+                mesh.rotate(
+                    egui::emath::Rot2::from_angle(rotation_degrees.to_radians()),
+                    layer_rect.center(),
+                );
+            }
+            painter.add(egui::Shape::mesh(mesh));
             return;
         }
         LayerContent::Rendering { finished, total } if *total > 0 => format!(

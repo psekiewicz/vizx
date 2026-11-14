@@ -19,10 +19,11 @@ mod track;
 pub use file::{ProjectFileError, with_project_extension};
 pub use media::{AudioProperties, ImageProperties, MediaContent, MediaId, MediaSource};
 pub use metadata::ProjectMetadata;
-pub use project::Project;
+pub use project::{LayerMove, Project};
 pub use settings::{FrameRate, ProjectSettings};
 pub use track::{
-    AudioInput, AudioReaction, Clip, ClipId, Placement, ReactionBand, Track, TrackId, TrackKind,
+    AudioInput, AudioReaction, Clip, ClipId, Placement, ReactionBand, ReactionEffect, Track,
+    TrackId, TrackKind,
 };
 
 /// File extension of native VizX project files, without the leading dot.
@@ -52,4 +53,6 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 ///   plugin's parameters (`parameters`).
 /// - 10: images as a kind of media, and a clip's `opacity` and audio
 ///   `reaction`. Older files load fully opaque and without a reaction.
-pub const CURRENT_FORMAT_VERSION: u32 = 10;
+/// - 11: a reaction can also move and turn its element and has a
+///   sensitivity and a release time. Older reactions keep working.
+pub const CURRENT_FORMAT_VERSION: u32 = 11;

@@ -205,53 +205,106 @@ fn opacity_and_reaction_editor(
     }
 
     ui.add_space(6.0);
-    ui.label(egui::RichText::new("Reaction to Sound").strong())
-        .on_hover_text("Makes this element grow or appear with the music");
+    ui.label(egui::RichText::new("Animation to Sound").strong())
+        .on_hover_text("Makes this element grow, move, turn or appear with the music");
     ui.separator();
     if !has_audio_input_above {
         audio_input_selector(ui, session, clip);
     }
 
-    let mut band = clip.reaction.band;
-    let mut pulse_percent = clip.reaction.scale * 100.0;
-    let mut fade_percent = clip.reaction.fade * 100.0;
+    let mut edited = clip.reaction;
+    // Shown as percentages; stored as fractions.
+    let percent_slider = |ui: &mut egui::Ui, value: &mut f64, lowest: f64, highest: f64| {
+        let mut percent = *value * 100.0;
+        ui.add(egui::Slider::new(&mut percent, lowest..=highest).suffix(" %"));
+        *value = percent / 100.0;
+    };
     egui::Grid::new(("reaction", clip.id))
         .num_columns(2)
         .show(ui, |ui| {
             ui.label("Follows");
             egui::ComboBox::from_id_salt(("reaction_band", clip.id))
-                .selected_text(band.label())
+                .selected_text(edited.band.label())
                 .show_ui(ui, |ui| {
                     for choice in ReactionBand::ALL {
-                        ui.selectable_value(&mut band, choice, choice.label());
+                        ui.selectable_value(&mut edited.band, choice, choice.label());
                     }
                 });
             ui.end_row();
 
             ui.label("Pulse")
                 .on_hover_text("How much larger the element gets when the sound is loud");
-            ui.add(egui::Slider::new(&mut pulse_percent, 0.0..=100.0).suffix(" %"));
+            percent_slider(ui, &mut edited.scale, 0.0, 100.0);
             ui.end_row();
 
             ui.label("Fade")
                 .on_hover_text("How much of the element disappears when the sound is quiet");
-            ui.add(egui::Slider::new(&mut fade_percent, 0.0..=100.0).suffix(" %"));
+            percent_slider(ui, &mut edited.fade, 0.0, 100.0);
+            ui.end_row();
+
+            ui.label("Move X").on_hover_text(
+                "How far the element moves sideways when the sound is loud, in percent of the \
+                 picture's width (negative: to the left)",
+            );
+            percent_slider(ui, &mut edited.move_x, -50.0, 50.0);
+            ui.end_row();
+
+            ui.label("Move Y").on_hover_text(
+                "How far the element moves down when the sound is loud, in percent of the \
+                 picture's height (negative: up)",
+            );
+            percent_slider(ui, &mut edited.move_y, -50.0, 50.0);
+            ui.end_row();
+
+            ui.label("Rotate")
+                .on_hover_text("How far the element turns when the sound is loud");
+            ui.add(egui::Slider::new(&mut edited.rotate_degrees, -180.0..=180.0).suffix("\u{b0}"));
+            ui.end_row();
+
+            let (least_sensitive, most_sensitive) = AudioReaction::SENSITIVITY_RANGE;
+            ui.label("Sensitivity")
+                .on_hover_text("Raise this if the sound is too quiet to move the element much");
+            ui.add(
+                egui::Slider::new(&mut edited.sensitivity, least_sensitive..=most_sensitive)
+                    .logarithmic(true)
+                    .suffix("x"),
+            );
+            ui.end_row();
+
+            ui.label("Release").on_hover_text(
+                "How long the element takes to settle after a loud moment. 0 follows the sound \
+                 exactly; more makes it bounce back smoothly",
+            );
+            ui.add(
+                egui::Slider::new(&mut edited.release_seconds, 0.0..=1.0)
+                    .max_decimals(2)
+                    .suffix(" s"),
+            );
             ui.end_row();
         });
 
-    let edited = AudioReaction {
-        band,
-        scale: pulse_percent / 100.0,
-        fade: fade_percent / 100.0,
+    // Comparing with a small tolerance: converting to percent and back can
+    // change the last digits without the user having touched anything.
+    let amounts = |reaction: AudioReaction| {
+        [
+            reaction.scale,
+            reaction.fade,
+            reaction.move_x,
+            reaction.move_y,
+            reaction.rotate_degrees,
+            reaction.sensitivity,
+            reaction.release_seconds,
+        ]
     };
     let has_changed = edited.band != clip.reaction.band
-        || (edited.scale - clip.reaction.scale).abs() > 1e-6
-        || (edited.fade - clip.reaction.fade).abs() > 1e-6;
+        || amounts(edited)
+            .iter()
+            .zip(amounts(clip.reaction))
+            .any(|(new, old)| (new - old).abs() > 1e-6);
     if has_changed {
         session.edit_project(|project| project.set_clip_reaction(clip.id, edited));
     }
 }
-
 /// The adjustable values of a visualizer plugin, as its `visualizer.json`
 /// describes them: a slider for a number, a color button for a color, a
 /// checkbox for a switch.

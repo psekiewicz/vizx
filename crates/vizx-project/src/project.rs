@@ -134,6 +134,38 @@ impl Project {
         was_removed
     }
 
+    /// Moves a visual layer one step up or down among the visual layers,
+    /// or all the way to the front or the back. A layer higher up is drawn
+    /// over the ones below it. Returns `true` only if the layer moved.
+    pub fn move_layer(&mut self, id: TrackId, to: LayerMove) -> bool {
+        let layer_count = self
+            .tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Visual)
+            .count();
+        // Visual layers come first in the list, so a layer's position in
+        // the list is also its position among the layers.
+        let Some(from) = self.tracks[..layer_count]
+            .iter()
+            .position(|track| track.id == id)
+        else {
+            return false;
+        };
+        let last = layer_count - 1;
+        let target = match to {
+            LayerMove::Up => from.saturating_sub(1),
+            LayerMove::Down => (from + 1).min(last),
+            LayerMove::ToFront => 0,
+            LayerMove::ToBack => last,
+        };
+        if target == from {
+            return false;
+        }
+        let layer = self.tracks.remove(from);
+        self.tracks.insert(target, layer);
+        true
+    }
+
     /// The audio tracks, from top to bottom.
     pub fn audio_tracks(&self) -> impl Iterator<Item = &Track> {
         self.tracks
@@ -267,6 +299,46 @@ impl Project {
             .find(|clip| clip.media == media_id);
         if let Some(clip) = new_clip {
             clip.placement = placement;
+        }
+        (media_id, track_id)
+    }
+
+    /// Adds an image as the background of the picture: on a new layer below
+    /// all other layers, enlarged until it covers the whole frame without
+    /// changing its shape (what sticks out is not visible).
+    pub fn add_background_image(
+        &mut self,
+        path: impl Into<String>,
+        properties: ImageProperties,
+    ) -> (MediaId, TrackId) {
+        let media_id = MediaId(self.next_media_id);
+        self.next_media_id += 1;
+        self.media.push(MediaSource {
+            id: media_id,
+            path: path.into(),
+            content: MediaContent::Image(properties),
+        });
+
+        let track_id = self.add_track("Background", TrackKind::Visual);
+        self.move_layer(track_id, LayerMove::ToBack);
+
+        let clip = Clip {
+            id: ClipId(self.next_clip_id),
+            media: media_id,
+            start_milliseconds: 0,
+            duration_milliseconds: self.settings.duration_milliseconds,
+            audio_input: AudioInput::Mix,
+            placement: covering_placement(
+                (properties.width, properties.height),
+                (self.settings.width, self.settings.height),
+            ),
+            parameters: BTreeMap::new(),
+            opacity: 1.0,
+            reaction: AudioReaction::default(),
+        };
+        self.next_clip_id += 1;
+        if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
+            track.clips.push(clip);
         }
         (media_id, track_id)
     }
@@ -456,16 +528,46 @@ impl Project {
     }
 }
 
+/// Where a layer is moved to by [`Project::move_layer`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerMove {
+    /// One step towards the front (drawn over one more layer).
+    Up,
+    /// One step towards the back.
+    Down,
+    /// In front of all other layers.
+    ToFront,
+    /// Behind all other layers.
+    ToBack,
+}
+
 /// The largest placement with the shape of `content` that fits into a
 /// frame of size `frame` (both in pixels), centered.
 fn fitted_placement(content: (u32, u32), frame: (u32, u32)) -> Placement {
+    scaled_placement(content, frame, f64::min)
+}
+
+/// The smallest placement with the shape of `content` that covers a frame
+/// of size `frame` completely, centered. Part of it lies outside the frame
+/// unless both have the same shape.
+fn covering_placement(content: (u32, u32), frame: (u32, u32)) -> Placement {
+    scaled_placement(content, frame, f64::max)
+}
+
+/// A centered placement with the shape of `content`. `choose` picks one of
+/// the two scale factors (fit the width, fit the height).
+fn scaled_placement(
+    content: (u32, u32),
+    frame: (u32, u32),
+    choose: fn(f64, f64) -> f64,
+) -> Placement {
     let (content_width, content_height) = (f64::from(content.0), f64::from(content.1));
     let (frame_width, frame_height) = (f64::from(frame.0), f64::from(frame.1));
     if content_width <= 0.0 || content_height <= 0.0 || frame_width <= 0.0 || frame_height <= 0.0 {
         return Placement::FULL;
     }
 
-    let scale = (frame_width / content_width).min(frame_height / content_height);
+    let scale = choose(frame_width / content_width, frame_height / content_height);
     let width = content_width * scale / frame_width;
     let height = content_height * scale / frame_height;
     Placement {
@@ -480,7 +582,7 @@ fn fitted_placement(content: (u32, u32), frame: (u32, u32)) -> Placement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FrameRate, ReactionBand};
+    use crate::{FrameRate, ReactionBand, ReactionEffect};
 
     #[test]
     fn new_project_uses_current_format_and_defaults() {
@@ -833,32 +935,157 @@ mod tests {
             band: ReactionBand::Bass,
             scale: 50.0,
             fade: -3.0,
+            move_x: -9.0,
+            rotate_degrees: 1000.0,
+            sensitivity: f64::NAN,
+            release_seconds: 60.0,
+            ..AudioReaction::default()
         };
         assert!(project.set_clip_reaction(clip_id, wild));
         let stored = clip(&project).reaction;
         assert_eq!(stored.band, ReactionBand::Bass);
         assert_eq!(stored.scale, AudioReaction::MAX_SCALE);
         assert_eq!(stored.fade, 0.0);
+        assert_eq!(stored.move_x, -AudioReaction::MAX_MOVE);
+        assert_eq!(stored.rotate_degrees, AudioReaction::MAX_ROTATION);
+        assert_eq!(stored.sensitivity, 1.0);
+        assert_eq!(stored.release_seconds, AudioReaction::MAX_RELEASE_SECONDS);
         assert!(stored.is_active());
     }
 
     #[test]
-    fn a_reaction_grows_and_reveals_with_loudness() {
+    fn a_reaction_animates_with_loudness() {
         let reaction = AudioReaction {
-            band: ReactionBand::Volume,
             scale: 0.2,
             fade: 0.5,
+            move_y: -0.1,
+            rotate_degrees: 30.0,
+            ..AudioReaction::default()
         };
 
-        // Silent: normal size, half visible. Full loudness: 20 % larger,
-        // fully visible.
-        assert_eq!(reaction.at_level(0.0), (1.0, 0.5));
-        assert_eq!(reaction.at_level(1.0), (1.2, 1.0));
-        assert_eq!(reaction.at_level(f64::NAN), (1.0, 0.5));
+        // Silent: untouched except for the fade.
+        let silent = reaction.at_level(0.0);
+        assert_eq!(
+            silent,
+            ReactionEffect {
+                opacity: 0.5,
+                ..ReactionEffect::NONE
+            }
+        );
+        assert_eq!(reaction.at_level(f64::NAN), silent);
+
+        // Full loudness: 20 % larger, fully visible, moved up, turned.
+        let loud = reaction.at_level(1.0);
+        assert!((loud.scale - 1.2).abs() < 1e-12);
+        assert_eq!(loud.opacity, 1.0);
+        assert_eq!((loud.offset_x, loud.offset_y), (0.0, -0.1));
+        assert_eq!(loud.rotation_degrees, 30.0);
+
+        // Sensitivity makes quieter sound count as louder, up to the top.
+        let sensitive = AudioReaction {
+            sensitivity: 4.0,
+            ..reaction
+        };
+        assert_eq!(sensitive.at_level(0.25), loud);
+        assert_eq!(sensitive.at_level(0.9), loud);
+
         // No reaction leaves the element alone at any loudness.
-        assert_eq!(AudioReaction::default().at_level(0.7), (1.0, 1.0));
+        assert_eq!(AudioReaction::default().at_level(0.7), ReactionEffect::NONE);
     }
 
+    #[test]
+    fn a_reaction_saved_by_an_older_version_still_loads() {
+        // Format version 10 knew only these three fields.
+        let old: AudioReaction =
+            serde_json::from_str(r#"{ "band": "Bass", "scale": 0.3, "fade": 0.0 }"#).unwrap();
+
+        assert_eq!(
+            old,
+            AudioReaction {
+                band: ReactionBand::Bass,
+                scale: 0.3,
+                ..AudioReaction::default()
+            }
+        );
+    }
+
+    fn layer_names(project: &Project) -> Vec<&str> {
+        project
+            .tracks()
+            .iter()
+            .map(|track| track.name.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn layers_can_be_reordered_but_stay_above_the_audio_tracks() {
+        let mut project = Project::with_starter_tracks();
+        let bottom = project.tracks()[0].id; // "Layer 1"
+        let middle = project.add_default_named_track(TrackKind::Visual);
+        let top = project.add_default_named_track(TrackKind::Visual);
+        let audio = project.tracks()[3].id;
+        assert_eq!(
+            layer_names(&project),
+            ["Layer 3", "Layer 2", "Layer 1", "Audio"]
+        );
+
+        assert!(project.move_layer(bottom, LayerMove::Up));
+        assert_eq!(
+            layer_names(&project),
+            ["Layer 3", "Layer 1", "Layer 2", "Audio"]
+        );
+        assert!(project.move_layer(top, LayerMove::ToBack));
+        assert_eq!(
+            layer_names(&project),
+            ["Layer 1", "Layer 2", "Layer 3", "Audio"]
+        );
+        assert!(project.move_layer(middle, LayerMove::ToFront));
+        assert_eq!(
+            layer_names(&project),
+            ["Layer 2", "Layer 1", "Layer 3", "Audio"]
+        );
+        assert!(project.move_layer(middle, LayerMove::Down));
+        assert_eq!(
+            layer_names(&project),
+            ["Layer 1", "Layer 2", "Layer 3", "Audio"]
+        );
+
+        // Already at the edge, or not a layer at all: nothing happens.
+        assert!(!project.move_layer(top, LayerMove::Down));
+        assert!(!project.move_layer(bottom, LayerMove::ToFront));
+        assert!(!project.move_layer(audio, LayerMove::Up));
+        assert_eq!(
+            layer_names(&project),
+            ["Layer 1", "Layer 2", "Layer 3", "Audio"]
+        );
+    }
+
+    #[test]
+    fn a_background_goes_behind_everything_and_covers_the_frame() {
+        let mut project = Project::with_starter_tracks(); // 1920 x 1080
+        project.settings.duration_milliseconds = 10_000;
+        project.add_milkdrop_preset("a.milk");
+
+        // A square picture must be wider than the frame is high to cover it.
+        let (_, background) = project.add_background_image(
+            "sky.jpg",
+            ImageProperties {
+                width: 1000,
+                height: 1000,
+            },
+        );
+
+        assert_eq!(layer_names(&project), ["Layer 1", "Background", "Audio"]);
+        let clip = &project.track(background).unwrap().clips[0];
+        assert_eq!(clip.duration_milliseconds, 10_000);
+        assert_eq!((clip.placement.x, clip.placement.width), (0.0, 1.0));
+        // 1920 / 1080 of the frame's height, centered: it sticks out above
+        // and below by the same amount.
+        assert!((clip.placement.height - 1920.0 / 1080.0).abs() < 1e-9);
+        assert!((clip.placement.y + clip.placement.height / 2.0 - 0.5).abs() < 1e-9);
+        // It is drawn first, so everything else lies over it.
+        assert_eq!(project.visual_layers_at(0).last().unwrap().0.id, background);
+    }
     #[test]
     fn rename_reports_whether_anything_changed() {
         let mut project = Project::new();

@@ -30,6 +30,8 @@ pub enum AppCommand {
     SaveProjectAs,
     ImportAudio,
     ImportImage,
+    /// Pick an image and put it behind everything else, covering the frame.
+    ImportBackgroundImage,
     /// Open the browser for the presets that ship with VizX.
     BrowseMilkdropPresets,
     /// Pick a preset file of the user's own.
@@ -205,6 +207,7 @@ impl VizxApp {
             }
             AppCommand::ImportAudio => self.import_audio(frame),
             AppCommand::ImportImage => self.import_images(frame),
+            AppCommand::ImportBackgroundImage => self.import_background_image(frame),
             AppCommand::BrowseMilkdropPresets => self.preset_browser.open(ctx),
             AppCommand::AddMilkdropPreset => self.add_milkdrop_preset(frame),
             AppCommand::BrowseVisualizers => self.visualizer_browser.is_open = true,
@@ -292,6 +295,22 @@ impl VizxApp {
             (Some(error), _) => error,
             (None, 1) => format!("Imported {}", paths[0].display()),
             (None, count) => format!("Imported {count} images"),
+        };
+    }
+
+    /// Lets the user pick one image and makes it the background.
+    fn import_background_image(&mut self, frame: &eframe::Frame) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Image", &vizx_core::SUPPORTED_IMAGE_EXTENSIONS)
+            .set_parent(frame)
+            .pick_file()
+        else {
+            return; // dialog cancelled
+        };
+
+        self.status_message = match self.session.import_background_image(&path) {
+            Ok(_) => format!("Added background {}", path.display()),
+            Err(problem) => format!("Could not import {}: {problem}", path.display()),
         };
     }
 

@@ -168,6 +168,22 @@ impl EditorSession {
         Ok(track_id)
     }
 
+    /// Imports an image as the background: on a new layer behind all
+    /// others, covering the whole frame. The new layer becomes selected.
+    pub fn import_background_image(&mut self, path: &Path) -> Result<TrackId, String> {
+        if !crate::has_supported_image_extension(path) {
+            return Err("not a PNG or JPEG image".to_owned());
+        }
+        let (width, height) = crate::image_store::image_file_size(path)?;
+
+        let (_media_id, track_id) = self
+            .project
+            .add_background_image(path.to_string_lossy(), ImageProperties { width, height });
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        Ok(track_id)
+    }
+
     /// Adds a visualizer plugin and places it on a visual layer, which
     /// becomes selected. `stored_path` is the plugin's folder, or the
     /// reference of a bundled plugin (see `VisualizerCatalog`).

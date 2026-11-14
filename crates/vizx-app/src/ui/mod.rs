@@ -37,6 +37,12 @@ pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
     item(ui, "Image File...", "Ctrl+Shift+I", AppCommand::ImportImage);
     item(
         ui,
+        "Background Image...",
+        "",
+        AppCommand::ImportBackgroundImage,
+    );
+    item(
+        ui,
         "MilkDrop Preset...",
         "Ctrl+M",
         AppCommand::BrowseMilkdropPresets,

@@ -130,7 +130,8 @@ the audio a clip reacts to (`audio_input`); older files load with the mix.
 Version **8** added a clip's `placement`; older files load filling the frame.
 Version **9** added visualizer plugins as a kind of media and a clip's
 parameter values for them. Version **10** added images as a kind of media
-and a clip's `opacity` and `reaction`.
+and a clip's `opacity` and `reaction`. Version **11** extended reactions
+(move, rotate, sensitivity, release).
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -217,13 +218,22 @@ This is the first part of the animation and behavior engine.
   over each other from the bottom up. Plugins return an opacity per pixel;
   MilkDrop frames are as opaque as they are bright.
 - **Clip opacity** (`Clip::opacity`) fades a whole clip.
-- **Reaction** (`Clip::reaction`, an `AudioReaction`) makes a clip larger
-  and/or more visible the louder a chosen part of the sound is (volume,
-  bass, mid or treble of the clip's audio input). The level is measured from
-  the audio leading up to the playhead and nothing else, so a moment of the
-  song always looks the same, whether played or jumped to. Position, size
-  and opacity are stored on the clip; rotation and keyframes are not
-  implemented yet.
+- **Background and foreground.** What is in front is decided by the order
+  of the visual layers: a layer higher in the list is drawn over the ones
+  below. "Add > Background Image" puts an image on a new layer behind all
+  others, enlarged until it covers the frame. A layer's context menu moves
+  it up, down, to the front or to the back (`Project::move_layer`).
+- **Animation to sound** (`Clip::reaction`, an `AudioReaction`) makes a
+  clip grow, move, turn and/or appear the louder a chosen part of the sound
+  is (volume, bass, mid or treble of the clip's audio input). A sensitivity
+  scales the measured level, and a release time lets the animation fall
+  back gradually after a loud moment instead of following every flicker.
+  The level is worked out from the audio leading up to the playhead and
+  nothing else (for the release, from a few earlier moments as well), so a
+  moment of the song always looks the same, whether played or jumped to.
+  The animation is applied when the picture is drawn; a clip's frame and
+  handles stay at its placement. A fixed rotation of a clip and keyframes
+  are not implemented yet.
 
 ### Visualizer plugins
 Visualizers other than MilkDrop presets are **plugins**: a folder with a

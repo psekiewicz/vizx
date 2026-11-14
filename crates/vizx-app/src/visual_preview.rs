@@ -14,12 +14,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer};
+use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer, PlaybackSource};
 use vizx_core::{
     AudioStore, EditorSession, FrameSource, ImageState, ImageStore, Prerender, PrerenderJob,
     VisualizerCatalog, resolve_preset_path,
 };
-use vizx_project::{Clip, ClipId, MediaSource, Placement, ReactionBand, TrackId};
+use vizx_project::{Clip, ClipId, MediaSource, Placement, ReactionBand, ReactionEffect, TrackId};
 
 use crate::transport::{audio_sources_for, project_audio_sources};
 
@@ -37,6 +37,10 @@ const RENDER_EDGE_RANGE: (u32, u32) = (16, 1920);
 const RENDER_START_DELAY: Duration = Duration::from_millis(350);
 /// Sample rate at which audio is analysed for clips that react to it.
 const REACTION_SAMPLE_RATE: u32 = 44_100;
+/// For a reaction's release, the sound is measured at earlier moments this
+/// far apart, and at most this many of them.
+const RELEASE_STEP_SECONDS: f64 = 1.0 / 30.0;
+const MAX_RELEASE_STEPS: u32 = 15;
 
 /// One visual clip in the picture at the playhead.
 pub struct LayerView<'a> {
@@ -50,6 +54,12 @@ pub struct LayerView<'a> {
     /// How much larger than its placement the clip is drawn right now,
     /// because of its reaction to the sound. 1 is its normal size.
     pub scale: f32,
+    /// How far the clip is shifted right now by its reaction, as fractions
+    /// of the frame's width and height.
+    pub offset: [f32; 2],
+    /// How far the clip is turned right now by its reaction, in degrees
+    /// clockwise.
+    pub rotation_degrees: f32,
     pub content: LayerContent<'a>,
 }
 
@@ -84,6 +94,8 @@ struct ShownLayer {
     placement: Placement,
     opacity: f32,
     scale: f32,
+    offset: [f32; 2],
+    rotation_degrees: f32,
     shown: Shown,
 }
 
@@ -197,11 +209,11 @@ impl VisualPreview {
             .into_iter()
             .rev()
         {
-            let (scale, reaction_opacity) = if clip.reaction.is_active() {
+            let effect = if clip.reaction.is_active() {
                 let level = self.reaction_level(session, audio_store, clip, playhead_seconds);
                 clip.reaction.at_level(level)
             } else {
-                (1.0, 1.0)
+                ReactionEffect::NONE
             };
 
             let problem = if media.image().is_some() {
@@ -224,19 +236,24 @@ impl VisualPreview {
                 clip_id: clip.id,
                 track_id: track.id,
                 placement: clip.placement,
-                opacity: (clip.opacity * reaction_opacity) as f32,
-                scale: scale as f32,
+                opacity: (clip.opacity * effect.opacity) as f32,
+                scale: effect.scale as f32,
+                offset: [effect.offset_x as f32, effect.offset_y as f32],
+                rotation_degrees: effect.rotation_degrees as f32,
                 shown,
             });
         }
     }
 
     /// How loud the part of the sound is that a clip reacts to, at the
-    /// playhead, from 0 to 1.
+    /// playhead, from 0 to 1, with the clip's release time applied: the
+    /// value jumps up with the sound and then falls back gradually.
     ///
-    /// It is measured from the audio leading up to the playhead and from
+    /// It is worked out from the audio leading up to the playhead and from
     /// nothing else, so the same moment of the song always gives the same
-    /// value, whether it is reached by playing or by jumping there.
+    /// value, whether it is reached by playing or by jumping there. For the
+    /// release that means looking at a few earlier moments too: a loud
+    /// moment shortly before still counts, the less the longer ago it was.
     fn reaction_level(
         &mut self,
         session: &EditorSession,
@@ -245,10 +262,38 @@ impl VisualPreview {
         playhead_seconds: f64,
     ) -> f64 {
         let (sources, _) = audio_sources_for(session, audio_store, clip.audio_input);
-        let window_end = (playhead_seconds.max(0.0) * f64::from(REACTION_SAMPLE_RATE)) as u64;
+        let release = clip.reaction.release_seconds;
+        let steps_back = if release > 0.0 {
+            ((release / RELEASE_STEP_SECONDS).ceil() as u32).min(MAX_RELEASE_STEPS)
+        } else {
+            0
+        };
+
+        let mut level: f64 = 0.0;
+        for step in 0..=steps_back {
+            let seconds_ago = f64::from(step) * RELEASE_STEP_SECONDS;
+            let moment = playhead_seconds - seconds_ago;
+            if moment < 0.0 {
+                break;
+            }
+            // How much of a level from that moment is left by now.
+            let remaining = if step == 0 {
+                1.0
+            } else {
+                (1.0 - seconds_ago / release).max(0.0)
+            };
+            let then = self.level_at(&sources, clip.reaction.band, moment);
+            level = level.max(then * remaining);
+        }
+        level
+    }
+
+    /// How loud one part of the sound is at one moment, from 0 to 1.
+    fn level_at(&mut self, sources: &[PlaybackSource], band: ReactionBand, seconds: f64) -> f64 {
+        let window_end = (seconds.max(0.0) * f64::from(REACTION_SAMPLE_RATE)) as u64;
         let window_start = window_end.saturating_sub(ANALYSIS_WINDOW as u64);
         let stereo = vizx_audio::mix_to_stereo(
-            &sources,
+            sources,
             REACTION_SAMPLE_RATE,
             window_start,
             (window_end - window_start) as usize,
@@ -263,14 +308,13 @@ impl VisualPreview {
         // "Infinitely long ago": the analyzer's memory of earlier calls has
         // faded completely, so only this moment counts.
         let sound = self.analyzer.analyze(&mono, f32::MAX);
-        f64::from(match clip.reaction.band {
+        f64::from(match band {
             ReactionBand::Volume => sound.volume,
             ReactionBand::Bass => sound.bass,
             ReactionBand::Mid => sound.mid,
             ReactionBand::Treble => sound.treble,
         })
     }
-
     /// Makes sure the texture of an image clip shows its file, and says
     /// what can be drawn for the clip.
     fn show_image(
@@ -454,6 +498,8 @@ impl VisualPreview {
                     placement: layer.placement,
                     opacity: layer.opacity,
                     scale: layer.scale,
+                    offset: layer.offset,
+                    rotation_degrees: layer.rotation_degrees,
                     content,
                 }
             })

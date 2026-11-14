@@ -122,60 +122,159 @@ fn full_opacity() -> f64 {
     1.0
 }
 
-/// A simple, direct reaction of a visual element to the sound: it grows
-/// and/or becomes more visible the louder its chosen part of the sound is.
-/// This is what lets a still image "breathe" with the music without any
+/// How a visual element is animated by the sound: the louder its chosen
+/// part of the sound is, the more it grows, moves, turns and/or appears.
+/// This is what lets a still image "dance" with the music without any
 /// frame-by-frame animation. The sound itself is chosen with the clip's
 /// [`AudioInput`].
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+///
+/// Every amount is the change at full loudness; 0 turns that effect off.
+/// `#[serde(default)]` lets files written before a field existed load.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AudioReaction {
     /// Which part of the sound is followed.
     pub band: ReactionBand,
-    /// How much larger the element is at full loudness, as a fraction of
-    /// its size (0.2 means 20 % larger). 0 turns pulsing off.
+    /// How much larger the element gets, as a fraction of its size (0.2
+    /// means 20 % larger).
     pub scale: f64,
     /// How much of its opacity the element loses in silence (1 means it is
-    /// invisible when silent and fully visible at full loudness). 0 turns
-    /// fading off.
+    /// invisible when silent and fully visible at full loudness).
     pub fade: f64,
+    /// How far the element moves, as fractions of the frame's width and
+    /// height. Negative values move left / up.
+    pub move_x: f64,
+    pub move_y: f64,
+    /// How far the element turns, in degrees clockwise.
+    pub rotate_degrees: f64,
+    /// Multiplies the measured loudness before it is used, so quiet
+    /// material can still drive a strong animation.
+    pub sensitivity: f64,
+    /// How long the animation takes to fall back after a loud moment, in
+    /// seconds. It always rises at once. 0 follows the sound exactly, which
+    /// can look nervous; a little release makes it look like a bounce.
+    pub release_seconds: f64,
+}
+
+impl Default for AudioReaction {
+    fn default() -> Self {
+        Self {
+            band: ReactionBand::default(),
+            scale: 0.0,
+            fade: 0.0,
+            move_x: 0.0,
+            move_y: 0.0,
+            rotate_degrees: 0.0,
+            sensitivity: 1.0,
+            release_seconds: 0.15,
+        }
+    }
+}
+
+/// What a reaction does to its element at one moment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReactionEffect {
+    /// Size factor; 1 is the normal size.
+    pub scale: f64,
+    /// Opacity factor, 0 to 1.
+    pub opacity: f64,
+    /// Shift as fractions of the frame's width and height.
+    pub offset_x: f64,
+    pub offset_y: f64,
+    /// Turn in degrees, clockwise.
+    pub rotation_degrees: f64,
+}
+
+impl ReactionEffect {
+    /// Leaves the element exactly as it is.
+    pub const NONE: Self = Self {
+        scale: 1.0,
+        opacity: 1.0,
+        offset_x: 0.0,
+        offset_y: 0.0,
+        rotation_degrees: 0.0,
+    };
 }
 
 impl AudioReaction {
     /// Largest allowed `scale`.
     pub const MAX_SCALE: f64 = 2.0;
+    /// Largest allowed move in either direction.
+    pub const MAX_MOVE: f64 = 1.0;
+    /// Largest allowed turn in either direction, in degrees.
+    pub const MAX_ROTATION: f64 = 360.0;
+    pub const SENSITIVITY_RANGE: (f64, f64) = (0.25, 8.0);
+    pub const MAX_RELEASE_SECONDS: f64 = 2.0;
 
     /// Whether the element reacts at all.
     pub fn is_active(self) -> bool {
-        self.scale != 0.0 || self.fade != 0.0
+        [
+            self.scale,
+            self.fade,
+            self.move_x,
+            self.move_y,
+            self.rotate_degrees,
+        ]
+        .iter()
+        .any(|amount| *amount != 0.0)
     }
 
-    /// The nearest valid reaction; values that are not numbers become 0.
+    /// The nearest valid reaction; values that are not numbers become the
+    /// defaults.
     pub fn sanitized(self) -> Self {
-        let within = |value: f64, max: f64| {
+        let defaults = Self::default();
+        let within = |value: f64, min: f64, max: f64, fallback: f64| {
             if value.is_finite() {
-                value.clamp(0.0, max)
+                value.clamp(min, max)
             } else {
-                0.0
+                fallback
             }
         };
+        let (least_sensitive, most_sensitive) = Self::SENSITIVITY_RANGE;
         Self {
             band: self.band,
-            scale: within(self.scale, Self::MAX_SCALE),
-            fade: within(self.fade, 1.0),
+            scale: within(self.scale, 0.0, Self::MAX_SCALE, 0.0),
+            fade: within(self.fade, 0.0, 1.0, 0.0),
+            move_x: within(self.move_x, -Self::MAX_MOVE, Self::MAX_MOVE, 0.0),
+            move_y: within(self.move_y, -Self::MAX_MOVE, Self::MAX_MOVE, 0.0),
+            rotate_degrees: within(
+                self.rotate_degrees,
+                -Self::MAX_ROTATION,
+                Self::MAX_ROTATION,
+                0.0,
+            ),
+            sensitivity: within(
+                self.sensitivity,
+                least_sensitive,
+                most_sensitive,
+                defaults.sensitivity,
+            ),
+            release_seconds: within(
+                self.release_seconds,
+                0.0,
+                Self::MAX_RELEASE_SECONDS,
+                defaults.release_seconds,
+            ),
         }
     }
 
-    /// Size factor and opacity factor for a loudness `level` from 0 to 1.
-    pub fn at_level(self, level: f64) -> (f64, f64) {
+    /// What the reaction does for a loudness `level` from 0 to 1 (as
+    /// measured; the sensitivity is applied here).
+    pub fn at_level(self, level: f64) -> ReactionEffect {
         let level = if level.is_finite() {
-            level.clamp(0.0, 1.0)
+            (level * self.sensitivity).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        (1.0 + self.scale * level, 1.0 - self.fade * (1.0 - level))
+        ReactionEffect {
+            scale: 1.0 + self.scale * level,
+            opacity: 1.0 - self.fade * (1.0 - level),
+            offset_x: self.move_x * level,
+            offset_y: self.move_y * level,
+            rotation_degrees: self.rotate_degrees * level,
+        }
     }
 }
-
 /// The part of the sound an [`AudioReaction`] follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ReactionBand {
