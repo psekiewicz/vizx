@@ -1,6 +1,6 @@
 use eframe::egui;
 use vizx_core::EditorSession;
-use vizx_project::{AudioInput, Clip, Track};
+use vizx_project::{AudioInput, Clip, Placement, Track};
 
 use crate::theme;
 use crate::ui::format_duration;
@@ -63,6 +63,7 @@ fn track_properties(ui: &mut egui::Ui, session: &mut EditorSession, track: &Trac
             );
             if source.is_milkdrop_preset() {
                 audio_input_selector(ui, session, clip);
+                placement_editor(ui, session, clip);
             }
         }
     }
@@ -103,6 +104,59 @@ fn audio_input_selector(ui: &mut egui::Ui, session: &mut EditorSession, clip: &C
             });
     });
     session.edit_project(|project| project.set_clip_audio_input(clip.id, chosen));
+}
+
+/// Position and size of a visual clip in the picture, as percentages of
+/// the composition. The same values change when the clip is dragged in the
+/// preview.
+fn placement_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {
+    let mut edited = clip.placement;
+
+    egui::Grid::new(("placement", clip.id))
+        .num_columns(4)
+        .show(ui, |ui| {
+            let percent_field = |ui: &mut egui::Ui, label: &str, value: &mut f64| {
+                ui.label(label);
+                let mut percent = *value * 100.0;
+                ui.add(
+                    egui::DragValue::new(&mut percent)
+                        .speed(0.25)
+                        .max_decimals(1)
+                        .suffix(" %"),
+                );
+                *value = percent / 100.0;
+            };
+            percent_field(ui, "X", &mut edited.x);
+            percent_field(ui, "Y", &mut edited.y);
+            ui.end_row();
+            percent_field(ui, "Width", &mut edited.width);
+            percent_field(ui, "Height", &mut edited.height);
+            ui.end_row();
+        });
+    if ui
+        .add_enabled(
+            clip.placement != Placement::FULL,
+            egui::Button::new("Fill Frame"),
+        )
+        .on_hover_text("Make the visualizer cover the whole picture again")
+        .clicked()
+    {
+        edited = Placement::FULL;
+    }
+
+    // Converting to percent and back can change the last digits; only a
+    // real edit may touch the project.
+    let has_changed = [
+        (edited.x, clip.placement.x),
+        (edited.y, clip.placement.y),
+        (edited.width, clip.placement.width),
+        (edited.height, clip.placement.height),
+    ]
+    .iter()
+    .any(|(new, old)| (new - old).abs() > 1e-9);
+    if has_changed {
+        session.edit_project(|project| project.set_clip_placement(clip.id, edited));
+    }
 }
 
 fn nothing_selected(ui: &mut egui::Ui) {

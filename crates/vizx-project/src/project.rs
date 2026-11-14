@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AudioInput, AudioProperties, CURRENT_FORMAT_VERSION, Clip, ClipId, MediaContent, MediaId,
-    MediaSource, ProjectMetadata, ProjectSettings, Track, TrackId, TrackKind,
+    MediaSource, Placement, ProjectMetadata, ProjectSettings, Track, TrackId, TrackKind,
 };
 
 /// Root of all data that belongs to one VizX project.
@@ -10,7 +10,7 @@ use crate::{
 /// Everything that is saved into a `.vzx` file hangs off this struct. Future
 /// milestones add media sources, clips, keyframes and effects here, so that
 /// every subsystem works on the same shared data.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     /// Data layout version this project was written with.
     pub format_version: u32,
@@ -207,6 +207,7 @@ impl Project {
             start_milliseconds: 0,
             duration_milliseconds: properties.duration_milliseconds,
             audio_input: AudioInput::Mix,
+            placement: Placement::FULL,
         };
         self.next_clip_id += 1;
         let clip_end = clip.end_milliseconds();
@@ -253,6 +254,7 @@ impl Project {
             start_milliseconds: 0,
             duration_milliseconds: self.settings.duration_milliseconds,
             audio_input: AudioInput::Mix,
+            placement: Placement::FULL,
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -279,6 +281,40 @@ impl Project {
         self.milkdrop_clips().find(|(clip, _)| {
             milliseconds >= clip.start_milliseconds && milliseconds < clip.end_milliseconds()
         })
+    }
+
+    /// Every MilkDrop clip that covers a point in time, with its layer and
+    /// preset, from the topmost visual layer down. All of them are part of
+    /// the picture at that time.
+    pub fn milkdrop_layers_at(&self, milliseconds: u64) -> Vec<(&Track, &Clip, &MediaSource)> {
+        self.tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Visual)
+            .flat_map(|track| track.clips.iter().map(move |clip| (track, clip)))
+            .filter(|(_, clip)| {
+                milliseconds >= clip.start_milliseconds && milliseconds < clip.end_milliseconds()
+            })
+            .filter_map(|(track, clip)| Some((track, clip, self.media_source(clip.media)?)))
+            .filter(|(_, _, source)| source.is_milkdrop_preset())
+            .collect()
+    }
+
+    /// Moves or resizes a clip in the picture. The placement is corrected
+    /// to a valid one first. Returns `true` only if this changed something.
+    pub fn set_clip_placement(&mut self, clip_id: ClipId, placement: Placement) -> bool {
+        let placement = placement.sanitized();
+        let clip = self
+            .tracks
+            .iter_mut()
+            .flat_map(|track| &mut track.clips)
+            .find(|clip| clip.id == clip_id);
+        match clip {
+            Some(clip) if clip.placement != placement => {
+                clip.placement = placement;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The MilkDrop preset shown at a point in time.
@@ -511,6 +547,66 @@ mod tests {
         assert_eq!(input_of(&project), AudioInput::Track(bass));
         project.remove_track(bass);
         assert_eq!(input_of(&project), AudioInput::Mix);
+    }
+
+    #[test]
+    fn a_clip_can_be_moved_and_resized_within_limits() {
+        let mut project = Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 10_000;
+        let (_, layer) = project.add_milkdrop_preset("a.milk");
+        let clip_id = project.track(layer).unwrap().clips[0].id;
+        let placement_of = |project: &Project| project.track(layer).unwrap().clips[0].placement;
+
+        assert_eq!(placement_of(&project), Placement::FULL);
+
+        let left_half = Placement {
+            x: 0.0,
+            y: 0.0,
+            width: 0.5,
+            height: 1.0,
+        };
+        assert!(project.set_clip_placement(clip_id, left_half));
+        assert!(!project.set_clip_placement(clip_id, left_half));
+        assert_eq!(placement_of(&project), left_half);
+
+        // Too small and far outside the frame: corrected, not refused.
+        let lost = Placement {
+            x: 50.0,
+            y: -50.0,
+            width: 0.0,
+            height: 100.0,
+        };
+        assert!(project.set_clip_placement(clip_id, lost));
+        let corrected = placement_of(&project);
+        assert_eq!(corrected.width, Placement::MIN_SIZE);
+        assert_eq!(corrected.height, Placement::MAX_SIZE);
+        // A sliver stays inside the frame on both axes.
+        assert!(corrected.x < 1.0 && corrected.right() > 0.0);
+        assert!(corrected.y < 1.0 && corrected.bottom() > 0.0);
+
+        let not_a_number = Placement {
+            x: f64::NAN,
+            ..left_half
+        };
+        project.set_clip_placement(clip_id, not_a_number);
+        assert_eq!(placement_of(&project), Placement::FULL);
+    }
+
+    #[test]
+    fn all_layers_covering_a_time_are_part_of_the_picture() {
+        let mut project = Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 10_000;
+        project.add_milkdrop_preset("bottom.milk");
+        project.add_milkdrop_preset("top.milk");
+
+        let paths: Vec<&str> = project
+            .milkdrop_layers_at(5_000)
+            .iter()
+            .map(|(_, _, preset)| preset.path.as_str())
+            .collect();
+
+        assert_eq!(paths, ["top.milk", "bottom.milk"]);
+        assert!(project.milkdrop_layers_at(10_000).is_empty());
     }
 
     #[test]

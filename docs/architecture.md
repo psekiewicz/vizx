@@ -124,6 +124,7 @@ Version **3** reduced the track kinds to two; the former `Visualizer`,
 `Animation` and `Text` kinds load as `Visual`. Version **4** added media
 sources and clips. Version **6** added MilkDrop presets as a kind of media. Version **7** added
 the audio a clip reacts to (`audio_input`); older files load with the mix.
+Version **8** added a clip's `placement`; older files load filling the frame.
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -179,6 +180,16 @@ to (`AudioInput`: the mix or one audio track), which is what separate stems
 are for. Each such clip is pre-rendered in the
 background to a temporary frame file, and the preview shows the stored frame
 for the playhead.
+
+A clip also records its **placement**: the rectangle of the composition it
+is drawn into, as fractions of the composition's width and height, so it
+keeps its meaning at any output size. The preview draws every visualizer at
+the playhead into its placement, lower layers first. The selected one can be
+moved and resized directly in the preview (drag inside, or drag one of the
+eight handles; edges snap to the frame edges and the middle) or with numbers
+in the Properties panel. A drag is kept in the UI until the mouse button is
+released and only then written to the project, so the project changes once
+per drag.
 
 VizX ships with a preset collection (`assets/presets`, a git submodule). A
 project refers to one of those presets by its place in the collection

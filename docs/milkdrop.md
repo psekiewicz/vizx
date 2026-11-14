@@ -64,6 +64,10 @@ and keeps the frames:
   temporary folder under `vizx-prerender`. Only each frame's position in the
   file is kept in memory. The file is deleted when it is no longer needed;
   leftovers from a crash are removed after a day.
+- **Size follows the placement.** A clip that covers half of the frame is
+  rendered at half the size and in that shape, so the preset is drawn for
+  its own rectangle instead of being squeezed into it. Moving a clip keeps
+  its frames; resizing renders it again, once, after the change has settled.
 - **Re-rendering.** A pre-render belongs to a "key" made of everything that
   affects the frames: preset, size, frame rate, clip position and length, and
   the audio. If any of these change, the frames are thrown away and rendered
@@ -199,9 +203,10 @@ original MilkDrop presets are a separate collection of about 550
 - **Textures.** Presets that use image textures need projectM's texture
   search paths, which VizX does not set yet; those presets render without
   their textures.
-- **One preset at a time.** The topmost visual layer with a clip at the
-  playhead is shown. Layers are not composited yet, so several visualizers
-  that follow different stems cannot be seen together yet.
+- **No blending.** Every visualizer at the playhead is drawn into its
+  placement, lower layers first, but each picture is opaque: where two
+  overlap, the upper one hides the lower one. Opacity and blend modes do
+  not exist yet.
 - **Integrated graphics on hybrid laptops.** The off-screen OpenGL context
   is created on whichever GPU Windows picks by default, usually the
   integrated one.

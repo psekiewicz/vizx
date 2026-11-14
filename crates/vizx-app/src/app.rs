@@ -477,7 +477,7 @@ impl eframe::App for VizxApp {
                     ui,
                     &mut self.session,
                     &self.audio_store,
-                    &self.milkdrop_preview.view(),
+                    &self.milkdrop_preview.layers(),
                     &mut self.requested_command,
                 );
             });

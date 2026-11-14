@@ -1,33 +1,51 @@
-//! Shows the MilkDrop visualizer in the preview, from pre-rendered frames.
+//! Shows the MilkDrop visualizers in the preview, from pre-rendered frames.
 //!
 //! Each MilkDrop clip on the timeline is rendered ahead of time in the
 //! background (see `MilkdropPrerender`). The preview then only looks up the
-//! frame that belongs to the playhead, so scrubbing and seeking show the
+//! frames that belong to the playhead, so scrubbing and seeking show the
 //! right picture and playback is cheap.
+//!
+//! Several clips can be visible at once: every visual layer with a clip at
+//! the playhead contributes one picture, drawn into the clip's placement.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use vizx_core::{AudioStore, EditorSession, MilkdropPrerender, PrerenderJob, resolve_preset_path};
-use vizx_project::ClipId;
+use vizx_project::{ClipId, Placement, TrackId};
 
 use crate::transport::{audio_sources_for, project_audio_sources};
 
-/// Width of the preview picture in pixels. The height follows from the
-/// project's aspect ratio. Kept small so that rendering and storing every
-/// frame of a song stays affordable on modest hardware; export will render
-/// at full size.
+/// Width in pixels of a preview picture that fills the whole frame. The
+/// height follows from the project's aspect ratio, and a smaller clip is
+/// rendered proportionally smaller. Kept small so that rendering and
+/// storing every frame of a song stays affordable on modest hardware;
+/// export will render at full size.
 const PREVIEW_WIDTH: u32 = 640;
+/// Smallest and largest edge of a rendered picture, in pixels.
+const RENDER_EDGE_RANGE: (u32, u32) = (16, 1920);
+/// A render starts only after its settings have stayed the same for this
+/// long. Dragging a size value changes them many times per second, and
+/// each change would otherwise start and throw away a render.
+const RENDER_START_DELAY: Duration = Duration::from_millis(350);
 
-/// What the preview panel should draw for the visualizer right now.
-pub enum MilkdropView<'a> {
-    /// No MilkDrop clip is on the timeline at the playhead.
-    NotActive,
+/// One visualizer in the picture at the playhead.
+pub struct LayerView<'a> {
+    pub clip_id: ClipId,
+    /// The visual layer the clip is on.
+    pub track_id: TrackId,
+    pub placement: Placement,
+    pub content: LayerContent<'a>,
+}
+
+/// What to draw for one visualizer right now.
+pub enum LayerContent<'a> {
     /// The frame for the playhead.
     Picture(&'a egui::TextureHandle),
     /// The clip's frames are still being rendered and the playhead is ahead
-    /// of them.
+    /// of them. `total` is 0 while the clip waits for its turn.
     Rendering { finished: u32, total: u32 },
     /// Rendering cannot start until the project's audio has been loaded.
     WaitingForAudio,
@@ -35,18 +53,29 @@ pub enum MilkdropView<'a> {
     Failed(String),
 }
 
-/// What `update` decided to show; turned into a [`MilkdropView`] by `view`.
-#[derive(Default)]
+/// What `update` decided to show for a layer; turned into a
+/// [`LayerContent`] by `layers`.
 enum Shown {
-    #[default]
-    NotActive,
     Picture,
-    Rendering {
-        finished: u32,
-        total: u32,
-    },
+    Rendering { finished: u32, total: u32 },
     WaitingForAudio,
     Failed(String),
+}
+
+struct ShownLayer {
+    clip_id: ClipId,
+    track_id: TrackId,
+    placement: Placement,
+    shown: Shown,
+}
+
+/// The frame of one clip that is currently uploaded to the graphics card.
+struct LayerTexture {
+    handle: egui::TextureHandle,
+    /// Which frame it shows, and for which render (its key), so the same
+    /// frame is not decoded and uploaded again every frame.
+    frame_index: u32,
+    render_key: String,
 }
 
 pub struct MilkdropPreview {
@@ -55,12 +84,12 @@ pub struct MilkdropPreview {
     bundled_presets: Option<PathBuf>,
     /// Pre-rendered frames of every MilkDrop clip in the project.
     prerenders: HashMap<ClipId, MilkdropPrerender>,
-    /// The frame currently uploaded to the graphics card.
-    texture: Option<egui::TextureHandle>,
-    /// Which clip and frame `texture` shows, and for which render (its key),
-    /// so the same frame is not decoded and uploaded again every frame.
-    texture_content: Option<(ClipId, u32, String)>,
-    shown: Shown,
+    /// Renders that are wanted but not started yet: the key of the wanted
+    /// job and since when it has been wanted unchanged.
+    waiting_since: HashMap<ClipId, (String, Instant)>,
+    textures: HashMap<ClipId, LayerTexture>,
+    /// The visualizers at the playhead, bottom layer first.
+    layers: Vec<ShownLayer>,
 }
 
 impl MilkdropPreview {
@@ -68,9 +97,9 @@ impl MilkdropPreview {
         Self {
             bundled_presets,
             prerenders: HashMap::new(),
-            texture: None,
-            texture_content: None,
-            shown: Shown::default(),
+            waiting_since: HashMap::new(),
+            textures: HashMap::new(),
+            layers: Vec::new(),
         }
     }
 
@@ -89,9 +118,9 @@ impl MilkdropPreview {
         let (_all_sources, clips_still_loading) = project_audio_sources(session, audio_store);
         let is_audio_ready = clips_still_loading == 0;
 
-        // What should be rendered: one job per MilkDrop clip.
-        let mut wanted: Vec<(ClipId, PrerenderJob)> = Vec::new();
         if is_audio_ready {
+            // What should be rendered: one job per MilkDrop clip.
+            let mut wanted: Vec<(ClipId, PrerenderJob)> = Vec::new();
             for (clip, preset) in project.milkdrop_clips() {
                 // A bundled preset this installation does not have cannot
                 // be rendered; the preview says so further down.
@@ -101,12 +130,13 @@ impl MilkdropPreview {
                     continue;
                 };
                 let clip_seconds = clip.duration_milliseconds as f64 / 1000.0;
+                let (width, height) = render_size(settings.width, settings.height, clip.placement);
                 wanted.push((
                     clip.id,
                     PrerenderJob {
                         preset_path: preset_file.to_string_lossy().into_owned(),
-                        width: PREVIEW_WIDTH,
-                        height: preview_height(settings.width, settings.height),
+                        width,
+                        height,
                         frames_per_second,
                         frame_count: (clip_seconds * f64::from(frames_per_second)).ceil() as u32,
                         start_seconds: clip.start_milliseconds as f64 / 1000.0,
@@ -116,33 +146,7 @@ impl MilkdropPreview {
                     },
                 ));
             }
-
-            // Forget renders that no longer match the project: the clip is
-            // gone, or its preset, length or audio changed. Dropping a
-            // render also stops its thread.
-            self.prerenders.retain(|clip_id, prerender| {
-                wanted
-                    .iter()
-                    .any(|(wanted_id, job)| wanted_id == clip_id && job.key() == prerender.key())
-            });
-
-            // Start missing renders, one at a time: each one uses the
-            // graphics card and a processor core.
-            let is_rendering = self
-                .prerenders
-                .values()
-                .any(|prerender| !prerender.is_finished());
-            if !is_rendering
-                && let Some((clip_id, job)) = wanted
-                    .into_iter()
-                    .find(|(clip_id, _)| !self.prerenders.contains_key(clip_id))
-            {
-                let ctx = ctx.clone();
-                // Called on the render thread as frames get finished, so
-                // the window redraws and shows progress and new frames.
-                let prerender = MilkdropPrerender::start(job, move || ctx.request_repaint());
-                self.prerenders.insert(clip_id, prerender);
-            }
+            self.start_and_drop_renders(ctx, wanted);
         }
 
         // What to show at the playhead.
@@ -152,78 +156,180 @@ impl MilkdropPreview {
         let last_millisecond = settings.duration_milliseconds.saturating_sub(1);
         let playhead_seconds = session.playhead_seconds();
         let lookup_milliseconds = ((playhead_seconds * 1000.0) as u64).min(last_millisecond);
-        let Some((clip, preset)) = project.milkdrop_clip_at(lookup_milliseconds) else {
-            self.shown = Shown::NotActive;
-            return;
-        };
-        if resolve_preset_path(&preset.path, self.bundled_presets.as_deref()).is_none() {
-            self.shown = Shown::Failed(format!(
-                "{} ships with VizX, but the bundled presets were not found on this computer.",
-                preset.file_name()
-            ));
+
+        self.layers.clear();
+        // The project lists layers from the top down; drawing goes from the
+        // bottom up, so that higher layers cover lower ones.
+        for (track, clip, preset) in project
+            .milkdrop_layers_at(lookup_milliseconds)
+            .into_iter()
+            .rev()
+        {
+            let is_preset_missing =
+                resolve_preset_path(&preset.path, self.bundled_presets.as_deref()).is_none();
+            let shown = if is_preset_missing {
+                Shown::Failed(format!(
+                    "{} ships with VizX, but the bundled presets were not found on this computer.",
+                    preset.file_name()
+                ))
+            } else if !is_audio_ready {
+                Shown::WaitingForAudio
+            } else {
+                let seconds_into_clip = playhead_seconds - clip.start_milliseconds as f64 / 1000.0;
+                let frame = (seconds_into_clip.max(0.0) * f64::from(frames_per_second)) as u32;
+                self.show_frame(ctx, clip.id, frame)
+            };
+            self.layers.push(ShownLayer {
+                clip_id: clip.id,
+                track_id: track.id,
+                placement: clip.placement,
+                shown,
+            });
+        }
+    }
+
+    /// Forgets renders that no longer match the project and starts the
+    /// missing ones.
+    fn start_and_drop_renders(&mut self, ctx: &egui::Context, wanted: Vec<(ClipId, PrerenderJob)>) {
+        // A render no longer matches when its clip is gone, or its preset,
+        // size, length or audio changed. Dropping it also stops its thread.
+        self.prerenders.retain(|clip_id, prerender| {
+            wanted
+                .iter()
+                .any(|(wanted_id, job)| wanted_id == clip_id && job.key() == prerender.key())
+        });
+        self.textures
+            .retain(|clip_id, _| wanted.iter().any(|(wanted_id, _)| wanted_id == clip_id));
+
+        // Note since when each missing render has been wanted unchanged.
+        let now = Instant::now();
+        let mut still_waiting = HashMap::new();
+        for (clip_id, job) in &wanted {
+            if self.prerenders.contains_key(clip_id) {
+                continue;
+            }
+            let key = job.key();
+            let since = match self.waiting_since.get(clip_id) {
+                Some((waiting_key, since)) if *waiting_key == key => *since,
+                _ => now,
+            };
+            still_waiting.insert(*clip_id, (key, since));
+        }
+        self.waiting_since = still_waiting;
+        if !self.waiting_since.is_empty() {
+            // Look again when the delay is over, even without user input.
+            ctx.request_repaint_after(RENDER_START_DELAY);
+        }
+
+        // Start one render at a time: each one uses the graphics card and a
+        // processor core.
+        let is_rendering = self
+            .prerenders
+            .values()
+            .any(|prerender| !prerender.is_finished());
+        if is_rendering {
             return;
         }
-        let Some(prerender) = self.prerenders.get(&clip.id) else {
-            self.shown = if is_audio_ready {
-                // Queued behind another clip's render.
-                Shown::Rendering {
-                    finished: 0,
-                    total: 0,
-                }
-            } else {
-                Shown::WaitingForAudio
+        let ready_to_start = wanted.into_iter().find(|(clip_id, _)| {
+            self.waiting_since
+                .get(clip_id)
+                .is_some_and(|(_, since)| now.duration_since(*since) >= RENDER_START_DELAY)
+        });
+        if let Some((clip_id, job)) = ready_to_start {
+            let ctx = ctx.clone();
+            // Called on the render thread as frames get finished, so the
+            // window redraws and shows progress and new frames.
+            let prerender = MilkdropPrerender::start(job, move || ctx.request_repaint());
+            self.prerenders.insert(clip_id, prerender);
+            self.waiting_since.remove(&clip_id);
+        }
+    }
+
+    /// Makes sure the texture of a clip shows the given frame, and says
+    /// what can be drawn for the clip.
+    fn show_frame(&mut self, ctx: &egui::Context, clip_id: ClipId, frame: u32) -> Shown {
+        let Some(prerender) = self.prerenders.get(&clip_id) else {
+            // Queued behind another clip's render, or about to start.
+            return Shown::Rendering {
+                finished: 0,
+                total: 0,
             };
-            return;
         };
         if let Some(error) = prerender.error() {
-            self.shown = Shown::Failed(error);
-            return;
+            return Shown::Failed(error);
         }
 
-        let seconds_into_clip = playhead_seconds - clip.start_milliseconds as f64 / 1000.0;
-        let frame_index = ((seconds_into_clip * f64::from(frames_per_second)) as u32)
-            .min(prerender.frame_count().saturating_sub(1));
-
-        let content = (clip.id, frame_index, prerender.key().to_owned());
-        if self.texture_content.as_ref() == Some(&content) {
-            self.shown = Shown::Picture;
-            return;
+        let frame_index = frame.min(prerender.frame_count().saturating_sub(1));
+        if let Some(texture) = self.textures.get(&clip_id)
+            && texture.frame_index == frame_index
+            && texture.render_key == prerender.key()
+        {
+            return Shown::Picture;
         }
         let Some(frame) = prerender.frame(frame_index) else {
-            self.shown = Shown::Rendering {
+            return Shown::Rendering {
                 finished: prerender.finished_frame_count(),
                 total: prerender.frame_count(),
             };
-            return;
         };
 
         let image = egui::ColorImage::from_rgba_unmultiplied(
             [frame.width as usize, frame.height as usize],
             &frame.pixels,
         );
-        match &mut self.texture {
-            Some(texture) => texture.set(image, egui::TextureOptions::LINEAR),
+        let render_key = prerender.key().to_owned();
+        match self.textures.get_mut(&clip_id) {
+            Some(texture) => {
+                texture.handle.set(image, egui::TextureOptions::LINEAR);
+                texture.frame_index = frame_index;
+                texture.render_key = render_key;
+            }
             None => {
-                self.texture =
-                    Some(ctx.load_texture("milkdrop_preview", image, egui::TextureOptions::LINEAR));
+                let handle = ctx.load_texture(
+                    format!("milkdrop_preview_{clip_id:?}"),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.textures.insert(
+                    clip_id,
+                    LayerTexture {
+                        handle,
+                        frame_index,
+                        render_key,
+                    },
+                );
             }
         }
-        self.texture_content = Some(content);
-        self.shown = Shown::Picture;
+        Shown::Picture
     }
 
-    /// What the preview panel should show.
-    pub fn view(&self) -> MilkdropView<'_> {
-        match (&self.shown, &self.texture) {
-            (Shown::Picture, Some(texture)) => MilkdropView::Picture(texture),
-            (Shown::Picture, None) | (Shown::NotActive, _) => MilkdropView::NotActive,
-            (Shown::Rendering { finished, total }, _) => MilkdropView::Rendering {
-                finished: *finished,
-                total: *total,
-            },
-            (Shown::WaitingForAudio, _) => MilkdropView::WaitingForAudio,
-            (Shown::Failed(reason), _) => MilkdropView::Failed(reason.clone()),
-        }
+    /// The visualizers at the playhead, in drawing order: the bottom layer
+    /// first, the top layer last.
+    pub fn layers(&self) -> Vec<LayerView<'_>> {
+        self.layers
+            .iter()
+            .map(|layer| {
+                let content = match (&layer.shown, self.textures.get(&layer.clip_id)) {
+                    (Shown::Picture, Some(texture)) => LayerContent::Picture(&texture.handle),
+                    (Shown::Picture, None) => LayerContent::Rendering {
+                        finished: 0,
+                        total: 0,
+                    },
+                    (Shown::Rendering { finished, total }, _) => LayerContent::Rendering {
+                        finished: *finished,
+                        total: *total,
+                    },
+                    (Shown::WaitingForAudio, _) => LayerContent::WaitingForAudio,
+                    (Shown::Failed(reason), _) => LayerContent::Failed(reason.clone()),
+                };
+                LayerView {
+                    clip_id: layer.clip_id,
+                    track_id: layer.track_id,
+                    placement: layer.placement,
+                    content,
+                }
+            })
+            .collect()
     }
 
     /// Overall pre-render progress for the status bar: finished and total
@@ -259,8 +365,38 @@ pub struct PrerenderProgress {
     pub stored_bytes: u64,
 }
 
+/// Size in pixels at which a clip is rendered for the preview: its share of
+/// a [`PREVIEW_WIDTH`] wide picture of the composition. The picture then has
+/// the clip's own shape, so a preset is rendered for that shape instead of
+/// being squeezed into it.
+fn render_size(
+    composition_width: u32,
+    composition_height: u32,
+    placement: Placement,
+) -> (u32, u32) {
+    let full_height = preview_height(composition_width, composition_height);
+    (
+        even_edge(f64::from(PREVIEW_WIDTH) * placement.width),
+        even_edge(f64::from(full_height) * placement.height),
+    )
+}
+
+/// An edge length within the allowed range, rounded to an even number (some
+/// graphics drivers dislike odd sizes).
+fn even_edge(pixels: f64) -> u32 {
+    let (smallest, largest) = RENDER_EDGE_RANGE;
+    let rounded = if pixels.is_finite() {
+        pixels
+            .round()
+            .clamp(f64::from(smallest), f64::from(largest)) as u32
+    } else {
+        smallest
+    };
+    (rounded / 2) * 2
+}
+
 /// Height matching the composition's aspect ratio at [`PREVIEW_WIDTH`],
-/// rounded to an even number (some graphics drivers dislike odd sizes).
+/// rounded to an even number.
 fn preview_height(composition_width: u32, composition_height: u32) -> u32 {
     let exact = u64::from(PREVIEW_WIDTH) * u64::from(composition_height)
         / u64::from(composition_width.max(1));
@@ -278,5 +414,40 @@ mod tests {
         assert_eq!(preview_height(1000, 1000), 640);
         assert_eq!(preview_height(1920, 1), 2);
         assert_eq!(preview_height(0, 1080) % 2, 0);
+    }
+
+    #[test]
+    fn a_clip_is_rendered_at_its_share_of_the_preview_picture() {
+        assert_eq!(render_size(1920, 1080, Placement::FULL), (640, 360));
+
+        let left_half = Placement {
+            x: 0.0,
+            y: 0.0,
+            width: 0.5,
+            height: 1.0,
+        };
+        assert_eq!(render_size(1920, 1080, left_half), (320, 360));
+
+        // Moving a clip does not change its size, so nothing is re-rendered.
+        let moved = Placement {
+            x: 0.4,
+            y: -0.2,
+            ..left_half
+        };
+        assert_eq!(render_size(1920, 1080, moved), (320, 360));
+
+        // Sizes stay even and within the allowed range.
+        let tiny = Placement {
+            width: 0.001,
+            height: 0.001,
+            ..Placement::FULL
+        };
+        assert_eq!(render_size(1920, 1080, tiny), (16, 16));
+        let huge = Placement {
+            width: 100.0,
+            height: 100.0,
+            ..Placement::FULL
+        };
+        assert_eq!(render_size(1920, 1080, huge), (1920, 1920));
     }
 }

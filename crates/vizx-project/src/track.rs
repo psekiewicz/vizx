@@ -53,7 +53,7 @@ impl TrackKind {
 }
 
 /// One horizontal lane of the timeline.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
     pub name: String,
@@ -80,7 +80,7 @@ impl Track {
 pub struct ClipId(pub(crate) u64);
 
 /// A piece of media placed on a track at a point in project time.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
     pub id: ClipId,
     /// The media source this clip plays.
@@ -95,6 +95,73 @@ pub struct Clip {
     /// to the whole mix.
     #[serde(default)]
     pub audio_input: AudioInput,
+    /// Where in the picture a visual clip is drawn. Not used by audio
+    /// clips. Files from format version 7 and older have no such field;
+    /// their clips fill the whole frame.
+    #[serde(default)]
+    pub placement: Placement,
+}
+
+/// The rectangle of the composition a visual clip is drawn into.
+///
+/// All four values are fractions of the composition: `x` and `width` of its
+/// width, `y` and `height` of its height, with (0, 0) at the top left. A
+/// placement therefore keeps its meaning when the composition size changes,
+/// e.g. from a 1080p draft to a 4K export. A clip may reach beyond the
+/// frame; the part outside is simply not visible.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Placement {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Placement {
+    /// Covers the whole composition.
+    pub const FULL: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
+    /// Smallest and largest allowed width and height.
+    pub const MIN_SIZE: f64 = 0.02;
+    pub const MAX_SIZE: f64 = 3.0;
+
+    pub fn right(self) -> f64 {
+        self.x + self.width
+    }
+
+    pub fn bottom(self) -> f64 {
+        self.y + self.height
+    }
+
+    /// The nearest valid placement: a sensible size, and at least a sliver
+    /// of the clip still inside the frame, so it can always be found and
+    /// dragged back. Values that are not numbers give [`Placement::FULL`].
+    pub fn sanitized(self) -> Self {
+        let all_finite = [self.x, self.y, self.width, self.height]
+            .iter()
+            .all(|value| value.is_finite());
+        if !all_finite {
+            return Self::FULL;
+        }
+        let width = self.width.clamp(Self::MIN_SIZE, Self::MAX_SIZE);
+        let height = self.height.clamp(Self::MIN_SIZE, Self::MAX_SIZE);
+        Self {
+            x: self.x.clamp(Self::MIN_SIZE - width, 1.0 - Self::MIN_SIZE),
+            y: self.y.clamp(Self::MIN_SIZE - height, 1.0 - Self::MIN_SIZE),
+            width,
+            height,
+        }
+    }
+}
+
+impl Default for Placement {
+    fn default() -> Self {
+        Self::FULL
+    }
 }
 
 /// The audio a visual element reacts to.
