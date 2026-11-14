@@ -5,6 +5,7 @@
 
 mod app;
 mod graphics;
+mod milkdrop_preview;
 mod theme;
 mod transport;
 mod ui;

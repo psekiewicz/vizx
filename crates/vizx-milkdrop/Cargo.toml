@@ -1,0 +1,20 @@
+[package]
+name = "vizx-milkdrop"
+description = "MilkDrop preset rendering for VizX through the projectM library. No GUI code."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Loads the projectM library while VizX is running.
+libloading.workspace = true
+
+# Creating the off-screen OpenGL context uses the Windows API (WGL).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_OpenGL",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }

@@ -2863,7 +2863,16 @@ name = "vizx-core"
 version = "0.1.0"
 dependencies = [
  "vizx-audio",
+ "vizx-milkdrop",
  "vizx-project",
+]
+
+[[package]]
+name = "vizx-milkdrop"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

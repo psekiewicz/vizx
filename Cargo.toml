@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/vizx-app", "crates/vizx-audio", "crates/vizx-core", "crates/vizx-project"]
+members = [
+    "crates/vizx-app",
+    "crates/vizx-audio",
+    "crates/vizx-core",
+    "crates/vizx-milkdrop",
+    "crates/vizx-project",
+]
 
 # Values shared by every crate in the workspace. A crate opts in with
 # `version.workspace = true` etc., so there is one place to bump them.
@@ -14,6 +20,7 @@ repository = "https://github.com/psekiewicz/vizx"
 [workspace.dependencies]
 vizx-audio = { path = "crates/vizx-audio" }
 vizx-core = { path = "crates/vizx-core" }
+vizx-milkdrop = { path = "crates/vizx-milkdrop" }
 vizx-project = { path = "crates/vizx-project" }
 
 # egui_dock 0.21 is built against egui 0.36, so eframe/egui must stay on 0.36
@@ -27,6 +34,11 @@ eframe = { version = "0.36", default-features = false, features = [
 egui_dock = "0.21"
 # Native open/save file dialogs of the operating system.
 rfd = "0.18"
+# Loads a dynamic library (DLL / .so) at run time; used for projectM.
+libloading = "0.8"
+# Raw Windows API, used only to create the off-screen OpenGL context for
+# projectM. Each crate lists the API areas (features) it needs.
+windows-sys = "0.61"
 # Sends audio to the sound card (WASAPI on Windows, ALSA on Linux).
 cpal = "0.18"
 # Reads audio files (pure Rust, no system libraries). Only the formats

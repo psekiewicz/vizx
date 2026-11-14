@@ -12,13 +12,15 @@ its own copy of anything.
 
 ## Crates
 
-The workspace has four crates. Dependencies point in one direction only:
+The workspace has five crates. Dependencies point in one direction only:
 
 ```text
 vizx-app  ──►  vizx-core  ──►  vizx-project
  (GUI)         (logic)    │     (data)
-                          └──►  vizx-audio
-                                (audio files)
+                          ├──►  vizx-audio
+                          │     (audio files, playback)
+                          └──►  vizx-milkdrop
+                                (MilkDrop presets via projectM)
 ```
 
 `vizx-project` and `vizx-audio` do not know about each other. `vizx-core`
@@ -29,6 +31,7 @@ in the project.
 |---|---|---|
 | `vizx-project` | What a project *is*: plain serializable data. | GUI, rendering, audio devices, file dialogs |
 | `vizx-audio` | Audio files and the sound card: reading file properties, decoding, waveform peaks, mixing and playback. Later: analysis (FFT, beats). | GUI, project data |
+| `vizx-milkdrop` | Rendering MilkDrop presets to pixels with the projectM library. The only crate with `unsafe` code, C declarations and OpenGL. | GUI, project data |
 | `vizx-core` | Editing state and logic operating on a project. Future home of subsystem coordination. | GUI code |
 | `vizx-app` | The window, panels, menus and visual style. | Project rules or logic that other front ends would need |
 
@@ -119,7 +122,7 @@ the current layout from then on.
 
 Version **3** reduced the track kinds to two; the former `Visualizer`,
 `Animation` and `Text` kinds load as `Visual`. Version **4** added media
-sources and clips.
+sources and clips. Version **6** added MilkDrop presets as a kind of media.
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -158,6 +161,19 @@ shapes the timeline:
 Audio files are read by `symphonia`, a pure-Rust library with no system
 dependencies. Only the formats VizX supports are compiled in: WAV, MP3,
 FLAC, Ogg Vorbis and AAC/M4A.
+
+### MilkDrop visualizer
+
+VizX shows original MilkDrop presets by running them in projectM, a C++
+library that draws with OpenGL. This is the one deliberate exception to "Rust
+and wgpu only": an imitation written from scratch would not look like
+MilkDrop. The exception is contained in the `vizx-milkdrop` crate, projectM
+is optional and loaded at run time, and everything else in VizX only sees
+"preset and audio in, RGBA pixels out". See [milkdrop.md](milkdrop.md) for
+the design, setup, licensing (LGPL) and limitations.
+
+In the project, a preset is a kind of media (`MediaContent::MilkdropPreset`)
+placed as a clip on a visual layer.
 
 ### Playback and the project clock
 
@@ -300,7 +316,7 @@ crate. Cross-crate integration tests will go into the relevant crate's own
 ### Minimal dependencies
 
 Direct dependencies: `eframe`, `egui_dock`, `rfd`, `serde`, `serde_json`,
-`symphonia` and `cpal`.
+`symphonia`, `cpal`, `libloading` and (Windows only) `windows-sys`.
 Planned libraries (cpal, RustFFT, FFmpeg bindings) are added in the
 milestone that first uses them.
 

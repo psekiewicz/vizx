@@ -2,20 +2,22 @@ use eframe::egui::{self, Align2, Color32, FontId, Rect, Stroke, StrokeKind};
 use vizx_core::EditorSession;
 
 use crate::app::AppCommand;
+use crate::milkdrop_preview::MilkdropView;
 use crate::theme;
 
 /// Empty space kept between the composition frame and the panel edges.
 const FRAME_MARGIN: f32 = 24.0;
 
-/// Draws the composition area.
+/// Draws the composition at the playhead.
 ///
-/// There is no renderer yet, so this only shows an empty frame. The frame
-/// does use the real composition size from the project settings, so changing
-/// the resolution in the Properties panel changes its shape here.
+/// The frame has the shape of the project's composition size. So far the
+/// only thing a composition can contain is a MilkDrop visualizer; its
+/// latest picture is stretched to fill the frame.
 pub fn show(
     ui: &mut egui::Ui,
     session: &EditorSession,
     requested_command: &mut Option<AppCommand>,
+    milkdrop: &MilkdropView<'_>,
 ) {
     let settings = &session.project().settings;
     let panel_rect = ui.available_rect_before_wrap();
@@ -33,13 +35,38 @@ pub fn show(
         Stroke::new(1.0, theme::SEPARATOR),
         StrokeKind::Outside,
     );
-    painter.text(
-        composition_rect.center(),
-        Align2::CENTER_CENTER,
-        "Composition preview",
-        FontId::proportional(14.0),
-        theme::TEXT_MUTED,
-    );
+
+    // A message in the middle of the frame, when there is no picture.
+    let message = match milkdrop {
+        MilkdropView::Picture(texture) => {
+            // The whole texture (0,0 to 1,1) drawn over the whole frame.
+            let whole_texture = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            painter.image(
+                texture.id(),
+                composition_rect,
+                whole_texture,
+                Color32::WHITE,
+            );
+            None
+        }
+        MilkdropView::NotActive => Some("Nothing to show at this time".to_owned()),
+        MilkdropView::Waiting => Some("Starting MilkDrop...".to_owned()),
+        MilkdropView::Failed(reason) => Some(reason.clone()),
+    };
+    if let Some(message) = message {
+        let galley = painter.layout(
+            message,
+            FontId::proportional(13.0),
+            theme::TEXT_MUTED,
+            (composition_rect.width() - 24.0).max(40.0),
+        );
+        painter.galley(
+            composition_rect.center() - galley.size() / 2.0,
+            galley,
+            theme::TEXT_MUTED,
+        );
+    }
+
     painter.text(
         composition_rect.left_bottom() + egui::vec2(6.0, -6.0),
         Align2::LEFT_BOTTOM,
@@ -56,6 +83,10 @@ pub fn show(
     // Claim the whole panel and offer a context menu on right-click.
     let response = ui.allocate_rect(panel_rect, egui::Sense::click());
     response.context_menu(|ui| {
+        if ui.button("Add MilkDrop Preset...").clicked() {
+            *requested_command = Some(AppCommand::AddMilkdropPreset);
+        }
+        ui.separator();
         if ui.button("Project Settings...").clicked() {
             *requested_command = Some(AppCommand::OpenProjectSettings);
         }

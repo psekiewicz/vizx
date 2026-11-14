@@ -32,11 +32,16 @@ impl MediaSource {
             .unwrap_or(&self.path)
     }
 
-    /// Length of the media in milliseconds.
-    pub fn duration_milliseconds(&self) -> u64 {
+    /// The audio properties, if this is an audio file.
+    pub fn audio(&self) -> Option<&AudioProperties> {
         match &self.content {
-            MediaContent::Audio(audio) => audio.duration_milliseconds,
+            MediaContent::Audio(audio) => Some(audio),
+            MediaContent::MilkdropPreset => None,
         }
+    }
+
+    pub fn is_milkdrop_preset(&self) -> bool {
+        matches!(self.content, MediaContent::MilkdropPreset)
     }
 }
 
@@ -45,6 +50,9 @@ impl MediaSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MediaContent {
     Audio(AudioProperties),
+    /// A MilkDrop visualizer preset (a `.milk` file). It has no length of
+    /// its own: it produces a picture for as long as its clip lasts.
+    MilkdropPreset,
 }
 
 /// Properties of an audio file, read once when it is imported.

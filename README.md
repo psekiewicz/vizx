@@ -9,8 +9,9 @@ single project and share one timeline.
 
 > **Status: early prototype.**
 > The application window, dockable panel layout, project files (`.vzx`), an
-> adaptive timeline with tracks, audio import, waveform display and audio
-> playback exist. There is no visual rendering or export yet.
+> adaptive timeline with tracks, audio import, waveform display, audio
+> playback and a live MilkDrop visualizer preview exist. There is no export
+> yet.
 
 ## Technology
 
@@ -34,6 +35,7 @@ vizx/
 ├── crates/
 │   ├── vizx-project/      Project data model (no GUI)
 │   ├── vizx-audio/        Audio files, mixing and playback (no GUI)
+│   ├── vizx-milkdrop/     MilkDrop presets through projectM (no GUI)
 │   ├── vizx-core/         Shared application logic (no GUI)
 │   └── vizx-app/          Desktop application: window and interface
 ├── assets/                Icons, fonts and shaders (empty for now)
@@ -53,6 +55,9 @@ together and why.
 - **Linux:** a C toolchain plus the usual X11/Wayland development packages.
 
 No dedicated GPU is required.
+
+Optional: the [projectM](docs/milkdrop.md) library, for MilkDrop presets.
+VizX builds and runs without it.
 
 ## Build, run, test
 

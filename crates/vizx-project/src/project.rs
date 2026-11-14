@@ -180,6 +180,56 @@ impl Project {
         (media_id, track_id)
     }
 
+    /// Adds a MilkDrop preset to the media library and places it on a
+    /// visual layer, covering the whole project.
+    ///
+    /// Like audio, it goes onto the first layer that is still empty, and a
+    /// new layer is created only if all of them are in use.
+    pub fn add_milkdrop_preset(&mut self, path: impl Into<String>) -> (MediaId, TrackId) {
+        let media_id = MediaId(self.next_media_id);
+        self.next_media_id += 1;
+        self.media.push(MediaSource {
+            id: media_id,
+            path: path.into(),
+            content: MediaContent::MilkdropPreset,
+        });
+
+        let free_layer = self
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Visual && track.clips.is_empty())
+            .map(|track| track.id);
+        let track_id =
+            free_layer.unwrap_or_else(|| self.add_default_named_track(TrackKind::Visual));
+
+        let clip = Clip {
+            id: ClipId(self.next_clip_id),
+            media: media_id,
+            start_milliseconds: 0,
+            duration_milliseconds: self.settings.duration_milliseconds,
+        };
+        self.next_clip_id += 1;
+        if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
+            track.clips.push(clip);
+        }
+
+        (media_id, track_id)
+    }
+
+    /// The MilkDrop preset shown at a point in time: the one on the topmost
+    /// visual layer that has a preset clip covering that time.
+    pub fn milkdrop_preset_at(&self, milliseconds: u64) -> Option<&MediaSource> {
+        self.tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Visual)
+            .flat_map(|track| &track.clips)
+            .filter(|clip| {
+                milliseconds >= clip.start_milliseconds && milliseconds < clip.end_milliseconds()
+            })
+            .filter_map(|clip| self.media_source(clip.media))
+            .find(|source| source.is_milkdrop_preset())
+    }
+
     /// Renames a track. Returns `true` only if the name actually changed.
     pub fn rename_track(&mut self, id: TrackId, name: &str) -> bool {
         match self.tracks.iter_mut().find(|track| track.id == id) {
@@ -343,6 +393,39 @@ mod tests {
             project.media_source(unix).unwrap().file_name(),
             "track 02.ogg"
         );
+    }
+
+    #[test]
+    fn milkdrop_preset_fills_the_first_empty_layer_for_the_whole_project() {
+        let mut project = Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 90_000;
+
+        let (media_id, track_id) = project.add_milkdrop_preset("D:/presets/Geiss - Swirl.milk");
+
+        let track = project.track(track_id).unwrap();
+        assert_eq!(track.name, "Layer 1");
+        assert_eq!(track.clips[0].media, media_id);
+        assert_eq!(track.clips[0].start_milliseconds, 0);
+        assert_eq!(track.clips[0].duration_milliseconds, 90_000);
+        let source = project.media_source(media_id).unwrap();
+        assert!(source.is_milkdrop_preset());
+        assert!(source.audio().is_none());
+        assert_eq!(source.file_name(), "Geiss - Swirl.milk");
+    }
+
+    #[test]
+    fn preset_at_a_time_comes_from_the_topmost_layer_covering_it() {
+        let mut project = Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 10_000;
+        project.import_audio("song.wav", audio(10_000));
+        assert!(project.milkdrop_preset_at(0).is_none());
+
+        project.add_milkdrop_preset("bottom.milk"); // goes onto "Layer 1"
+        project.add_milkdrop_preset("top.milk"); // new layer, added on top
+
+        assert_eq!(project.milkdrop_preset_at(5_000).unwrap().path, "top.milk");
+        // The clip covers 0..10000; its end is not part of it.
+        assert!(project.milkdrop_preset_at(10_000).is_none());
     }
 
     #[test]

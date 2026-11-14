@@ -5,6 +5,7 @@ use egui_dock::{DockArea, DockState, NodeIndex};
 use vizx_core::{AudioStore, EditorSession};
 
 use crate::app::AppCommand;
+use crate::milkdrop_preview::MilkdropView;
 use crate::theme;
 use crate::ui::panels;
 use crate::ui::panels::timeline::TimelineView;
@@ -77,12 +78,13 @@ impl Workspace {
     }
 
     /// Draws all panels. A panel that wants an application command executed
-    /// (for example "open project settings") writes it to equested_command.
+    /// (for example "open project settings") writes it to `requested_command`.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         session: &mut EditorSession,
         audio_store: &AudioStore,
+        milkdrop: &MilkdropView<'_>,
         requested_command: &mut Option<AppCommand>,
     ) {
         let style = theme::dock_style(ui.style());
@@ -90,6 +92,7 @@ impl Workspace {
             session,
             timeline_view: &mut self.timeline_view,
             audio_store,
+            milkdrop,
             requested_command,
         };
 
@@ -135,6 +138,7 @@ struct PanelViewer<'session> {
     session: &'session mut EditorSession,
     timeline_view: &'session mut TimelineView,
     audio_store: &'session AudioStore,
+    milkdrop: &'session MilkdropView<'session>,
     requested_command: &'session mut Option<AppCommand>,
 }
 
@@ -155,7 +159,7 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
                 panels::media_library::show(ui, self.session, self.requested_command);
             }
             PanelKind::Preview => {
-                panels::preview::show(ui, self.session, self.requested_command);
+                panels::preview::show(ui, self.session, self.requested_command, self.milkdrop);
             }
             PanelKind::Properties => panels::properties::show(ui, self.session),
             PanelKind::Timeline => {

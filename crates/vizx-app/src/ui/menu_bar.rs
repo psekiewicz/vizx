@@ -40,6 +40,13 @@ fn file_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
         "Ctrl+I",
         AppCommand::ImportAudio,
     );
+    command_item(
+        ui,
+        app,
+        "Add MilkDrop Preset...",
+        "Ctrl+M",
+        AppCommand::AddMilkdropPreset,
+    );
     ui.separator();
     command_item(
         ui,

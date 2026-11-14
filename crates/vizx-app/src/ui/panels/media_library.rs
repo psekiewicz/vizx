@@ -1,6 +1,5 @@
 use eframe::egui;
 use vizx_core::EditorSession;
-use vizx_project::MediaContent;
 
 use crate::app::AppCommand;
 use crate::theme;
@@ -21,15 +20,22 @@ pub fn show(
     }
     ui.add_space(4.0);
 
+    if ui.button("Add MilkDrop Preset...").clicked() {
+        *requested_command = Some(AppCommand::AddMilkdropPreset);
+    }
+    ui.add_space(4.0);
+
+    let media = session.project().media();
+
     egui::CollapsingHeader::new("Audio Sources")
         .default_open(true)
         .show(ui, |ui| {
-            let media = session.project().media();
-            if media.is_empty() {
-                empty_hint(ui);
-            }
+            let mut is_empty = true;
             for source in media {
-                let MediaContent::Audio(audio) = &source.content;
+                let Some(audio) = source.audio() else {
+                    continue;
+                };
+                is_empty = false;
                 ui.label(source.file_name()).on_hover_text(&source.path);
                 ui.label(
                     egui::RichText::new(format!(
@@ -42,6 +48,28 @@ pub fn show(
                     .color(theme::TEXT_MUTED),
                 );
                 ui.add_space(2.0);
+            }
+            if is_empty {
+                empty_hint(ui);
+            }
+        });
+
+    egui::CollapsingHeader::new("Visualizers")
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut is_empty = true;
+            for source in media.iter().filter(|source| source.is_milkdrop_preset()) {
+                is_empty = false;
+                ui.label(source.file_name()).on_hover_text(&source.path);
+                ui.label(
+                    egui::RichText::new("MilkDrop preset")
+                        .small()
+                        .color(theme::TEXT_MUTED),
+                );
+                ui.add_space(2.0);
+            }
+            if is_empty {
+                empty_hint(ui);
             }
         });
 

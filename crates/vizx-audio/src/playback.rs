@@ -241,6 +241,23 @@ fn fill_from_shared(
     }
 }
 
+/// Mixes the sources into stereo samples (left, right, left, right, ...)
+/// for a stretch of project time, without playing anything.
+///
+/// This is the same mix the sound card receives. Anything that needs to
+/// "hear" the project, such as a visualizer, uses it so that what it reacts
+/// to is exactly what is audible.
+pub fn mix_to_stereo(
+    sources: &[PlaybackSource],
+    sample_rate: u32,
+    start_frame: u64,
+    frame_count: usize,
+) -> Vec<f32> {
+    let mut samples = vec![0.0; frame_count * 2];
+    mix_sources(&mut samples, 2, sample_rate, start_frame, sources);
+    samples
+}
+
 /// Adds every source into `output`, starting at project frame `position`.
 ///
 /// `output` is interleaved with `channel_count` channels at `sample_rate`.
@@ -365,6 +382,15 @@ mod tests {
         mix_sources(&mut output, 1, 10, 0, &sources);
 
         assert_eq!(output, [0.5, 1.0]);
+    }
+
+    #[test]
+    fn stereo_mixdown_matches_what_playback_produces() {
+        let sources = [source(10, &[0.1, 0.2, 0.3, 0.4], 0.0)];
+
+        let samples = mix_to_stereo(&sources, 10, 1, 2);
+
+        assert_eq!(samples, [0.2, 0.2, 0.3, 0.3]);
     }
 
     #[test]

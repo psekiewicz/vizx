@@ -1,6 +1,6 @@
 use eframe::egui;
 use vizx_core::EditorSession;
-use vizx_project::{MediaContent, Track};
+use vizx_project::Track;
 
 use crate::theme;
 use crate::ui::format_duration;
@@ -43,17 +43,23 @@ fn track_properties(ui: &mut egui::Ui, session: &mut EditorSession, track: &Trac
             let Some(source) = session.project().media_source(clip.media) else {
                 continue;
             };
-            let MediaContent::Audio(audio) = &source.content;
-            ui.label(source.file_name()).on_hover_text(&source.path);
-            ui.label(
-                egui::RichText::new(format!(
+            let details = match source.audio() {
+                Some(audio) => format!(
                     "Length {}  |  {} Hz  |  {} ch",
                     format_duration(clip.duration_milliseconds),
                     audio.sample_rate,
                     audio.channel_count
-                ))
-                .small()
-                .color(theme::TEXT_MUTED),
+                ),
+                None => format!(
+                    "MilkDrop preset  |  Length {}",
+                    format_duration(clip.duration_milliseconds)
+                ),
+            };
+            ui.label(source.file_name()).on_hover_text(&source.path);
+            ui.label(
+                egui::RichText::new(details)
+                    .small()
+                    .color(theme::TEXT_MUTED),
             );
         }
     }

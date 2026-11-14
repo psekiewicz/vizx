@@ -6,10 +6,12 @@
 //! rendering) will be coordinated. It must never depend on a GUI library.
 
 mod audio_store;
+mod milkdrop_worker;
 mod selection;
 mod session;
 
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
+pub use milkdrop_worker::{MilkdropFrame, MilkdropFrameRequest, MilkdropWorker};
 pub use selection::Selection;
 pub use session::{EditorSession, UNTITLED_PROJECT_NAME};
 

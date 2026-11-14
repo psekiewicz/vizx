@@ -112,6 +112,28 @@ impl EditorSession {
         Ok(track_id)
     }
 
+    /// Adds a MilkDrop preset (`.milk` file) to the project and places it
+    /// on a visual layer, which becomes selected.
+    ///
+    /// Only the file's existence is checked here. Whether projectM can
+    /// actually run the preset is found out when it is first drawn.
+    pub fn add_milkdrop_preset(&mut self, path: &Path) -> Result<TrackId, String> {
+        let is_milk_file = path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("milk"));
+        if !is_milk_file {
+            return Err("not a MilkDrop preset (.milk) file".to_owned());
+        }
+        if !path.is_file() {
+            return Err("the file does not exist".to_owned());
+        }
+
+        let (_media_id, track_id) = self.project.add_milkdrop_preset(path.to_string_lossy());
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        Ok(track_id)
+    }
+
     /// Removes a track, clearing the selection if it was selected.
     pub fn remove_track(&mut self, id: TrackId) {
         if self.project.remove_track(id) {
@@ -265,6 +287,28 @@ mod tests {
         assert_eq!(session.playhead_seconds(), 0.0);
 
         assert!(!session.has_unsaved_changes());
+    }
+
+    #[test]
+    fn only_existing_milk_files_can_be_added_as_presets() {
+        let mut session = EditorSession::new_untitled();
+        let folder = std::env::temp_dir();
+        let preset = folder.join(format!("vizx-session-preset-{}.milk", std::process::id()));
+        std::fs::write(&preset, "[preset00]\n").unwrap();
+
+        let wrong_extension = session.add_milkdrop_preset(&folder.join("song.mp3"));
+        let missing = session.add_milkdrop_preset(&folder.join("vizx-no-such-preset.milk"));
+        assert!(!session.has_unsaved_changes());
+
+        let added = session.add_milkdrop_preset(&preset);
+        let _ = std::fs::remove_file(&preset);
+
+        assert!(wrong_extension.is_err());
+        assert!(missing.is_err());
+        let track_id = added.unwrap();
+        assert_eq!(session.selection(), Selection::Track(track_id));
+        assert!(session.has_unsaved_changes());
+        assert!(session.project().milkdrop_preset_at(0).is_some());
     }
 
     #[test]

@@ -6,6 +6,39 @@ use vizx_audio::{AudioPlayer, PlaybackError, PlaybackSource};
 use vizx_core::{AudioStore, EditorSession};
 use vizx_project::TrackKind;
 
+/// Everything on the project's audio tracks that can be heard right now:
+/// every audio clip whose file has finished loading, placed at its position
+/// on the timeline. Also returns how many clips are not loaded yet.
+///
+/// Playback and the visualizer both use this, so the visualizer reacts to
+/// exactly what is audible.
+pub fn project_audio_sources(
+    session: &EditorSession,
+    audio_store: &AudioStore,
+) -> (Vec<PlaybackSource>, usize) {
+    let mut sources = Vec::new();
+    let mut clips_still_loading = 0;
+    for track in session.project().tracks() {
+        if track.kind != TrackKind::Audio {
+            continue;
+        }
+        for clip in &track.clips {
+            let loaded = session
+                .project()
+                .media_source(clip.media)
+                .and_then(|source| audio_store.loaded(&source.path));
+            match loaded {
+                Some(loaded) => sources.push(PlaybackSource {
+                    audio: loaded.audio.clone(),
+                    start_seconds: clip.start_milliseconds as f64 / 1000.0,
+                }),
+                None => clips_still_loading += 1,
+            }
+        }
+    }
+    (sources, clips_still_loading)
+}
+
 /// Starts and stops playback and keeps the playhead in step with the sound.
 ///
 /// While playing, the audio player is the clock: the playhead is set from
@@ -68,27 +101,7 @@ impl Transport {
             None => AudioPlayer::new()?,
         };
 
-        // Collect every audio clip whose file has finished loading.
-        let mut sources = Vec::new();
-        let mut clips_still_loading = 0;
-        for track in session.project().tracks() {
-            if track.kind != TrackKind::Audio {
-                continue;
-            }
-            for clip in &track.clips {
-                let loaded = session
-                    .project()
-                    .media_source(clip.media)
-                    .and_then(|source| audio_store.loaded(&source.path));
-                match loaded {
-                    Some(loaded) => sources.push(PlaybackSource {
-                        audio: loaded.audio.clone(),
-                        start_seconds: clip.start_milliseconds as f64 / 1000.0,
-                    }),
-                    None => clips_still_loading += 1,
-                }
-            }
-        }
+        let (sources, clips_still_loading) = project_audio_sources(session, audio_store);
 
         // Pressing play at the very end starts over from the beginning.
         let project_end = session.project().settings.duration_seconds();

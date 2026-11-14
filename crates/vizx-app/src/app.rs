@@ -4,6 +4,7 @@ use eframe::egui;
 use vizx_core::{AudioStore, EditorSession};
 use vizx_project::{PROJECT_FILE_EXTENSION, with_project_extension};
 
+use crate::milkdrop_preview::MilkdropPreview;
 use crate::theme;
 use crate::transport::Transport;
 use crate::ui::workspace::Workspace;
@@ -25,6 +26,7 @@ pub enum AppCommand {
     SaveProject,
     SaveProjectAs,
     ImportAudio,
+    AddMilkdropPreset,
     OpenProjectSettings,
     /// Start playback, or pause it if it is running.
     TogglePlayback,
@@ -53,6 +55,7 @@ pub struct VizxApp {
     /// Decoded audio of the project's files, loaded in the background.
     audio_store: AudioStore,
     transport: Transport,
+    milkdrop_preview: MilkdropPreview,
     pub is_about_window_open: bool,
     pub is_project_settings_open: bool,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
@@ -81,6 +84,7 @@ impl VizxApp {
             workspace: Workspace::new(),
             audio_store: AudioStore::default(),
             transport: Transport::default(),
+            milkdrop_preview: MilkdropPreview::default(),
             is_about_window_open: false,
             is_project_settings_open: false,
             graphics_summary: describe_graphics_adapter(creation_context),
@@ -170,6 +174,7 @@ impl VizxApp {
                 self.save_project_as(frame);
             }
             AppCommand::ImportAudio => self.import_audio(frame),
+            AppCommand::AddMilkdropPreset => self.add_milkdrop_preset(frame),
             AppCommand::OpenProjectSettings => self.is_project_settings_open = true,
             AppCommand::TogglePlayback => self.toggle_playback(),
             AppCommand::StopPlayback => {
@@ -204,6 +209,22 @@ impl VizxApp {
                 self.status_message = format!("Could not open {}: {error}", path.display());
             }
         }
+    }
+
+    /// Lets the user pick a MilkDrop preset file and adds it to the project.
+    fn add_milkdrop_preset(&mut self, frame: &eframe::Frame) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("MilkDrop preset", &["milk"])
+            .set_parent(frame)
+            .pick_file()
+        else {
+            return; // dialog cancelled
+        };
+
+        self.status_message = match self.session.add_milkdrop_preset(&path) {
+            Ok(_) => format!("Added preset {}", path.display()),
+            Err(reason) => format!("Could not add {}: {reason}", path.display()),
+        };
     }
 
     /// Lets the user pick one or more audio files and imports each of them.
@@ -300,6 +321,10 @@ impl VizxApp {
                 KeyboardShortcut::new(Modifiers::COMMAND, Key::I),
                 AppCommand::ImportAudio,
             ),
+            (
+                KeyboardShortcut::new(Modifiers::COMMAND, Key::M),
+                AppCommand::AddMilkdropPreset,
+            ),
         ];
 
         // Shortcuts are ignored while the confirmation dialog is open.
@@ -332,7 +357,14 @@ impl VizxApp {
     fn load_project_audio(&mut self, ctx: &egui::Context) {
         self.audio_store.collect_finished();
 
-        for source in self.session.project().media() {
+        // Only audio files are decoded; other media (presets) are not audio.
+        let audio_sources = self
+            .session
+            .project()
+            .media()
+            .iter()
+            .filter(|source| source.audio().is_some());
+        for source in audio_sources {
             if self.audio_store.state(&source.path).is_none() {
                 // The background thread calls this when it is done, so the
                 // window redraws and shows the waveform without waiting for
@@ -406,6 +438,8 @@ impl eframe::App for VizxApp {
         self.transport.begin_frame(&mut self.session, &ctx);
         self.handle_keyboard_shortcuts(&ctx);
         self.load_project_audio(&ctx);
+        self.milkdrop_preview
+            .update(&ctx, &self.session, &self.audio_store);
 
         // Fixed bars are added first; each one takes space from an edge of
         // the window. Whatever remains is given to the dockable workspace.
@@ -420,6 +454,7 @@ impl eframe::App for VizxApp {
                     ui,
                     &mut self.session,
                     &self.audio_store,
+                    &self.milkdrop_preview.view(),
                     &mut self.requested_command,
                 );
             });

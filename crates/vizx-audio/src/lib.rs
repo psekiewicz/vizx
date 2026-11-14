@@ -17,7 +17,7 @@ mod wav;
 mod waveform;
 
 pub use decode::{DecodedAudio, decode_audio_file};
-pub use playback::{AudioPlayer, PlaybackError, PlaybackSource};
+pub use playback::{AudioPlayer, PlaybackError, PlaybackSource, mix_to_stereo};
 pub use probe::{AudioFileError, AudioFileInfo, probe_audio_file};
 pub use wav::write_wav_file;
 pub use waveform::{WaveformPeaks, compute_waveform_peaks};
