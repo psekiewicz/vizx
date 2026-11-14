@@ -10,8 +10,9 @@ single project and share one timeline.
 > **Status: early prototype.**
 > The application window, dockable panel layout, project files (`.vzx`), an
 > adaptive timeline with tracks, audio import, waveform display, audio
-> playback and a pre-rendered MilkDrop visualizer preview with a bundled preset
-> collection exist. There is no export yet.
+> playback, pre-rendered MilkDrop presets with a bundled preset collection, and
+> visualizer plugins (WGSL shaders) that can be moved and resized in the
+> preview exist. There is no export yet.
 
 ## Technology
 
@@ -36,15 +37,17 @@ vizx/
 │   ├── vizx-project/      Project data model (no GUI)
 │   ├── vizx-audio/        Audio files, mixing and playback (no GUI)
 │   ├── vizx-milkdrop/     MilkDrop presets through projectM (no GUI)
+│   ├── vizx-visualizer/   Visualizer plugins: WGSL shaders via wgpu (no GUI)
 │   ├── vizx-core/         Shared application logic (no GUI)
 │   └── vizx-app/          Desktop application: window and interface
-├── assets/                Bundled MilkDrop presets (git submodule); icons, fonts, shaders
+├── assets/                Bundled visualizer plugins and MilkDrop presets (git submodule)
 └── docs/
     └── architecture.md    Architecture and design decisions
 ```
 
 See [docs/architecture.md](docs/architecture.md) for how the crates fit
-together and why.
+together and why, and [docs/visualizer-plugins.md](docs/visualizer-plugins.md)
+for writing a visualizer of your own.
 
 ## Requirements
 

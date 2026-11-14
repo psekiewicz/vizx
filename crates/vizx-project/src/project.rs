@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -208,6 +210,7 @@ impl Project {
             duration_milliseconds: properties.duration_milliseconds,
             audio_input: AudioInput::Mix,
             placement: Placement::FULL,
+            parameters: BTreeMap::new(),
         };
         self.next_clip_id += 1;
         let clip_end = clip.end_milliseconds();
@@ -232,12 +235,22 @@ impl Project {
     /// Like audio, it goes onto the first layer that is still empty, and a
     /// new layer is created only if all of them are in use.
     pub fn add_milkdrop_preset(&mut self, path: impl Into<String>) -> (MediaId, TrackId) {
+        self.add_visual(path.into(), MediaContent::MilkdropPreset)
+    }
+
+    /// Adds a visualizer plugin (its folder) to the media library and
+    /// places it on a visual layer, like [`Project::add_milkdrop_preset`].
+    pub fn add_visualizer_plugin(&mut self, path: impl Into<String>) -> (MediaId, TrackId) {
+        self.add_visual(path.into(), MediaContent::VisualizerPlugin)
+    }
+
+    fn add_visual(&mut self, path: String, content: MediaContent) -> (MediaId, TrackId) {
         let media_id = MediaId(self.next_media_id);
         self.next_media_id += 1;
         self.media.push(MediaSource {
             id: media_id,
-            path: path.into(),
-            content: MediaContent::MilkdropPreset,
+            path,
+            content,
         });
 
         let free_layer = self
@@ -255,6 +268,7 @@ impl Project {
             duration_milliseconds: self.settings.duration_milliseconds,
             audio_input: AudioInput::Mix,
             placement: Placement::FULL,
+            parameters: BTreeMap::new(),
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -264,14 +278,21 @@ impl Project {
         (media_id, track_id)
     }
 
-    /// Every MilkDrop preset clip with its preset, from the topmost visual
-    /// layer down.
-    pub fn milkdrop_clips(&self) -> impl Iterator<Item = (&Clip, &MediaSource)> {
+    /// Every clip that produces a picture (MilkDrop preset or visualizer
+    /// plugin) with its media source, from the topmost visual layer down.
+    pub fn visual_clips(&self) -> impl Iterator<Item = (&Clip, &MediaSource)> {
         self.tracks
             .iter()
             .filter(|track| track.kind == TrackKind::Visual)
             .flat_map(|track| &track.clips)
             .filter_map(|clip| Some((clip, self.media_source(clip.media)?)))
+            .filter(|(_, source)| source.is_visual())
+    }
+
+    /// Every MilkDrop preset clip with its preset, from the topmost visual
+    /// layer down.
+    pub fn milkdrop_clips(&self) -> impl Iterator<Item = (&Clip, &MediaSource)> {
+        self.visual_clips()
             .filter(|(_, source)| source.is_milkdrop_preset())
     }
 
@@ -283,10 +304,10 @@ impl Project {
         })
     }
 
-    /// Every MilkDrop clip that covers a point in time, with its layer and
-    /// preset, from the topmost visual layer down. All of them are part of
-    /// the picture at that time.
-    pub fn milkdrop_layers_at(&self, milliseconds: u64) -> Vec<(&Track, &Clip, &MediaSource)> {
+    /// Every visual clip that covers a point in time, with its layer and
+    /// media source, from the topmost visual layer down. All of them are
+    /// part of the picture at that time.
+    pub fn visual_layers_at(&self, milliseconds: u64) -> Vec<(&Track, &Clip, &MediaSource)> {
         self.tracks
             .iter()
             .filter(|track| track.kind == TrackKind::Visual)
@@ -295,7 +316,7 @@ impl Project {
                 milliseconds >= clip.start_milliseconds && milliseconds < clip.end_milliseconds()
             })
             .filter_map(|(track, clip)| Some((track, clip, self.media_source(clip.media)?)))
-            .filter(|(_, _, source)| source.is_milkdrop_preset())
+            .filter(|(_, _, source)| source.is_visual())
             .collect()
     }
 
@@ -311,6 +332,40 @@ impl Project {
         match clip {
             Some(clip) if clip.placement != placement => {
                 clip.placement = placement;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Sets the values of one plugin parameter on a clip. Returns `true`
+    /// only if this changed something.
+    pub fn set_clip_parameter(&mut self, clip_id: ClipId, id: &str, values: Vec<f64>) -> bool {
+        let clip = self
+            .tracks
+            .iter_mut()
+            .flat_map(|track| &mut track.clips)
+            .find(|clip| clip.id == clip_id);
+        match clip {
+            Some(clip) if clip.parameters.get(id) != Some(&values) => {
+                clip.parameters.insert(id.to_owned(), values);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Forgets all parameter values of a clip, so the plugin's defaults
+    /// apply again. Returns `true` only if there was something to forget.
+    pub fn reset_clip_parameters(&mut self, clip_id: ClipId) -> bool {
+        let clip = self
+            .tracks
+            .iter_mut()
+            .flat_map(|track| &mut track.clips)
+            .find(|clip| clip.id == clip_id);
+        match clip {
+            Some(clip) if !clip.parameters.is_empty() => {
+                clip.parameters.clear();
                 true
             }
             _ => false,
@@ -600,13 +655,43 @@ mod tests {
         project.add_milkdrop_preset("top.milk");
 
         let paths: Vec<&str> = project
-            .milkdrop_layers_at(5_000)
+            .visual_layers_at(5_000)
             .iter()
             .map(|(_, _, preset)| preset.path.as_str())
             .collect();
 
         assert_eq!(paths, ["top.milk", "bottom.milk"]);
-        assert!(project.milkdrop_layers_at(10_000).is_empty());
+        assert!(project.visual_layers_at(10_000).is_empty());
+    }
+
+    #[test]
+    fn plugin_parameters_are_stored_per_clip_and_survive_saving() {
+        let mut project = Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 10_000;
+        let (media_id, layer) = project.add_visualizer_plugin("bundled-visualizers:/bars");
+        let clip_id = project.track(layer).unwrap().clips[0].id;
+
+        let source = project.media_source(media_id).unwrap();
+        assert!(source.is_visualizer_plugin() && source.is_visual());
+        assert!(!source.is_milkdrop_preset());
+        // A plugin is part of the picture, but it is not a MilkDrop preset.
+        assert_eq!(project.visual_layers_at(0).len(), 1);
+        assert_eq!(project.milkdrop_clips().count(), 0);
+
+        assert!(project.set_clip_parameter(clip_id, "bars", vec![48.0]));
+        assert!(!project.set_clip_parameter(clip_id, "bars", vec![48.0]));
+        assert!(project.set_clip_parameter(clip_id, "color", vec![1.0, 0.5, 0.0]));
+
+        let saved = project.to_vzx_string().unwrap();
+        let loaded = Project::from_vzx_str(&saved).unwrap();
+        assert_eq!(loaded, project);
+        assert_eq!(
+            loaded.track(layer).unwrap().clips[0].parameters["color"],
+            [1.0, 0.5, 0.0]
+        );
+
+        assert!(project.reset_clip_parameters(clip_id));
+        assert!(!project.reset_clip_parameters(clip_id));
     }
 
     #[test]

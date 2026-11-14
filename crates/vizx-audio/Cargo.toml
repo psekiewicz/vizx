@@ -7,4 +7,5 @@ repository.workspace = true
 
 [dependencies]
 cpal.workspace = true
+rustfft.workspace = true
 symphonia.workspace = true

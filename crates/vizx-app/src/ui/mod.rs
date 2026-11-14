@@ -14,6 +14,7 @@ pub mod project_settings_window;
 pub mod status_bar;
 pub mod toolbar;
 pub mod unsaved_changes_dialog;
+pub mod visualizer_browser;
 pub mod workspace;
 
 /// The entries of the "Add" menu. Returns the command of the entry that
@@ -44,6 +45,12 @@ pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
         "MilkDrop Preset File...",
         "",
         AppCommand::AddMilkdropPreset,
+    );
+    item(
+        ui,
+        "Visualizer...",
+        "Ctrl+Shift+M",
+        AppCommand::BrowseVisualizers,
     );
     ui.separator();
     item(ui, "Visual Layer", "", AppCommand::AddVisualLayer);

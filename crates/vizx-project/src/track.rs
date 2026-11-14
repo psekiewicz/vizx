@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::MediaId;
@@ -100,6 +102,13 @@ pub struct Clip {
     /// their clips fill the whole frame.
     #[serde(default)]
     pub placement: Placement,
+    /// Values the user chose for the parameters of a visualizer plugin, by
+    /// parameter id: one number for a slider or a switch, three (red,
+    /// green, blue) for a color. A parameter without an entry uses the
+    /// plugin's default. Which parameters exist is up to the plugin, so the
+    /// project stores them without interpreting them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameters: BTreeMap<String, Vec<f64>>,
 }
 
 /// The rectangle of the composition a visual clip is drawn into.

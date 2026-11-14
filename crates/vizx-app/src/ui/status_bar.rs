@@ -32,12 +32,12 @@ pub fn show(ui: &mut egui::Ui, app: &VizxApp) {
                 let megabytes = progress.stored_bytes as f64 / (1024.0 * 1024.0);
                 let text = if progress.finished_frames < progress.total_frames {
                     format!(
-                        "MilkDrop pre-render {}%",
+                        "Pre-render {}%",
                         u64::from(progress.finished_frames) * 100
                             / u64::from(progress.total_frames.max(1))
                     )
                 } else {
-                    format!("MilkDrop ready ({megabytes:.0} MB)")
+                    format!("Pre-render ready ({megabytes:.0} MB)")
                 };
                 ui.label(muted(&text)).on_hover_text(format!(
                     "{} of {} frames pre-rendered, using {megabytes:.0} MB of temporary disk space",

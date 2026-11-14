@@ -5,17 +5,20 @@
 //!
 //! It reads the basic facts about a file (for importing), decodes files
 //! into memory, summarizes samples as waveform peaks (for drawing) and
-//! plays audio through the sound card. Analysis will be added here later.
+//! plays audio through the sound card, and analyses audio into a spectrum
+//! and levels for visualizers.
 //!
 //! Decoding is done by the `symphonia` library, which is written in Rust and
 //! needs no system libraries, so it behaves the same on Windows and Linux.
 
+mod analysis;
 mod decode;
 mod playback;
 mod probe;
 mod wav;
 mod waveform;
 
+pub use analysis::{ANALYSIS_WINDOW, AudioAnalyzer, AudioFeatures, SPECTRUM_BINS, WAVEFORM_POINTS};
 pub use decode::{DecodedAudio, decode_audio_file};
 pub use playback::{AudioPlayer, PlaybackError, PlaybackSource, mix_to_stereo};
 pub use probe::{AudioFileError, AudioFileInfo, probe_audio_file};

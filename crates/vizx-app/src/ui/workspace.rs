@@ -2,13 +2,13 @@
 
 use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex};
-use vizx_core::{AudioStore, EditorSession};
+use vizx_core::{AudioStore, EditorSession, VisualizerCatalog};
 
 use crate::app::AppCommand;
-use crate::milkdrop_preview::LayerView;
 use crate::theme;
 use crate::ui::panels;
 use crate::ui::panels::timeline::TimelineView;
+use crate::visual_preview::LayerView;
 
 /// Identifies one dockable panel.
 ///
@@ -85,6 +85,7 @@ impl Workspace {
         session: &mut EditorSession,
         audio_store: &AudioStore,
         visualizer_layers: &[LayerView<'_>],
+        visualizer_catalog: &mut VisualizerCatalog,
         requested_command: &mut Option<AppCommand>,
     ) {
         let style = theme::dock_style(ui.style());
@@ -93,6 +94,7 @@ impl Workspace {
             timeline_view: &mut self.timeline_view,
             audio_store,
             visualizer_layers,
+            visualizer_catalog,
             requested_command,
         };
 
@@ -140,6 +142,7 @@ struct PanelViewer<'session> {
     audio_store: &'session AudioStore,
     /// The visualizers at the playhead, bottom layer first.
     visualizer_layers: &'session [LayerView<'session>],
+    visualizer_catalog: &'session mut VisualizerCatalog,
     requested_command: &'session mut Option<AppCommand>,
 }
 
@@ -167,7 +170,9 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
                     self.visualizer_layers,
                 );
             }
-            PanelKind::Properties => panels::properties::show(ui, self.session),
+            PanelKind::Properties => {
+                panels::properties::show(ui, self.session, self.visualizer_catalog)
+            }
             PanelKind::Timeline => {
                 panels::timeline::show(
                     ui,

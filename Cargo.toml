@@ -6,6 +6,7 @@ members = [
     "crates/vizx-core",
     "crates/vizx-milkdrop",
     "crates/vizx-project",
+    "crates/vizx-visualizer",
 ]
 
 # Values shared by every crate in the workspace. A crate opts in with
@@ -22,6 +23,7 @@ vizx-audio = { path = "crates/vizx-audio" }
 vizx-core = { path = "crates/vizx-core" }
 vizx-milkdrop = { path = "crates/vizx-milkdrop" }
 vizx-project = { path = "crates/vizx-project" }
+vizx-visualizer = { path = "crates/vizx-visualizer" }
 
 # egui_dock 0.21 is built against egui 0.36, so eframe/egui must stay on 0.36
 # until egui_dock publishes a release for a newer egui.
@@ -32,6 +34,11 @@ eframe = { version = "0.36", default-features = false, features = [
     "wayland",
 ] }
 egui_dock = "0.21"
+# The same wgpu that eframe draws the window with, used directly to render
+# visualizer plugins off-screen. Must stay on eframe's wgpu version.
+wgpu = "30"
+# Waits for wgpu's asynchronous calls to finish ("block on").
+pollster = "1"
 # Native open/save file dialogs of the operating system.
 rfd = "0.18"
 # Compresses pre-rendered frames as JPEG images. Several times faster than
@@ -58,6 +65,8 @@ symphonia = { version = "0.6", default-features = false, features = [
     "vorbis",
     "wav",
 ] }
+# Fast Fourier transform: splits sound into its frequencies (the spectrum).
+rustfft = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -82,4 +91,7 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.vizx-milkdrop]
+opt-level = 2
+
+[profile.dev.package.vizx-visualizer]
 opt-level = 2

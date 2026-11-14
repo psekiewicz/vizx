@@ -1,18 +1,19 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use vizx_core::{AudioStore, EditorSession};
+use vizx_core::{AudioStore, EditorSession, VisualizerCatalog};
 use vizx_project::{PROJECT_FILE_EXTENSION, TrackKind, with_project_extension};
 
-use crate::milkdrop_preview::MilkdropPreview;
 use crate::theme;
 use crate::transport::Transport;
 use crate::ui::preset_browser::PresetBrowser;
+use crate::ui::visualizer_browser::VisualizerBrowser;
 use crate::ui::workspace::Workspace;
 use crate::ui::{
     about_window, menu_bar, preset_browser, project_settings_window, status_bar, toolbar,
-    unsaved_changes_dialog,
+    unsaved_changes_dialog, visualizer_browser,
 };
+use crate::visual_preview::VisualPreview;
 
 /// An action the user asked for through a menu, button or shortcut.
 ///
@@ -32,6 +33,10 @@ pub enum AppCommand {
     BrowseMilkdropPresets,
     /// Pick a preset file of the user's own.
     AddMilkdropPreset,
+    /// Open the browser for visualizer plugins.
+    BrowseVisualizers,
+    /// Pick the folder of a visualizer plugin of the user's own.
+    AddVisualizerFolder,
     AddVisualLayer,
     AddAudioTrack,
     OpenProjectSettings,
@@ -62,8 +67,11 @@ pub struct VizxApp {
     /// Decoded audio of the project's files, loaded in the background.
     audio_store: AudioStore,
     transport: Transport,
-    milkdrop_preview: MilkdropPreview,
+    visual_preview: VisualPreview,
     pub preset_browser: PresetBrowser,
+    pub visualizer_browser: VisualizerBrowser,
+    /// The visualizer plugins that ship with VizX and the ones in use.
+    pub visualizer_catalog: VisualizerCatalog,
     pub is_about_window_open: bool,
     pub is_project_settings_open: bool,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
@@ -94,8 +102,10 @@ impl VizxApp {
             workspace: Workspace::new(),
             audio_store: AudioStore::default(),
             transport: Transport::default(),
-            milkdrop_preview: MilkdropPreview::new(bundled_presets.clone()),
+            visual_preview: VisualPreview::new(bundled_presets.clone()),
             preset_browser: PresetBrowser::new(bundled_presets),
+            visualizer_browser: VisualizerBrowser::default(),
+            visualizer_catalog: VisualizerCatalog::new(),
             is_about_window_open: false,
             is_project_settings_open: false,
             graphics_summary: describe_graphics_adapter(creation_context),
@@ -109,8 +119,8 @@ impl VizxApp {
     }
 
     /// Pre-render progress of the MilkDrop clips, for the status bar.
-    pub fn prerender_progress(&self) -> Option<crate::milkdrop_preview::PrerenderProgress> {
-        self.milkdrop_preview.progress()
+    pub fn prerender_progress(&self) -> Option<crate::visual_preview::PrerenderProgress> {
+        self.visual_preview.progress()
     }
 
     pub fn is_playing(&self) -> bool {
@@ -192,6 +202,8 @@ impl VizxApp {
             AppCommand::ImportAudio => self.import_audio(frame),
             AppCommand::BrowseMilkdropPresets => self.preset_browser.open(ctx),
             AppCommand::AddMilkdropPreset => self.add_milkdrop_preset(frame),
+            AppCommand::BrowseVisualizers => self.visualizer_browser.is_open = true,
+            AppCommand::AddVisualizerFolder => self.add_visualizer_folder(frame),
             AppCommand::AddVisualLayer => {
                 self.session.add_track(TrackKind::Visual);
             }
@@ -247,6 +259,29 @@ impl VizxApp {
         self.status_message = match self.session.add_milkdrop_preset(&path) {
             Ok(_) => format!("Added preset {}", path.display()),
             Err(reason) => format!("Could not add {}: {reason}", path.display()),
+        };
+    }
+
+    /// Lets the user pick the folder of a visualizer plugin and adds it to
+    /// the project, if it is a readable plugin.
+    fn add_visualizer_folder(&mut self, frame: &eframe::Frame) {
+        let Some(folder) = rfd::FileDialog::new().set_parent(frame).pick_folder() else {
+            return; // dialog cancelled
+        };
+        let stored_path = folder.to_string_lossy().into_owned();
+
+        // Cloned so the catalog is free again before the session is changed.
+        let manifest = self
+            .visualizer_catalog
+            .plugin(&stored_path)
+            .manifest
+            .clone();
+        self.status_message = match manifest {
+            Ok(manifest) => {
+                self.session.add_visualizer_plugin(&stored_path);
+                format!("Added visualizer {}", manifest.name)
+            }
+            Err(problem) => format!("Not a visualizer plugin: {problem}"),
         };
     }
 
@@ -322,8 +357,13 @@ impl VizxApp {
 
         // `COMMAND` means Ctrl on Windows/Linux and Cmd on macOS. The
         // Ctrl+Shift+S entry must come before Ctrl+S, because Ctrl+S would
-        // otherwise also match while Shift is held.
+        // otherwise also match while Shift is held. The same goes for
+        // Ctrl+Shift+M and Ctrl+M.
         let shortcuts = [
+            (
+                KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::M),
+                AppCommand::BrowseVisualizers,
+            ),
             (
                 KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::S),
                 AppCommand::SaveProjectAs,
@@ -461,8 +501,12 @@ impl eframe::App for VizxApp {
         self.transport.begin_frame(&mut self.session, &ctx);
         self.handle_keyboard_shortcuts(&ctx);
         self.load_project_audio(&ctx);
-        self.milkdrop_preview
-            .update(&ctx, &self.session, &self.audio_store);
+        self.visual_preview.update(
+            &ctx,
+            &self.session,
+            &self.audio_store,
+            &mut self.visualizer_catalog,
+        );
 
         // Fixed bars are added first; each one takes space from an edge of
         // the window. Whatever remains is given to the dockable workspace.
@@ -477,7 +521,8 @@ impl eframe::App for VizxApp {
                     ui,
                     &mut self.session,
                     &self.audio_store,
-                    &self.milkdrop_preview.layers(),
+                    &self.visual_preview.layers(),
+                    &mut self.visualizer_catalog,
                     &mut self.requested_command,
                 );
             });
@@ -485,6 +530,7 @@ impl eframe::App for VizxApp {
         about_window::show(&ctx, self);
         project_settings_window::show(&ctx, self);
         preset_browser::show(&ctx, self);
+        visualizer_browser::show(&ctx, self);
         if let Some(decision) = unsaved_changes_dialog::show(&ctx, self) {
             self.resolve_unsaved_changes(decision, &ctx, frame);
         }

@@ -12,15 +12,17 @@ its own copy of anything.
 
 ## Crates
 
-The workspace has five crates. Dependencies point in one direction only:
+The workspace has six crates. Dependencies point in one direction only:
 
 ```text
 vizx-app  ──►  vizx-core  ──►  vizx-project
  (GUI)         (logic)    │     (data)
                           ├──►  vizx-audio
                           │     (audio files, playback)
-                          └──►  vizx-milkdrop
-                                (MilkDrop presets via projectM)
+                          ├──►  vizx-milkdrop
+                          │     (MilkDrop presets via projectM)
+                          └──►  vizx-visualizer
+                                (visualizer plugins: shaders via wgpu)
 ```
 
 `vizx-project` and `vizx-audio` do not know about each other. `vizx-core`
@@ -30,8 +32,9 @@ in the project.
 | Crate | Responsibility | Must not contain |
 |---|---|---|
 | `vizx-project` | What a project *is*: plain serializable data. | GUI, rendering, audio devices, file dialogs |
-| `vizx-audio` | Audio files and the sound card: reading file properties, decoding, waveform peaks, mixing and playback. Later: analysis (FFT, beats). | GUI, project data |
+| `vizx-audio` | Audio files and the sound card: reading file properties, decoding, waveform peaks, mixing, playback and analysis (spectrum, waveform, levels). Later: beats. | GUI, project data |
 | `vizx-milkdrop` | Rendering MilkDrop presets to pixels with the projectM library. The only crate with `unsafe` code, C declarations and OpenGL. | GUI, project data |
+| `vizx-visualizer` | Visualizer plugins: reading a plugin folder and rendering its WGSL shader off-screen with wgpu. | GUI, project data, the timeline |
 | `vizx-core` | Editing state and logic operating on a project. Future home of subsystem coordination. | GUI code |
 | `vizx-app` | The window, panels, menus and visual style. | Project rules or logic that other front ends would need |
 
@@ -125,6 +128,8 @@ Version **3** reduced the track kinds to two; the former `Visualizer`,
 sources and clips. Version **6** added MilkDrop presets as a kind of media. Version **7** added
 the audio a clip reacts to (`audio_input`); older files load with the mix.
 Version **8** added a clip's `placement`; older files load filling the frame.
+Version **9** added visualizer plugins as a kind of media and a clip's
+parameter values for them.
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -197,13 +202,46 @@ project refers to one of those presets by its place in the collection
 so the project opens on any machine with VizX. `vizx-core::PresetLibrary`
 indexes the collection for the preset browser window.
 
+### Visualizer plugins
+
+Visualizers other than MilkDrop presets are **plugins**: a folder with a
+`visualizer.json` (name and adjustable parameters) and a `shader.wgsl` (a
+function that returns the color of a pixel). The visualizers that ship with
+VizX are plugins too, in `assets/visualizers`. See
+[visualizer-plugins.md](visualizer-plugins.md) for the author's guide.
+
+- **Why shaders.** wgpu is already what VizX draws with, a shader runs the
+  same on Windows and Linux without compiling anything per platform, and a
+  broken plugin produces an error message instead of crashing the editor,
+  which a native library (DLL) could not guarantee.
+- **What a shader is given:** the spectrum, the waveform, the spectrum of
+  the last 256 frames, overall levels, the time, the parameter values and
+  its own previous frame. The last two inputs are what make waterfalls and
+  feedback effects possible.
+- **Audio analysis** (`vizx_audio::AudioAnalyzer`) turns the clip's audio
+  input into those numbers with an FFT, once per frame.
+- **Rendering** (`vizx_visualizer::ShaderRenderer`) happens off-screen on a
+  wgpu device of its own, on the pre-render thread, and returns RGBA pixels:
+  the same contract as the MilkDrop renderer. `vizx_core::Prerender`
+  therefore handles both through one `FrameSource` enum, and everything
+  after it (frame storage, preview, placement, audio input) is shared.
+- **In the project** a plugin is a kind of media
+  (`MediaContent::VisualizerPlugin`) whose path is the plugin folder, or
+  `bundled-visualizers:/<name>` for a bundled one. The clip stores the
+  values of the plugin's parameters by parameter id, without interpreting
+  them.
+- **Live reload.** `vizx_core::VisualizerCatalog` watches the files of the
+  plugins in use (their modification times, checked twice a second). A saved
+  file changes the plugin's version, which is part of the pre-render key, so
+  the clip is rendered again.
+
 ### One "Add" menu
 
 Everything that can be added to a project (audio file, MilkDrop preset,
-visual layer, audio track) is listed in one function, `ui::add_menu_items`.
+visualizer plugin, visual layer, audio track) is listed in one function, `ui::add_menu_items`.
 It is shown in exactly one place, the context menu of the timeline
 (right-click a track, a lane or the empty area), plus keyboard shortcuts
-(Ctrl+I, Ctrl+M). The toolbar holds only the transport, and New, Open and
+(Ctrl+I, Ctrl+M, Ctrl+Shift+M). The toolbar holds only the transport, and New, Open and
 Save are only in the File menu. A new kind of content becomes available by
 adding one line, and no panel grows its own row of "add this" buttons.
 

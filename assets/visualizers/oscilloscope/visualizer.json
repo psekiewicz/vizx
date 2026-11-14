@@ -1,0 +1,12 @@
+{
+    "name": "Oscilloscope",
+    "author": "VizX",
+    "description": "The sound wave itself, drawn as a glowing line with an optional trail.",
+    "parameters": [
+        { "id": "amplitude", "name": "Amplitude", "kind": "number", "min": 0.1, "max": 3.0, "default": 1.0 },
+        { "id": "thickness", "name": "Thickness", "kind": "number", "min": 1.0, "max": 12.0, "default": 2.5 },
+        { "id": "glow", "name": "Glow", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.5 },
+        { "id": "trail", "name": "Trail", "kind": "number", "min": 0.0, "max": 0.97, "default": 0.75 },
+        { "id": "color", "name": "Color", "kind": "color", "default": [0.3, 1.0, 0.7] }
+    ]
+}

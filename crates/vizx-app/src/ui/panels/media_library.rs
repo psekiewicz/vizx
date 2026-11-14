@@ -43,13 +43,17 @@ pub fn show(ui: &mut egui::Ui, session: &EditorSession) {
         .default_open(true)
         .show(ui, |ui| {
             let mut is_empty = true;
-            for source in media.iter().filter(|source| source.is_milkdrop_preset()) {
+            for source in media.iter().filter(|source| source.is_visual()) {
                 is_empty = false;
                 ui.label(source.file_name()).on_hover_text(&source.path);
                 ui.label(
-                    egui::RichText::new("MilkDrop preset")
-                        .small()
-                        .color(theme::TEXT_MUTED),
+                    egui::RichText::new(if source.is_milkdrop_preset() {
+                        "MilkDrop preset"
+                    } else {
+                        "Visualizer plugin"
+                    })
+                    .small()
+                    .color(theme::TEXT_MUTED),
                 );
                 ui.add_space(2.0);
             }

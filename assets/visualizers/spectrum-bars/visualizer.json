@@ -1,0 +1,13 @@
+{
+    "name": "Spectrum Bars",
+    "author": "VizX",
+    "description": "Classic bars: one bar per frequency band, low notes on the left.",
+    "parameters": [
+        { "id": "bars", "name": "Bars", "kind": "number", "min": 8, "max": 160, "default": 56, "step": 1 },
+        { "id": "gap", "name": "Gap", "kind": "number", "min": 0.0, "max": 0.8, "default": 0.3 },
+        { "id": "gain", "name": "Height", "kind": "number", "min": 0.2, "max": 2.0, "default": 1.0 },
+        { "id": "color_bottom", "name": "Bottom color", "kind": "color", "default": [0.0, 0.66, 0.59] },
+        { "id": "color_top", "name": "Top color", "kind": "color", "default": [0.95, 0.95, 1.0] },
+        { "id": "mirror", "name": "Mirror", "kind": "toggle", "default": false }
+    ]
+}

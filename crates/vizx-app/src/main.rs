@@ -5,10 +5,10 @@
 
 mod app;
 mod graphics;
-mod milkdrop_preview;
 mod theme;
 mod transport;
 mod ui;
+mod visual_preview;
 
 use eframe::egui;
 

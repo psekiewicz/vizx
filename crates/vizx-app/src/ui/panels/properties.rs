@@ -1,5 +1,5 @@
 use eframe::egui;
-use vizx_core::EditorSession;
+use vizx_core::{EditorSession, ParameterKind, VisualizerCatalog};
 use vizx_project::{AudioInput, Clip, Placement, Track};
 
 use crate::theme;
@@ -9,15 +9,20 @@ use crate::ui::format_duration;
 ///
 /// This panel is only about the current selection. Settings of the project
 /// as a whole live in the Project Settings window instead.
-pub fn show(ui: &mut egui::Ui, session: &mut EditorSession) {
+pub fn show(ui: &mut egui::Ui, session: &mut EditorSession, catalog: &mut VisualizerCatalog) {
     // The track is cloned so the session is free to be modified below.
     match session.selected_track().cloned() {
-        Some(track) => track_properties(ui, session, &track),
+        Some(track) => track_properties(ui, session, catalog, &track),
         None => nothing_selected(ui),
     }
 }
 
-fn track_properties(ui: &mut egui::Ui, session: &mut EditorSession, track: &Track) {
+fn track_properties(
+    ui: &mut egui::Ui,
+    session: &mut EditorSession,
+    catalog: &mut VisualizerCatalog,
+    track: &Track,
+) {
     ui.label(egui::RichText::new("Track").strong());
     ui.separator();
 
@@ -51,19 +56,29 @@ fn track_properties(ui: &mut egui::Ui, session: &mut EditorSession, track: &Trac
                     audio.channel_count
                 ),
                 None => format!(
-                    "MilkDrop preset  |  Length {}",
+                    "{}  |  Length {}",
+                    if source.is_milkdrop_preset() {
+                        "MilkDrop preset"
+                    } else {
+                        "Visualizer plugin"
+                    },
                     format_duration(clip.duration_milliseconds)
                 ),
             };
+            let plugin_path = source.is_visualizer_plugin().then(|| source.path.clone());
+            let is_visual = source.is_visual();
             ui.label(source.file_name()).on_hover_text(&source.path);
             ui.label(
                 egui::RichText::new(details)
                     .small()
                     .color(theme::TEXT_MUTED),
             );
-            if source.is_milkdrop_preset() {
+            if is_visual {
                 audio_input_selector(ui, session, clip);
                 placement_editor(ui, session, clip);
+            }
+            if let Some(plugin_path) = plugin_path {
+                plugin_parameters(ui, session, catalog, clip, &plugin_path);
             }
         }
     }
@@ -156,6 +171,89 @@ fn placement_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
     .any(|(new, old)| (new - old).abs() > 1e-9);
     if has_changed {
         session.edit_project(|project| project.set_clip_placement(clip.id, edited));
+    }
+}
+
+/// The adjustable values of a visualizer plugin, as its `visualizer.json`
+/// describes them: a slider for a number, a color button for a color, a
+/// checkbox for a switch.
+fn plugin_parameters(
+    ui: &mut egui::Ui,
+    session: &mut EditorSession,
+    catalog: &mut VisualizerCatalog,
+    clip: &Clip,
+    plugin_path: &str,
+) {
+    // Cloned, so the catalog is not borrowed while the widgets are drawn.
+    let manifest = match catalog.plugin(plugin_path).manifest.clone() {
+        Ok(manifest) => manifest,
+        Err(problem) => {
+            ui.colored_label(ui.visuals().error_fg_color, problem);
+            return;
+        }
+    };
+    if manifest.parameters.is_empty() {
+        return;
+    }
+
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(&manifest.name).strong())
+        .on_hover_text(&manifest.description);
+    ui.separator();
+
+    // (parameter id, new values) for everything the user changed this frame.
+    let mut changes: Vec<(String, Vec<f64>)> = Vec::new();
+    egui::Grid::new(("plugin_parameters", clip.id))
+        .num_columns(2)
+        .show(ui, |ui| {
+            for parameter in &manifest.parameters {
+                let current = parameter.sanitized(clip.parameters.get(&parameter.id));
+                ui.label(&parameter.name);
+                let edited = match &parameter.kind {
+                    ParameterKind::Number { min, max, step, .. } => {
+                        let mut value = current[0];
+                        let mut slider = egui::Slider::new(&mut value, *min..=*max);
+                        if let Some(step) = step {
+                            slider = slider.step_by(*step);
+                        }
+                        ui.add(slider);
+                        vec![value]
+                    }
+                    ParameterKind::Color { .. } => {
+                        let mut color = [current[0] as f32, current[1] as f32, current[2] as f32];
+                        ui.color_edit_button_rgb(&mut color);
+                        color.iter().map(|part| f64::from(*part)).collect()
+                    }
+                    ParameterKind::Toggle { .. } => {
+                        let mut is_on = current[0] >= 0.5;
+                        ui.checkbox(&mut is_on, "");
+                        vec![f64::from(u8::from(is_on))]
+                    }
+                };
+                ui.end_row();
+
+                let has_changed = edited
+                    .iter()
+                    .zip(&current)
+                    .any(|(new, old)| (new - old).abs() > 1e-6);
+                if has_changed {
+                    changes.push((parameter.id.clone(), edited));
+                }
+            }
+        });
+
+    if ui
+        .add_enabled(
+            !clip.parameters.is_empty(),
+            egui::Button::new("Reset to Defaults"),
+        )
+        .clicked()
+    {
+        session.edit_project(|project| project.reset_clip_parameters(clip.id));
+        return;
+    }
+    for (id, values) in changes {
+        session.edit_project(|project| project.set_clip_parameter(clip.id, &id, values));
     }
 }
 

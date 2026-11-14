@@ -148,6 +148,16 @@ impl EditorSession {
         track_id
     }
 
+    /// Adds a visualizer plugin and places it on a visual layer, which
+    /// becomes selected. `stored_path` is the plugin's folder, or the
+    /// reference of a bundled plugin (see `VisualizerCatalog`).
+    pub fn add_visualizer_plugin(&mut self, stored_path: &str) -> TrackId {
+        let (_media_id, track_id) = self.project.add_visualizer_plugin(stored_path);
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        track_id
+    }
+
     /// Removes a track, clearing the selection if it was selected.
     pub fn remove_track(&mut self, id: TrackId) {
         if self.project.remove_track(id) {

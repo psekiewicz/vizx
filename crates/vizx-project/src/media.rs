@@ -36,12 +36,21 @@ impl MediaSource {
     pub fn audio(&self) -> Option<&AudioProperties> {
         match &self.content {
             MediaContent::Audio(audio) => Some(audio),
-            MediaContent::MilkdropPreset => None,
+            MediaContent::MilkdropPreset | MediaContent::VisualizerPlugin => None,
         }
     }
 
     pub fn is_milkdrop_preset(&self) -> bool {
         matches!(self.content, MediaContent::MilkdropPreset)
+    }
+
+    pub fn is_visualizer_plugin(&self) -> bool {
+        matches!(self.content, MediaContent::VisualizerPlugin)
+    }
+
+    /// Whether this source produces a picture (as opposed to sound).
+    pub fn is_visual(&self) -> bool {
+        self.is_milkdrop_preset() || self.is_visualizer_plugin()
     }
 }
 
@@ -53,6 +62,10 @@ pub enum MediaContent {
     /// A MilkDrop visualizer preset (a `.milk` file). It has no length of
     /// its own: it produces a picture for as long as its clip lasts.
     MilkdropPreset,
+    /// A visualizer plugin: a folder with a `visualizer.json` and a
+    /// `shader.wgsl`. `path` is that folder. Like a preset it has no length
+    /// of its own.
+    VisualizerPlugin,
 }
 
 /// Properties of an audio file, read once when it is imported.

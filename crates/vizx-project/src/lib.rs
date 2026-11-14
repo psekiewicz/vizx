@@ -46,4 +46,6 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 ///   files load with every clip reacting to the whole mix.
 /// - 8: a clip records where in the picture it is drawn (`placement`).
 ///   Older files load with every clip filling the frame.
-pub const CURRENT_FORMAT_VERSION: u32 = 8;
+/// - 9: visualizer plugins as a kind of media, and a clip's values for the
+///   plugin's parameters (`parameters`).
+pub const CURRENT_FORMAT_VERSION: u32 = 9;

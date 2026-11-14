@@ -1,0 +1,16 @@
+[package]
+name = "vizx-visualizer"
+description = "VizX visualizer plugins: WGSL shaders rendered off-screen with wgpu. No GUI code."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+wgpu.workspace = true
+pollster.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# Only for the `render_plugin` example, which saves a picture.
+jpeg-encoder.workspace = true

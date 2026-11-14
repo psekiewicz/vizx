@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use image::ImageFormat;
 use jpeg_encoder::{ColorType, Encoder};
-use vizx_audio::PlaybackSource;
+use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer, PlaybackSource};
 use vizx_milkdrop::MilkdropRenderer;
+use vizx_visualizer::{FrameInput, ParameterValues, ShaderRenderer, VisualizerPlugin};
 
 /// Sample rate of the audio handed to the visualizer.
 const ANALYSIS_SAMPLE_RATE: u32 = 44_100;
@@ -24,11 +25,40 @@ const PENDING_FRAME_LIMIT: usize = 4;
 /// Frame files older than this are leftovers of earlier runs.
 const OLD_FRAME_FILE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Everything that determines the frames of one MilkDrop clip.
+/// What draws the frames of a clip.
+#[derive(Clone)]
+pub enum FrameSource {
+    /// A MilkDrop preset (`.milk` file), run by projectM.
+    Milkdrop { preset_path: String },
+    /// A visualizer plugin: a shader run on the graphics card.
+    Plugin {
+        folder: PathBuf,
+        /// Values the user chose for the plugin's parameters.
+        parameters: ParameterValues,
+        /// Changes when the plugin's files are saved (see
+        /// `VisualizerCatalog`), so that an edited plugin is rendered again.
+        version: u64,
+    },
+}
+
+impl FrameSource {
+    /// A text that is equal exactly when two sources draw the same frames.
+    fn description(&self) -> String {
+        match self {
+            Self::Milkdrop { preset_path } => preset_path.clone(),
+            Self::Plugin {
+                folder,
+                parameters,
+                version,
+            } => format!("{} v{version} {parameters:?}", folder.display()),
+        }
+    }
+}
+
+/// Everything that determines the frames of one visual clip.
 #[derive(Clone)]
 pub struct PrerenderJob {
-    /// Path of the `.milk` preset.
-    pub preset_path: String,
+    pub source: FrameSource,
     pub width: u32,
     pub height: u32,
     pub frames_per_second: u32,
@@ -47,7 +77,7 @@ impl PrerenderJob {
     pub fn key(&self) -> String {
         let mut key = format!(
             "{}|{}x{}@{}|{} frames from {:.3}s",
-            self.preset_path,
+            self.source.description(),
             self.width,
             self.height,
             self.frames_per_second,
@@ -91,8 +121,8 @@ struct State {
     error: Option<String>,
 }
 
-/// The frames of one MilkDrop clip, rendered ahead of time in the
-/// background.
+/// The frames of one visual clip (a MilkDrop preset or a visualizer plugin),
+/// rendered ahead of time in the background.
 ///
 /// A MilkDrop picture builds on the previous one, so a frame is only
 /// correct when all frames before it were rendered too. Rendering "live"
@@ -107,11 +137,14 @@ struct State {
 /// Only the position of every frame in that file is kept in memory. The
 /// file is deleted when the pre-render is dropped.
 ///
-/// Two threads share the work: one draws frames with projectM, the other
+/// A plugin's shader may read its previous frame too, so the same holds for
+/// plugins.
+///
+/// Two threads share the work: one draws frames, the other
 /// compresses and stores them. Drawing uses the graphics card and
 /// compressing uses the processor, so together they are much faster than
 /// one thread doing both in turn.
-pub struct MilkdropPrerender {
+pub struct Prerender {
     key: String,
     width: u32,
     height: u32,
@@ -124,7 +157,7 @@ pub struct MilkdropPrerender {
     frame_reader: Mutex<Option<File>>,
 }
 
-impl MilkdropPrerender {
+impl Prerender {
     /// Starts rendering `job` in the background. `on_progress` runs on a
     /// background thread from time to time and when rendering ends; the UI
     /// uses it to ask for a repaint.
@@ -161,7 +194,7 @@ impl MilkdropPrerender {
             });
         }
 
-        // Thread 2: draws the frames with projectM.
+        // Thread 2: draws the frames.
         {
             let state = Arc::clone(&prerender.state);
             let is_cancelled = Arc::clone(&prerender.is_cancelled);
@@ -232,7 +265,7 @@ impl MilkdropPrerender {
     }
 }
 
-impl Drop for MilkdropPrerender {
+impl Drop for Prerender {
     /// Frames nobody will look at are not worth rendering or keeping:
     /// dropping the handle stops the threads and deletes the frame file.
     fn drop(&mut self) {
@@ -290,11 +323,87 @@ fn draw_frames(
     pixel_sender: &SyncSender<Vec<u8>>,
     is_cancelled: &AtomicBool,
 ) -> Result<(), String> {
+    match &job.source {
+        FrameSource::Milkdrop { preset_path } => {
+            draw_milkdrop_frames(job, preset_path, pixel_sender, is_cancelled)
+        }
+        FrameSource::Plugin {
+            folder, parameters, ..
+        } => draw_plugin_frames(job, folder, parameters, pixel_sender, is_cancelled),
+    }
+}
+
+/// Draws the frames of a visualizer plugin.
+fn draw_plugin_frames(
+    job: &PrerenderJob,
+    folder: &Path,
+    parameters: &ParameterValues,
+    pixel_sender: &SyncSender<Vec<u8>>,
+    is_cancelled: &AtomicBool,
+) -> Result<(), String> {
+    let frames_per_second = f64::from(job.frames_per_second.max(1));
+    let plugin = VisualizerPlugin::load(folder)?;
+    let mut renderer = ShaderRenderer::new(&plugin, job.width, job.height)?;
+    let packed_parameters = plugin.pack_parameters(parameters);
+    let mut analyzer = AudioAnalyzer::new(ANALYSIS_SAMPLE_RATE);
+
+    let mut pixels = Vec::new();
+    for frame in 0..job.frame_count {
+        if is_cancelled.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        // As for MilkDrop: time comes from the frame number.
+        let seconds_into_clip = f64::from(frame) / frames_per_second;
+
+        // Analyse the audio that leads up to this frame.
+        let window_end = seconds_to_audio_frames(job.start_seconds + seconds_into_clip);
+        let window_start = window_end.saturating_sub(ANALYSIS_WINDOW as u64);
+        let stereo = vizx_audio::mix_to_stereo(
+            &job.audio_sources,
+            ANALYSIS_SAMPLE_RATE,
+            window_start,
+            (window_end - window_start) as usize,
+        );
+        let mono: Vec<f32> = stereo
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[left, right]| (left + right) * 0.5)
+            .collect();
+        let audio = analyzer.analyze(&mono, (1.0 / frames_per_second) as f32);
+
+        renderer.render(
+            &FrameInput {
+                time_seconds: seconds_into_clip as f32,
+                spectrum: &audio.spectrum,
+                waveform: &audio.waveform,
+                volume: audio.volume,
+                bass: audio.bass,
+                mid: audio.mid,
+                treble: audio.treble,
+                parameters: packed_parameters,
+            },
+            &mut pixels,
+        )?;
+        if pixel_sender.send(pixels.clone()).is_err() {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+/// Draws the frames of a MilkDrop preset with projectM.
+fn draw_milkdrop_frames(
+    job: &PrerenderJob,
+    preset_path: &str,
+    pixel_sender: &SyncSender<Vec<u8>>,
+    is_cancelled: &AtomicBool,
+) -> Result<(), String> {
     let frames_per_second = f64::from(job.frames_per_second.max(1));
     let mut renderer = MilkdropRenderer::new(job.width, job.height, job.frames_per_second)
         .map_err(|error| error.to_string())?;
     renderer
-        .load_preset(Path::new(&job.preset_path))
+        .load_preset(Path::new(preset_path))
         .map_err(|error| error.to_string())?;
 
     let mut pixels = Vec::new();
@@ -402,7 +511,9 @@ mod tests {
 
     fn job(preset_path: &str) -> PrerenderJob {
         PrerenderJob {
-            preset_path: preset_path.to_owned(),
+            source: FrameSource::Milkdrop {
+                preset_path: preset_path.to_owned(),
+            },
             width: 64,
             height: 36,
             frames_per_second: 30,
@@ -430,7 +541,9 @@ mod tests {
         assert_eq!(key, base.clone().key());
 
         let mut other_preset = base.clone();
-        other_preset.preset_path = "b.milk".to_owned();
+        other_preset.source = FrameSource::Milkdrop {
+            preset_path: "b.milk".to_owned(),
+        };
         let mut longer = base.clone();
         longer.frame_count = 11;
         let mut other_size = base.clone();
@@ -443,6 +556,55 @@ mod tests {
         for changed in [other_preset, longer, other_size, later, with_audio] {
             assert_ne!(changed.key(), key);
         }
+    }
+
+    #[test]
+    fn key_of_a_plugin_follows_its_files_and_parameters() {
+        let plugin_job = |version, bars: f64| {
+            let mut parameters = ParameterValues::new();
+            parameters.insert("bars".to_owned(), vec![bars]);
+            PrerenderJob {
+                source: FrameSource::Plugin {
+                    folder: PathBuf::from("plugins/bars"),
+                    parameters,
+                    version,
+                },
+                ..job("unused")
+            }
+        };
+
+        assert_eq!(plugin_job(1, 32.0).key(), plugin_job(1, 32.0).key());
+        // The plugin's shader was edited and saved.
+        assert_ne!(plugin_job(1, 32.0).key(), plugin_job(2, 32.0).key());
+        // The user moved a slider.
+        assert_ne!(plugin_job(1, 32.0).key(), plugin_job(1, 48.0).key());
+    }
+
+    #[test]
+    fn a_plugin_that_does_not_exist_ends_with_an_error() {
+        let (notified_sender, notified_receiver) = mpsc::channel();
+        let prerender = Prerender::start(
+            PrerenderJob {
+                source: FrameSource::Plugin {
+                    folder: PathBuf::from("vizx-core-plugin-that-does-not-exist"),
+                    parameters: ParameterValues::new(),
+                    version: 0,
+                },
+                ..job("unused")
+            },
+            move || {
+                let _ = notified_sender.send(());
+            },
+        );
+
+        assert!(
+            notified_receiver
+                .recv_timeout(Duration::from_secs(30))
+                .is_ok(),
+            "the render thread never answered"
+        );
+        assert!(prerender.error().unwrap().contains("visualizer.json"));
+        assert_eq!(prerender.finished_frame_count(), 0);
     }
 
     #[test]
@@ -499,7 +661,7 @@ mod tests {
     #[test]
     fn missing_preset_ends_with_an_error_and_no_frames() {
         let (notified_sender, notified_receiver) = mpsc::channel();
-        let prerender = MilkdropPrerender::start(
+        let prerender = Prerender::start(
             job("vizx-core-preset-that-does-not-exist.milk"),
             move || {
                 let _ = notified_sender.send(());

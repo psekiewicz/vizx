@@ -3,8 +3,8 @@ use vizx_core::{EditorSession, Selection};
 use vizx_project::{ClipId, Placement};
 
 use crate::app::AppCommand;
-use crate::milkdrop_preview::{LayerContent, LayerView};
 use crate::theme;
+use crate::visual_preview::{LayerContent, LayerView};
 
 /// Empty space kept between the composition frame and the panel edges.
 const FRAME_MARGIN: f32 = 24.0;
@@ -400,13 +400,11 @@ fn draw_layer(painter: &egui::Painter, layer_rect: Rect, content: &LayerContent<
             return;
         }
         LayerContent::Rendering { finished, total } if *total > 0 => format!(
-            "Pre-rendering MilkDrop: {}%\n({finished} of {total} frames)",
+            "Pre-rendering: {}%\n({finished} of {total} frames)",
             u64::from(*finished) * 100 / u64::from(*total)
         ),
-        LayerContent::Rendering { .. } => "Waiting to pre-render MilkDrop...".to_owned(),
-        LayerContent::WaitingForAudio => {
-            "Loading audio before pre-rendering MilkDrop...".to_owned()
-        }
+        LayerContent::Rendering { .. } => "Waiting to pre-render...".to_owned(),
+        LayerContent::WaitingForAudio => "Loading audio before pre-rendering...".to_owned(),
         LayerContent::Failed(reason) => reason.clone(),
     };
     // No picture yet: a dark box with the reason, so the clip's place in

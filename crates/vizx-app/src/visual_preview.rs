@@ -1,7 +1,8 @@
-//! Shows the MilkDrop visualizers in the preview, from pre-rendered frames.
+//! Shows the visualizers (MilkDrop presets and visualizer plugins) in the
+//! preview, from pre-rendered frames.
 //!
-//! Each MilkDrop clip on the timeline is rendered ahead of time in the
-//! background (see `MilkdropPrerender`). The preview then only looks up the
+//! Each visual clip on the timeline is rendered ahead of time in the
+//! background (see `Prerender`). The preview then only looks up the
 //! frames that belong to the playhead, so scrubbing and seeking show the
 //! right picture and playback is cheap.
 //!
@@ -9,12 +10,15 @@
 //! the playhead contributes one picture, drawn into the clip's placement.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use vizx_core::{AudioStore, EditorSession, MilkdropPrerender, PrerenderJob, resolve_preset_path};
-use vizx_project::{ClipId, Placement, TrackId};
+use vizx_core::{
+    AudioStore, EditorSession, FrameSource, Prerender, PrerenderJob, VisualizerCatalog,
+    resolve_preset_path,
+};
+use vizx_project::{Clip, ClipId, MediaSource, Placement, TrackId};
 
 use crate::transport::{audio_sources_for, project_audio_sources};
 
@@ -78,12 +82,12 @@ struct LayerTexture {
     render_key: String,
 }
 
-pub struct MilkdropPreview {
+pub struct VisualPreview {
     /// Folder of the presets that ship with VizX, if this installation has
     /// one. Projects refer to those presets by their place in this folder.
     bundled_presets: Option<PathBuf>,
     /// Pre-rendered frames of every MilkDrop clip in the project.
-    prerenders: HashMap<ClipId, MilkdropPrerender>,
+    prerenders: HashMap<ClipId, Prerender>,
     /// Renders that are wanted but not started yet: the key of the wanted
     /// job and since when it has been wanted unchanged.
     waiting_since: HashMap<ClipId, (String, Instant)>,
@@ -92,7 +96,7 @@ pub struct MilkdropPreview {
     layers: Vec<ShownLayer>,
 }
 
-impl MilkdropPreview {
+impl VisualPreview {
     pub fn new(bundled_presets: Option<PathBuf>) -> Self {
         Self {
             bundled_presets,
@@ -109,6 +113,7 @@ impl MilkdropPreview {
         ctx: &egui::Context,
         session: &EditorSession,
         audio_store: &AudioStore,
+        catalog: &mut VisualizerCatalog,
     ) {
         let project = session.project();
         let settings = &project.settings;
@@ -119,13 +124,14 @@ impl MilkdropPreview {
         let is_audio_ready = clips_still_loading == 0;
 
         if is_audio_ready {
-            // What should be rendered: one job per MilkDrop clip.
+            // What should be rendered: one job per visual clip.
             let mut wanted: Vec<(ClipId, PrerenderJob)> = Vec::new();
-            for (clip, preset) in project.milkdrop_clips() {
-                // A bundled preset this installation does not have cannot
-                // be rendered; the preview says so further down.
-                let Some(preset_file) =
-                    resolve_preset_path(&preset.path, self.bundled_presets.as_deref())
+            for (clip, media) in project.visual_clips() {
+                // A clip that cannot be rendered at all (for example a
+                // bundled preset this installation does not have) gets no
+                // job; the preview says why further down.
+                let Ok(source) =
+                    frame_source(media, clip, self.bundled_presets.as_deref(), catalog)
                 else {
                     continue;
                 };
@@ -134,7 +140,7 @@ impl MilkdropPreview {
                 wanted.push((
                     clip.id,
                     PrerenderJob {
-                        preset_path: preset_file.to_string_lossy().into_owned(),
+                        source,
                         width,
                         height,
                         frames_per_second,
@@ -160,18 +166,14 @@ impl MilkdropPreview {
         self.layers.clear();
         // The project lists layers from the top down; drawing goes from the
         // bottom up, so that higher layers cover lower ones.
-        for (track, clip, preset) in project
-            .milkdrop_layers_at(lookup_milliseconds)
+        for (track, clip, media) in project
+            .visual_layers_at(lookup_milliseconds)
             .into_iter()
             .rev()
         {
-            let is_preset_missing =
-                resolve_preset_path(&preset.path, self.bundled_presets.as_deref()).is_none();
-            let shown = if is_preset_missing {
-                Shown::Failed(format!(
-                    "{} ships with VizX, but the bundled presets were not found on this computer.",
-                    preset.file_name()
-                ))
+            let problem = frame_source(media, clip, self.bundled_presets.as_deref(), catalog).err();
+            let shown = if let Some(problem) = problem {
+                Shown::Failed(problem)
             } else if !is_audio_ready {
                 Shown::WaitingForAudio
             } else {
@@ -239,7 +241,7 @@ impl MilkdropPreview {
             let ctx = ctx.clone();
             // Called on the render thread as frames get finished, so the
             // window redraws and shows progress and new frames.
-            let prerender = MilkdropPrerender::start(job, move || ctx.request_repaint());
+            let prerender = Prerender::start(job, move || ctx.request_repaint());
             self.prerenders.insert(clip_id, prerender);
             self.waiting_since.remove(&clip_id);
         }
@@ -286,7 +288,7 @@ impl MilkdropPreview {
             }
             None => {
                 let handle = ctx.load_texture(
-                    format!("milkdrop_preview_{clip_id:?}"),
+                    format!("visual_preview_{clip_id:?}"),
                     image,
                     egui::TextureOptions::LINEAR,
                 );
@@ -343,20 +345,46 @@ impl MilkdropPreview {
             finished_frames: self
                 .prerenders
                 .values()
-                .map(MilkdropPrerender::finished_frame_count)
+                .map(Prerender::finished_frame_count)
                 .sum(),
-            total_frames: self
-                .prerenders
-                .values()
-                .map(MilkdropPrerender::frame_count)
-                .sum(),
-            stored_bytes: self
-                .prerenders
-                .values()
-                .map(MilkdropPrerender::stored_bytes)
-                .sum(),
+            total_frames: self.prerenders.values().map(Prerender::frame_count).sum(),
+            stored_bytes: self.prerenders.values().map(Prerender::stored_bytes).sum(),
         })
     }
+}
+
+/// What draws the frames of a clip, or why it cannot be drawn.
+fn frame_source(
+    media: &MediaSource,
+    clip: &Clip,
+    bundled_presets: Option<&Path>,
+    catalog: &mut VisualizerCatalog,
+) -> Result<FrameSource, String> {
+    if media.is_visualizer_plugin() {
+        let plugin = catalog.plugin(&media.path);
+        // A broken `visualizer.json` is reported here; a broken shader is
+        // reported by the render itself.
+        plugin.manifest.as_ref().map_err(Clone::clone)?;
+        let folder = plugin
+            .folder
+            .clone()
+            .ok_or("The visualizer's folder was not found.")?;
+        return Ok(FrameSource::Plugin {
+            folder,
+            parameters: clip.parameters.clone(),
+            version: plugin.version,
+        });
+    }
+
+    let preset_file = resolve_preset_path(&media.path, bundled_presets).ok_or_else(|| {
+        format!(
+            "{} ships with VizX, but the bundled presets were not found on this computer.",
+            media.file_name()
+        )
+    })?;
+    Ok(FrameSource::Milkdrop {
+        preset_path: preset_file.to_string_lossy().into_owned(),
+    })
 }
 
 pub struct PrerenderProgress {

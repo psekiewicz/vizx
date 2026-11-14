@@ -107,7 +107,20 @@ impl PresetLibrary {
 /// a bundled reference that tries to leave the presets folder with `..`
 /// (project files can come from other people, so they are not trusted).
 pub fn resolve_preset_path(stored_path: &str, bundled_root: Option<&Path>) -> Option<PathBuf> {
-    match stored_path.strip_prefix(BUNDLED_PRESET_PREFIX) {
+    resolve_bundled_path(stored_path, BUNDLED_PRESET_PREFIX, bundled_root)
+}
+
+/// Turns a path stored in a project into a path on this computer, for
+/// anything that ships with VizX (presets, visualizer plugins).
+///
+/// A stored path starting with `prefix` names something inside
+/// `bundled_root`; any other stored path is used as it is.
+pub fn resolve_bundled_path(
+    stored_path: &str,
+    prefix: &str,
+    bundled_root: Option<&Path>,
+) -> Option<PathBuf> {
+    match stored_path.strip_prefix(prefix) {
         Some(relative_path) => {
             let stays_inside = Path::new(relative_path)
                 .components()
@@ -122,24 +135,31 @@ pub fn resolve_preset_path(stored_path: &str, bundled_root: Option<&Path>) -> Op
 }
 
 /// Finds the folder with the presets that ship with VizX.
-///
-/// An installed VizX has a `presets` folder next to its executable. When
-/// VizX is run from its source code, the presets in the repository's
-/// `assets` folder are used instead.
 pub fn find_bundled_presets() -> Option<PathBuf> {
+    find_bundled_folder("presets")
+}
+
+/// Finds a folder of things that ship with VizX, by its name.
+///
+/// An installed VizX has the folder next to its executable. When VizX is
+/// run from its source code, the folder of that name in the repository's
+/// `assets` folder is used instead.
+pub fn find_bundled_folder(name: &str) -> Option<PathBuf> {
     let next_to_executable = std::env::current_exe()
         .ok()
-        .and_then(|path| Some(path.parent()?.join("presets")));
+        .and_then(|path| Some(path.parent()?.join(name)));
     // `CARGO_MANIFEST_DIR` is this crate's folder on the machine VizX was
     // built on; the repository root is two levels up.
-    let in_repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/presets");
+    let in_repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .map(|repository| repository.join("assets").join(name));
 
     next_to_executable
         .into_iter()
-        .chain([in_repository])
+        .chain(in_repository)
         .find(|folder| folder.is_dir())
 }
-
 /// Adds every `.milk` file below `folder` to `entries`. `folders` holds the
 /// names of the folders walked through so far, below the pack.
 fn collect_presets(
