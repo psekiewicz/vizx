@@ -49,6 +49,8 @@ pub enum AppCommand {
     OpenLyrics,
     /// Pick an .lrc or .srt file and add its timed lines as subtitles.
     ImportLyricsFile,
+    /// Split the selected song clip into stems (vocals, drums, bass, other).
+    SeparateStems,
     /// Pick a font file for the text on the selected layer.
     ChooseTextFont,
     /// Cut the selected clip in two at the playhead.
@@ -116,6 +118,8 @@ pub struct VizxApp {
     pub is_about_window_open: bool,
     pub is_project_settings_open: bool,
     pub lyrics: LyricsWindow,
+    /// The stem separation running in the background, if any.
+    stem_job: Option<vizx_core::StemJob>,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
     pub graphics_summary: String,
     /// Result of the last command, shown in the status bar.
@@ -156,6 +160,7 @@ impl VizxApp {
             is_about_window_open: false,
             is_project_settings_open: false,
             lyrics: LyricsWindow::default(),
+            stem_job: None,
             graphics_summary: describe_graphics_adapter(creation_context),
             status_message: "Ready".to_owned(),
             requested_command: None,
@@ -245,6 +250,72 @@ impl VizxApp {
         self.status_message = match self.session.set_text(media_id, text) {
             Ok(()) => format!("Using font {}", path.display()),
             Err(problem) => format!("Could not use that font: {problem}"),
+        };
+    }
+
+    /// Starts separating the selected song clip into stems.
+    fn separate_stems(&mut self, ctx: &egui::Context) {
+        if let Some(job) = &self.stem_job {
+            self.status_message = format!(
+                "Still separating {}; wait for it to finish",
+                job.song_name()
+            );
+            return;
+        }
+        let Some(clip_id) = self.session.selected_clip_id() else {
+            self.status_message = "Select a song clip to separate".to_owned();
+            return;
+        };
+        let Some((_, clip)) = self.session.project().clip(clip_id) else {
+            return;
+        };
+        let Some(source) = self
+            .session
+            .project()
+            .media_source(clip.media)
+            .filter(|source| source.audio().is_some())
+        else {
+            self.status_message = "Only audio can be separated into stems".to_owned();
+            return;
+        };
+        let Some(loaded) = self.audio_store.loaded(&source.path) else {
+            self.status_message = "The song is still loading; try again in a moment".to_owned();
+            return;
+        };
+        let ctx = ctx.clone();
+        let job = vizx_core::StemJob::start(
+            clip_id,
+            std::sync::Arc::clone(&loaded.audio),
+            Path::new(&source.path),
+            move || ctx.request_repaint(),
+        );
+        self.status_message = format!("Separating {} into stems...", job.song_name());
+        self.stem_job = Some(job);
+    }
+
+    /// Adds the stems once their separation has finished.
+    fn collect_stems(&mut self) {
+        let Some(job) = &self.stem_job else {
+            return;
+        };
+        let Some(outcome) = job.finished() else {
+            self.status_message = format!(
+                "Separating {} into stems: {:.0} %",
+                job.song_name(),
+                job.progress() * 100.0
+            );
+            return;
+        };
+        let (clip_id, song) = (job.clip_id(), job.song_name().to_owned());
+        self.stem_job = None;
+        self.status_message = match outcome
+            .and_then(|stems| self.session.add_stems(clip_id, &stems))
+        {
+            Ok(tracks) => format!(
+                "Separated {song} into {} stems on muted tracks; choose one under \"Reacts to\" of a visualizer",
+                tracks.len()
+            ),
+            Err(problem) => format!("Could not separate {song}: {problem}"),
         };
     }
 
@@ -450,6 +521,7 @@ impl VizxApp {
                 self.lyrics.open(project_seconds);
             }
             AppCommand::ImportLyricsFile => self.import_lyrics_file(frame),
+            AppCommand::SeparateStems => self.separate_stems(ctx),
             AppCommand::ChooseTextFont => self.choose_text_font(frame),
             AppCommand::SplitClip => {
                 self.status_message = if self.session.split_selected_clip() {
@@ -907,6 +979,7 @@ impl eframe::App for VizxApp {
         self.handle_keyboard_shortcuts(&ctx);
         self.load_project_audio(&ctx);
         self.load_project_images(&ctx);
+        self.collect_stems();
         self.visual_preview.update(
             &ctx,
             &self.session,

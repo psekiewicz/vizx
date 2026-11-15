@@ -2,7 +2,7 @@ use eframe::egui;
 use vizx_core::{AudioStore, EditorSession, ParameterKind, VisualizerCatalog};
 use vizx_project::{
     AudioInput, AudioReaction, Clip, Easing, FrameAnimation, FrameLayout, MediaId, Placement,
-    ReactionBand, TextAlignment, TextProperties, Track,
+    ReactionBand, TextAlignment, TextProperties, Track, TrackKind,
 };
 
 use crate::app::AppCommand;
@@ -59,6 +59,19 @@ fn track_properties(
             ui.end_row();
         });
     session.edit_project(|project| project.rename_track(track.id, &name));
+    if track.kind == TrackKind::Audio {
+        let mut muted = track.muted;
+        if ui
+            .checkbox(&mut muted, "Muted")
+            .on_hover_text(
+                "Not heard and not part of the mix, but visualizers can still follow it \
+                 (stems are added muted, so the song is not played twice)",
+            )
+            .changed()
+        {
+            session.edit_project(|project| project.set_track_muted(track.id, muted));
+        }
+    }
 
     if !track.clips.is_empty() {
         ui.add_space(8.0);

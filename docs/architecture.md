@@ -498,6 +498,28 @@ of the line's middle (subtitle-like near the bottom by default), and a
 fade in/out, optionally popping in, made of four keyframes per clip.
 "Restyle Layer" gives every text on a layer the current look again.
 
+### Stems: one visualizer for the vocals, one for the drums
+
+An audio clip's context menu offers **Separate Stems**. The song is split
+into vocals, drums, bass and other (`vizx_audio::separate_stems`), in a
+background thread (`vizx_core::StemJob`, progress in the status bar). The
+stems are written as WAV files into `<song> stems/` next to the song and
+reused when they are there already. Each stem goes on an audio track of its
+own, timed like the song's clip and **muted** (`Track::muted`): a muted
+track is neither played nor part of the mix (`audio_sources` and
+`beat_times` leave it out), but a visualizer or reaction can choose it as
+its input ("Reacts to: Vocals").
+
+The built-in separation needs no model and no download. It works on the
+spectrogram: harmonic-percussive separation by median filtering (drums are
+short and wide in frequency, notes long and narrow), the centered harmonic
+part between ~150 Hz and ~7 kHz as vocals, the harmonic part below ~250 Hz
+as bass, and the rest as other; the four masks add up to 1, so the stems add
+up to the song. It is made to drive visuals, not to be listened to alone. A
+separation model (Demucs, MDX-Net through ONNX Runtime) would be a cleaner
+engine behind the same `StemJob`, writing the same four files; it needs a
+runtime library and a model file to be downloaded first.
+
 ### Visualizer plugins
 
 Visualizers other than MilkDrop presets are **plugins**: a folder with a
@@ -703,7 +725,7 @@ Not implemented. Listed to show where they will attach:
 | Composition engine | Combines all project elements into one frame description |
 | Rendering engine | Draws that description with wgpu; the same code path for preview and export |
 | Export | Deterministic project clock driving the renderer, encoded through FFmpeg |
-| Local ML | Stem and voice separation; no model chosen yet |
+| Local ML | A separation model (Demucs / MDX-Net through ONNX Runtime) as a cleaner engine for the stem separation that exists; not downloaded yet |
 
 Each will add data to `vizx-project`, logic coordinated through `vizx-core`,
 and views in `vizx-app`.

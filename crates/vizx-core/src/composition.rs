@@ -42,7 +42,13 @@ pub fn audio_sources(
     let mut sources = Vec::new();
     let mut clips_still_loading = 0;
     for track in project.tracks() {
-        if track.kind != TrackKind::Audio || only_track.is_some_and(|id| id != track.id) {
+        // A muted track is left out of the mix, but can still be chosen
+        // on its own.
+        let is_left_out = match only_track {
+            Some(id) => id != track.id,
+            None => track.muted,
+        };
+        if track.kind != TrackKind::Audio || is_left_out {
             continue;
         }
         for clip in &track.clips {
@@ -86,7 +92,13 @@ pub fn beat_times(
     let mut beats = Vec::new();
     let mut tempo = None;
     for track in project.tracks() {
-        if track.kind != TrackKind::Audio || only_track.is_some_and(|id| id != track.id) {
+        // A muted track is left out of the mix, but can still be chosen
+        // on its own.
+        let is_left_out = match only_track {
+            Some(id) => id != track.id,
+            None => track.muted,
+        };
+        if track.kind != TrackKind::Audio || is_left_out {
             continue;
         }
         for clip in &track.clips {

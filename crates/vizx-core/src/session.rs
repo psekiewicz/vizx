@@ -262,6 +262,36 @@ impl EditorSession {
         Ok(track_id)
     }
 
+    /// Adds the stems separated from the song of `clip_id`, each on a muted
+    /// audio track of its own named after it, timed like that clip.
+    /// Returns the new tracks.
+    pub fn add_stems(
+        &mut self,
+        clip_id: ClipId,
+        stems: &[(String, PathBuf)],
+    ) -> Result<Vec<TrackId>, String> {
+        if self.project.clip(clip_id).is_none() {
+            return Err("the song's clip is no longer there".to_owned());
+        }
+        let mut tracks = Vec::new();
+        for (name, path) in stems {
+            let info = vizx_audio::probe_audio_file(path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            let properties = AudioProperties {
+                duration_milliseconds: info.duration_milliseconds,
+                sample_rate: info.sample_rate,
+                channel_count: info.channel_count,
+            };
+            let track_id = self
+                .project
+                .add_stem(path.to_string_lossy(), properties, name, clip_id)
+                .ok_or("the song's clip is no longer there")?;
+            tracks.push(track_id);
+        }
+        self.has_unsaved_changes = true;
+        Ok(tracks)
+    }
+
     /// Adds a MilkDrop preset (`.milk` file) to the project and places it
     /// on a visual layer, which becomes selected.
     ///

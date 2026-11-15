@@ -17,6 +17,7 @@ mod prerender;
 mod preset_library;
 mod selection;
 mod session;
+mod stems;
 mod text;
 mod visualizer_catalog;
 
@@ -44,6 +45,7 @@ pub use preset_library::{
 };
 pub use selection::Selection;
 pub use session::{EditorSession, UNTITLED_PROJECT_NAME};
+pub use stems::{STEM_NAMES, StemFiles, StemJob, stem_folder};
 pub use text::render_text;
 pub use visualizer_catalog::{
     BUNDLED_VISUALIZER_PREFIX, BundledVisualizer, PluginState, VisualizerCatalog,

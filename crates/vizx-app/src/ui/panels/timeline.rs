@@ -600,6 +600,18 @@ fn show_lanes(
                             if ui.add(delete).clicked() {
                                 *requested_command = Some(AppCommand::DeleteSelection);
                             }
+                            if track.kind == TrackKind::Audio
+                                && !track.muted
+                                && ui
+                                    .button("Separate Stems")
+                                    .on_hover_text(
+                                        "Split the song into vocals, drums, bass and other, \
+                                         each on a muted track that visualizers can follow",
+                                    )
+                                    .clicked()
+                            {
+                                *requested_command = Some(AppCommand::SeparateStems);
+                            }
                             ui.separator();
                             add_submenu(ui, requested_command);
                         });
@@ -912,10 +924,16 @@ fn show_track_headers(
         painter.text(
             row_rect.left_center() + egui::vec2(12.0, 0.0),
             Align2::LEFT_CENTER,
-            &track.name,
+            if track.muted {
+                format!("{} (muted)", track.name)
+            } else {
+                track.name.clone()
+            },
             FontId::proportional(12.0),
             if is_selected {
                 Color32::WHITE
+            } else if track.muted {
+                theme::TEXT_MUTED
             } else {
                 ui.visuals().text_color()
             },

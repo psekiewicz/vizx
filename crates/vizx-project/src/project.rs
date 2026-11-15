@@ -95,6 +95,7 @@ impl Project {
             id,
             name: name.into(),
             kind,
+            muted: false,
             clips: Vec::new(),
         };
         match kind {
@@ -530,6 +531,68 @@ impl Project {
         };
 
         (media_id, track_id)
+    }
+
+    /// Adds a stem of the song in `like_clip` (its vocals, say) on a new,
+    /// muted audio track named `name`, timed exactly like that clip, so
+    /// visuals can follow just that part of the song. Returns the track.
+    pub fn add_stem(
+        &mut self,
+        path: impl Into<String>,
+        properties: AudioProperties,
+        name: &str,
+        like_clip: ClipId,
+    ) -> Option<TrackId> {
+        let (_, original) = self.clip(like_clip)?;
+        let timing = (
+            original.start_milliseconds,
+            original.duration_milliseconds,
+            original.source_offset_milliseconds,
+        );
+        let media_id = MediaId(self.next_media_id);
+        self.next_media_id += 1;
+        self.media.push(MediaSource {
+            id: media_id,
+            path: path.into(),
+            content: MediaContent::Audio(properties),
+            manual_beats: None,
+            tempo_bpm: None,
+        });
+        let track_id = self.add_track(name, TrackKind::Audio);
+        let clip = Clip {
+            id: ClipId(self.next_clip_id),
+            media: media_id,
+            start_milliseconds: timing.0,
+            duration_milliseconds: timing.1,
+            source_offset_milliseconds: timing.2,
+            audio_gain: 1.0,
+            audio_input: AudioInput::Mix,
+            placement: Placement::FULL,
+            parameters: BTreeMap::new(),
+            opacity: 1.0,
+            reaction: AudioReaction::default(),
+            rotation_degrees: 0.0,
+            spin_degrees_per_second: 0.0,
+            keyframes: Vec::new(),
+            sharp_pixels: None,
+        };
+        self.next_clip_id += 1;
+        let track = self.tracks.iter_mut().find(|track| track.id == track_id)?;
+        track.muted = true;
+        track.clips.push(clip);
+        Some(track_id)
+    }
+
+    /// Mutes or unmutes an audio track (see `Track::muted`). Returns
+    /// `true` only if this changed something.
+    pub fn set_track_muted(&mut self, track_id: TrackId, muted: bool) -> bool {
+        match self.tracks.iter_mut().find(|track| track.id == track_id) {
+            Some(track) if track.kind == TrackKind::Audio && track.muted != muted => {
+                track.muted = muted;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Adds a MilkDrop preset to the media library and places it on a
@@ -1402,6 +1465,36 @@ mod tests {
             sample_rate: 44_100,
             channel_count: 2,
         }
+    }
+
+    #[test]
+    fn a_stem_goes_on_a_muted_track_timed_like_its_song() {
+        let mut project = Project::new();
+        let (_, song_track) = project.import_audio("song.mp3", audio(60_000));
+        let song_clip = project.track(song_track).unwrap().clips[0].id;
+        project.move_clip(song_clip, 2000);
+        project.trim_clip_start(song_clip, 3000);
+
+        let stem_track = project
+            .add_stem("song - Vocals.wav", audio(60_000), "Vocals", song_clip)
+            .unwrap();
+
+        let (_, song) = project.clip(song_clip).unwrap();
+        let stem = project.track(stem_track).unwrap();
+        assert_eq!(stem.name, "Vocals");
+        assert!(stem.muted);
+        let timing = |clip: &Clip| {
+            (
+                clip.start_milliseconds,
+                clip.duration_milliseconds,
+                clip.source_offset_milliseconds,
+            )
+        };
+        assert_eq!(timing(&stem.clips[0]), timing(song));
+        // Muting works on audio tracks only.
+        assert!(project.set_track_muted(stem_track, false));
+        let layer = project.add_default_named_track(TrackKind::Visual);
+        assert!(!project.set_track_muted(layer, true));
     }
 
     #[test]

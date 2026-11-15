@@ -60,6 +60,11 @@ pub struct Track {
     pub id: TrackId,
     pub name: String,
     pub kind: TrackKind,
+    /// For an audio track: it is not heard and not part of the mix, but
+    /// visuals can still follow it (stems separated from a song are added
+    /// like this, so the song is not played twice).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
     /// What is placed on this track, in no particular order.
     #[serde(default)]
     pub clips: Vec<Clip>,

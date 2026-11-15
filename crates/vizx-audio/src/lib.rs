@@ -16,6 +16,7 @@ mod beats;
 mod decode;
 mod playback;
 mod probe;
+mod separate;
 mod wav;
 mod waveform;
 
@@ -24,6 +25,7 @@ pub use beats::{Beat, BeatAnalysis, detect_beats};
 pub use decode::{DecodedAudio, decode_audio_file};
 pub use playback::{AudioPlayer, PlaybackError, PlaybackSource, mix_to_stereo};
 pub use probe::{AudioFileError, AudioFileInfo, probe_audio_file};
+pub use separate::{SeparationError, Stems, separate_stems};
 pub use wav::write_wav_file;
 pub use waveform::{WaveformPeaks, compute_waveform_peaks};
 
