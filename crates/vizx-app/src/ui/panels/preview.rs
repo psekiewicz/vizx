@@ -181,7 +181,14 @@ pub fn show(
         None => data.remove::<Drag>(drag_id),
     });
     if let Some(finished) = finished_drag {
-        session.edit_project(|project| project.set_clip_placement(finished.clip, finished.current));
+        // Changes the clip at the playhead: its resting place, or the
+        // keyframe there (a new one if the clip has keyframes elsewhere).
+        let playhead_milliseconds = (session.playhead_seconds() * 1000.0).round() as u64;
+        session.edit_project(|project| {
+            project.edit_clip_transform_at(finished.clip, playhead_milliseconds, |transform| {
+                transform.placement = finished.current;
+            })
+        });
     }
 
     painter.text(

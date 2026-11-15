@@ -9,8 +9,8 @@ use std::path::Path;
 
 use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer, Beat, PlaybackSource};
 use vizx_project::{
-    AudioInput, AudioReaction, Clip, MediaSource, Placement, Project, ReactionBand, ReactionEffect,
-    TrackKind,
+    AudioInput, AudioReaction, Clip, MediaSource, Project, ReactionBand, ReactionEffect, TrackKind,
+    Transform,
 };
 
 use crate::{AudioStore, FrameSource, VisualizerCatalog, resolve_preset_path};
@@ -213,9 +213,10 @@ pub struct LayerGeometry {
     pub opacity: f32,
 }
 
-/// Combines a clip's placement and opacity with what its reaction to the
-/// sound does right now.
-pub fn layer_geometry(placement: Placement, opacity: f64, effect: ReactionEffect) -> LayerGeometry {
+/// Combines a clip's state at a moment (place, size, rotation, opacity)
+/// with what its reaction to the sound does right now.
+pub fn layer_geometry(transform: &Transform, effect: ReactionEffect) -> LayerGeometry {
+    let placement = transform.placement;
     LayerGeometry {
         center: [
             (placement.x + placement.width / 2.0 + effect.offset_x) as f32,
@@ -226,8 +227,8 @@ pub fn layer_geometry(placement: Placement, opacity: f64, effect: ReactionEffect
             (placement.width * effect.scale) as f32,
             (placement.height * effect.scale) as f32,
         ],
-        rotation_degrees: effect.rotation_degrees as f32,
-        opacity: (opacity * effect.opacity).clamp(0.0, 1.0) as f32,
+        rotation_degrees: (transform.rotation_degrees + effect.rotation_degrees) as f32,
+        opacity: (transform.opacity * effect.opacity).clamp(0.0, 1.0) as f32,
     }
 }
 
@@ -355,6 +356,7 @@ impl ReactionMeter {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use vizx_project::Placement;
 
     use vizx_audio::DecodedAudio;
 
@@ -391,14 +393,18 @@ mod tests {
             height: 0.6,
         };
 
-        let still = layer_geometry(placement, 0.5, ReactionEffect::NONE);
+        let transform = Transform {
+            placement,
+            rotation_degrees: 10.0,
+            opacity: 0.5,
+        };
+        let still = layer_geometry(&transform, ReactionEffect::NONE);
         assert_eq!(still.center, [0.4, 0.4]);
         assert_eq!(still.size, [0.4, 0.6]);
-        assert_eq!((still.rotation_degrees, still.opacity), (0.0, 0.5));
+        assert_eq!((still.rotation_degrees, still.opacity), (10.0, 0.5));
 
         let moved = layer_geometry(
-            placement,
-            0.5,
+            &transform,
             ReactionEffect {
                 scale: 2.0,
                 opacity: 0.5,
@@ -409,7 +415,7 @@ mod tests {
         );
         assert_eq!(moved.center, [0.5, 0.3]);
         assert_eq!(moved.size, [0.8, 1.2]);
-        assert_eq!((moved.rotation_degrees, moved.opacity), (45.0, 0.25));
+        assert_eq!((moved.rotation_degrees, moved.opacity), (55.0, 0.25));
     }
 
     #[test]

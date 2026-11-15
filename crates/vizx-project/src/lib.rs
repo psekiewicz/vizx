@@ -12,6 +12,7 @@
 mod file;
 mod media;
 mod metadata;
+mod motion;
 mod project;
 mod settings;
 mod track;
@@ -22,6 +23,7 @@ pub use media::{
     TextProperties,
 };
 pub use metadata::ProjectMetadata;
+pub use motion::{Easing, KEYFRAME_TOLERANCE_MILLISECONDS, Keyframe, Motion, Transform};
 pub use project::{LayerMove, Project};
 pub use settings::{FrameRate, ProjectSettings};
 pub use track::{
@@ -63,4 +65,6 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 /// - 14: a clip records where in its media it begins
 ///   (`source_offset_milliseconds`), so clips can be trimmed and split.
 /// - 15: a visual clip's `audio_gain` (how strongly it hears its audio).
-pub const CURRENT_FORMAT_VERSION: u32 = 15;
+/// - 16: a visual clip's `rotation_degrees`, `spin_degrees_per_second` and
+///   `keyframes`. Older files load unturned and without keyframes.
+pub const CURRENT_FORMAT_VERSION: u32 = 16;

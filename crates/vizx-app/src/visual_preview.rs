@@ -206,7 +206,14 @@ impl VisualPreview {
                 };
                 let clip_seconds = clip.duration_milliseconds as f64 / 1000.0;
                 let (beats, tempo) = beat_times(project, audio_store, clip.audio_input);
-                let (width, height) = render_size(settings.width, settings.height, clip.placement);
+                // Rendered at the largest size the clip reaches.
+                let (largest_width, largest_height) = clip.motion().largest_size();
+                let largest = Placement {
+                    width: largest_width,
+                    height: largest_height,
+                    ..Placement::FULL
+                };
+                let (width, height) = render_size(settings.width, settings.height, largest);
                 wanted.push((
                     clip.id,
                     PrerenderJob {
@@ -288,15 +295,22 @@ impl VisualPreview {
             } else {
                 ReactionEffect::NONE
             };
-            let placement = match dragged {
-                Some((dragged_clip, placement)) if dragged_clip == clip.id => placement,
-                _ => clip.placement,
-            };
-            geometries.push(layer_geometry(placement, clip.opacity, effect));
+            // The clip's state at the playhead: keyframes and spin.
+            let seconds_into_clip = playhead_seconds - clip.start_milliseconds as f64 / 1000.0;
+            let mut transform = clip.motion().animated_at(seconds_into_clip.max(0.0));
+            let keyed = clip.transform_at(seconds_into_clip.max(0.0) * 1000.0);
+            if let Some((dragged_clip, placement)) = dragged
+                && dragged_clip == clip.id
+            {
+                transform.placement = placement;
+            }
+            geometries.push(layer_geometry(&transform, effect));
             self.layers.push(LayerView {
                 clip_id: clip.id,
                 track_id: track.id,
-                placement: clip.placement,
+                // The frame and handles in the preview show the clip where
+                // it is at the playhead.
+                placement: keyed.placement,
                 state,
             });
         }

@@ -2,10 +2,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::Easing;
 use crate::{
     AudioInput, AudioProperties, AudioReaction, CURRENT_FORMAT_VERSION, Clip, ClipId,
     ImageProperties, MediaContent, MediaId, MediaSource, Placement, ProjectMetadata,
-    ProjectSettings, TextProperties, Track, TrackId, TrackKind,
+    ProjectSettings, TextProperties, Track, TrackId, TrackKind, Transform,
 };
 
 /// Root of all data that belongs to one VizX project.
@@ -266,6 +267,8 @@ impl Project {
         if new_start == clip.start_milliseconds {
             return false;
         }
+        // Keyframes keep their moments in project time.
+        clip.keyframes = clip.shifted_keyframes(clip.start_milliseconds as i64 - new_start as i64);
         if has_source_time {
             // Later start: more is skipped. Earlier start: less.
             clip.source_offset_milliseconds = (clip.source_offset_milliseconds + new_start)
@@ -326,7 +329,10 @@ impl Project {
         let first_duration = at_milliseconds - clip.start_milliseconds;
         let has_source_time = self.has_source_time(clip);
 
+        // Both parts keep all keyframes, so each continues the motion.
+        let second_keyframes = clip.shifted_keyframes(-(first_duration as i64));
         let mut second = clip.clone();
+        second.keyframes = second_keyframes;
         second.id = ClipId(self.next_clip_id);
         self.next_clip_id += 1;
         second.start_milliseconds = at_milliseconds;
@@ -337,7 +343,8 @@ impl Project {
         second.media = self.own_media_for_copy(second.media);
         let second_id = second.id;
 
-        self.clip_mut(id)?.duration_milliseconds = first_duration;
+        let first = self.clip_mut(id)?;
+        first.duration_milliseconds = first_duration;
         self.tracks
             .iter_mut()
             .find(|track| track.id == track_id)?
@@ -501,6 +508,9 @@ impl Project {
             parameters: BTreeMap::new(),
             opacity: 1.0,
             reaction: AudioReaction::default(),
+            rotation_degrees: 0.0,
+            spin_degrees_per_second: 0.0,
+            keyframes: Vec::new(),
         };
         self.next_clip_id += 1;
         let clip_end = clip.end_milliseconds();
@@ -634,6 +644,9 @@ impl Project {
             parameters: BTreeMap::new(),
             opacity: 1.0,
             reaction: AudioReaction::default(),
+            rotation_degrees: 0.0,
+            spin_degrees_per_second: 0.0,
+            keyframes: Vec::new(),
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -671,6 +684,9 @@ impl Project {
             parameters: BTreeMap::new(),
             opacity: 1.0,
             reaction: AudioReaction::default(),
+            rotation_degrees: 0.0,
+            spin_degrees_per_second: 0.0,
+            keyframes: Vec::new(),
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -779,6 +795,21 @@ impl Project {
         if let Some(clip) = self.clip_of_media_mut(media_id)
             && clip.placement != placement
         {
+            // Keyframes keep their own size relative to the text, around
+            // their own middle.
+            let width_ratio = placement.width / clip.placement.width.max(1e-9);
+            let height_ratio = placement.height / clip.placement.height.max(1e-9);
+            for keyframe in &mut clip.keyframes {
+                let old = keyframe.transform.placement;
+                let (width, height) = (old.width * width_ratio, old.height * height_ratio);
+                keyframe.transform.placement = Placement {
+                    x: old.x + (old.width - width) / 2.0,
+                    y: old.y + (old.height - height) / 2.0,
+                    width,
+                    height,
+                }
+                .sanitized();
+            }
             clip.placement = placement;
             has_placement_changed = true;
         }
@@ -790,6 +821,89 @@ impl Project {
             .iter_mut()
             .flat_map(|track| &mut track.clips)
             .find(|clip| clip.media == media_id)
+    }
+
+    /// Changes a visual clip's state (place, size, rotation, opacity) at
+    /// `project_milliseconds`. Without keyframes this is its resting state;
+    /// with keyframes the keyframe at that moment is changed, or made.
+    /// Returns `true` only if something changed.
+    pub fn edit_clip_transform_at(
+        &mut self,
+        id: ClipId,
+        project_milliseconds: u64,
+        change: impl FnOnce(&mut Transform),
+    ) -> bool {
+        let Some(clip) = self.clip_mut(id) else {
+            return false;
+        };
+        let moment = moment_in_clip(clip, project_milliseconds);
+        let mut transform = clip.transform_at(moment as f64);
+        change(&mut transform);
+        clip.set_transform_at(moment, transform)
+    }
+
+    /// Records a clip's current state at `project_milliseconds` as a
+    /// keyframe. Returns `false` if there already is one there.
+    pub fn add_keyframe(&mut self, id: ClipId, project_milliseconds: u64) -> bool {
+        self.clip_mut(id).is_some_and(|clip| {
+            let moment = moment_in_clip(clip, project_milliseconds);
+            clip.add_keyframe_at(moment)
+        })
+    }
+
+    /// Removes the keyframe at `project_milliseconds`. Returns `false` if
+    /// there is none there.
+    pub fn remove_keyframe(&mut self, id: ClipId, project_milliseconds: u64) -> bool {
+        self.clip_mut(id).is_some_and(|clip| {
+            let moment = moment_in_clip(clip, project_milliseconds);
+            clip.remove_keyframe_at(moment)
+        })
+    }
+
+    /// Removes all keyframes of a clip; it keeps the state it has at
+    /// `project_milliseconds`. Returns `false` if it had none.
+    pub fn clear_keyframes(&mut self, id: ClipId, project_milliseconds: u64) -> bool {
+        let Some(clip) = self.clip_mut(id) else {
+            return false;
+        };
+        if clip.keyframes.is_empty() {
+            return false;
+        }
+        let kept = clip.transform_at(moment_in_clip(clip, project_milliseconds) as f64);
+        clip.keyframes.clear();
+        clip.set_transform_at(0, kept);
+        true
+    }
+
+    /// Sets how the values travel to the keyframe at
+    /// `project_milliseconds`. Returns `true` only if something changed.
+    pub fn set_keyframe_easing(
+        &mut self,
+        id: ClipId,
+        project_milliseconds: u64,
+        easing: Easing,
+    ) -> bool {
+        self.clip_mut(id).is_some_and(|clip| {
+            let moment = moment_in_clip(clip, project_milliseconds);
+            clip.set_keyframe_easing_at(moment, easing)
+        })
+    }
+
+    /// Sets how fast a visual clip keeps turning, in degrees per second.
+    /// Returns `true` only if this changed something.
+    pub fn set_clip_spin(&mut self, id: ClipId, degrees_per_second: f64) -> bool {
+        let spin = if degrees_per_second.is_finite() {
+            degrees_per_second.clamp(-3600.0, 3600.0)
+        } else {
+            0.0
+        };
+        match self.clip_mut(id) {
+            Some(clip) if clip.spin_degrees_per_second != spin => {
+                clip.spin_degrees_per_second = spin;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Sets how strongly a visual clip hears its audio (see
@@ -897,6 +1011,13 @@ impl Project {
             _ => false,
         }
     }
+}
+
+/// A moment of the project as a moment of the clip, kept within the clip.
+fn moment_in_clip(clip: &Clip, project_milliseconds: u64) -> u64 {
+    project_milliseconds
+        .saturating_sub(clip.start_milliseconds)
+        .min(clip.duration_milliseconds)
 }
 
 /// Where a layer is moved to by [`Project::move_layer`].
@@ -1688,6 +1809,106 @@ mod tests {
         assert_eq!(project.clip(clip).unwrap().0.id, other_layer);
         // Its time is unchanged.
         assert_eq!(timing(&project, clip), (3_000, 10_000, 0));
+    }
+
+    fn x_at(project: &Project, id: ClipId, project_milliseconds: u64) -> f64 {
+        let (_, clip) = project.clip(id).unwrap();
+        let moment = project_milliseconds - clip.start_milliseconds;
+        clip.transform_at(moment as f64).placement.x
+    }
+
+    #[test]
+    fn edits_change_the_resting_state_until_there_are_keyframes() {
+        let mut project = Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 10_000;
+        let (_, layer) = project.add_milkdrop_preset("a.milk");
+        let id = project.track(layer).unwrap().clips[0].id;
+
+        // No keyframes: an edit anywhere moves the whole clip.
+        assert!(project.edit_clip_transform_at(id, 3_000, |t| t.placement.x = 0.2));
+        assert!(!project.edit_clip_transform_at(id, 3_000, |t| t.placement.x = 0.2));
+        assert_eq!(x_at(&project, id, 9_000), 0.2);
+
+        // A keyframe at 2 s, then an edit at 6 s: a second keyframe, and
+        // the clip glides from one to the other.
+        assert!(project.add_keyframe(id, 2_000));
+        assert!(!project.add_keyframe(id, 2_010)); // the same moment
+        assert!(project.edit_clip_transform_at(id, 6_000, |t| {
+            t.placement.x = 0.6;
+            t.rotation_degrees = 90.0;
+        }));
+        let (_, clip) = project.clip(id).unwrap();
+        assert_eq!(clip.keyframes.len(), 2);
+        assert_eq!(x_at(&project, id, 1_000), 0.2);
+        assert!((x_at(&project, id, 4_000) - 0.4).abs() < 1e-9);
+        assert_eq!(x_at(&project, id, 8_000), 0.6);
+
+        assert!(project.set_keyframe_easing(id, 6_000, Easing::Hold));
+        assert_eq!(x_at(&project, id, 5_900), 0.2);
+
+        // Removing the keyframes leaves the clip as it was where the last
+        // one was.
+        assert!(project.remove_keyframe(id, 2_000));
+        assert!(!project.remove_keyframe(id, 2_000));
+        assert!(project.remove_keyframe(id, 6_000));
+        let (_, clip) = project.clip(id).unwrap();
+        assert!(clip.keyframes.is_empty());
+        assert_eq!((clip.placement.x, clip.rotation_degrees), (0.6, 90.0));
+
+        assert!(project.set_clip_spin(id, 45.0));
+        assert_eq!(
+            project
+                .clip(id)
+                .unwrap()
+                .1
+                .motion()
+                .animated_at(2.0)
+                .rotation_degrees,
+            180.0
+        );
+    }
+
+    #[test]
+    fn keyframes_stay_in_place_when_a_clip_is_trimmed_or_split() {
+        let mut project = Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 10_000;
+        let (_, layer) = project.add_milkdrop_preset("a.milk");
+        let id = project.track(layer).unwrap().clips[0].id;
+        project.edit_clip_transform_at(id, 0, |t| t.placement.x = 0.0);
+        project.add_keyframe(id, 2_000);
+        project.edit_clip_transform_at(id, 6_000, |t| t.placement.x = 0.4);
+        let before: Vec<f64> = [3_000, 4_000, 5_000]
+            .iter()
+            .map(|moment| x_at(&project, id, *moment))
+            .collect();
+
+        // Cut off the first 3 s and the last 5 s: what remains looks the
+        // same, and new keyframes hold the edges.
+        assert!(project.trim_clip_start(id, 3_000));
+        assert!(project.trim_clip_end(id, 5_000));
+        let after: Vec<f64> = [3_000, 4_000, 5_000]
+            .iter()
+            .map(|moment| x_at(&project, id, *moment))
+            .collect();
+        for (a, b) in before.iter().zip(&after) {
+            assert!((a - b).abs() < 1e-9, "{before:?} vs {after:?}");
+        }
+        // The keyframe at 2 s now lies before the clip; it is kept.
+        let times: Vec<i64> = project
+            .clip(id)
+            .unwrap()
+            .1
+            .keyframes
+            .iter()
+            .map(|k| k.time_milliseconds)
+            .collect();
+        assert_eq!(times, [-1_000, 3_000]);
+
+        // Split at 4 s: both parts continue the motion.
+        let second = project.split_clip(id, 4_000).unwrap();
+        assert!((x_at(&project, id, 3_000) - before[0]).abs() < 1e-9);
+        assert!((x_at(&project, second, 4_000) - before[1]).abs() < 1e-9);
+        assert!((x_at(&project, second, 5_000) - before[2]).abs() < 1e-9);
     }
 
     #[test]

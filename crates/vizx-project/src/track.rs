@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::MediaId;
+use crate::{Keyframe, MediaId};
 
 /// Identifies a track within one project.
 ///
@@ -128,6 +128,19 @@ pub struct Clip {
     /// How a visual clip moves with the music.
     #[serde(default)]
     pub reaction: AudioReaction,
+    /// How far a visual clip is turned around its middle, in degrees
+    /// clockwise (its resting state; keyframes override it).
+    #[serde(default)]
+    pub rotation_degrees: f64,
+    /// How fast a visual clip keeps turning, in degrees per second
+    /// (negative: anticlockwise). 0 keeps it still.
+    #[serde(default)]
+    pub spin_degrees_per_second: f64,
+    /// The states of a visual clip at chosen moments, in order of time (see
+    /// `motion.rs`). Without keyframes the resting state (placement,
+    /// rotation, opacity) holds for the whole clip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keyframes: Vec<Keyframe>,
 }
 
 fn full_opacity() -> f64 {

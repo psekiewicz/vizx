@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use vizx_audio::{Beat, PlaybackSource};
-use vizx_project::{AudioReaction, Placement, Project, TextProperties};
+use vizx_project::{AudioReaction, Motion, Project, TextProperties};
 use vizx_render::{Compositor, LayerDraw};
 
 use crate::composition::{ReactionMeter, audio_sources, beat_times, frame_source, layer_geometry};
@@ -60,8 +60,8 @@ pub struct ExportLayer {
     /// When the clip starts and how long it lasts, in project time.
     pub start_seconds: f64,
     pub duration_seconds: f64,
-    pub placement: Placement,
-    pub opacity: f64,
+    /// Where and how the clip is drawn over time (keyframes, spin).
+    pub motion: Motion,
     pub reaction: AudioReaction,
     /// The audio the clip listens to: its visualizer draws from it and its
     /// reaction follows it.
@@ -125,8 +125,7 @@ impl ExportJob {
                     content,
                     start_seconds: clip.start_milliseconds as f64 / 1000.0,
                     duration_seconds: clip.duration_milliseconds as f64 / 1000.0,
-                    placement: clip.placement,
-                    opacity: clip.opacity,
+                    motion: clip.motion(),
                     reaction: clip.reaction,
                     input_audio: audio_sources(project, audio_store, clip.audio_input).0,
                     audio_gain: clip.audio_gain,
@@ -313,7 +312,8 @@ fn run(
                     layer.audio_gain,
                     seconds,
                 );
-                let geometry = layer_geometry(layer.placement, layer.opacity, effect);
+                let transform = layer.motion.animated_at(seconds - layer.start_seconds);
+                let geometry = layer_geometry(&transform, effect);
                 draws.push(LayerDraw {
                     key: index as u64,
                     // An image never changes; a drawn clip changes every
@@ -373,8 +373,10 @@ fn advance(
             ExportContent::Text(text) => LayerPicture::Image(render_text(text, job.height)?),
             ExportContent::Frames(source) => {
                 // Rendered at the size the clip has in the video.
-                let width = render_edge(layer.placement.width * f64::from(job.width));
-                let height = render_edge(layer.placement.height * f64::from(job.height));
+                // Rendered at the largest size the clip reaches in the video.
+                let (largest_width, largest_height) = layer.motion.largest_size();
+                let width = render_edge(largest_width * f64::from(job.width));
+                let height = render_edge(largest_height * f64::from(job.height));
                 let frames_per_second = frames_per_second.round().max(1.0) as u32;
                 let renderer = FrameRenderer::new(&PrerenderJob {
                     source: source.clone(),
@@ -450,6 +452,8 @@ mod tests {
 
     use vizx_audio::DecodedAudio;
 
+    use vizx_project::Placement;
+
     use super::*;
     use crate::ffmpeg::{VideoReader, find_ffmpeg, probe_video};
 
@@ -477,8 +481,7 @@ mod tests {
             content: ExportContent::Image(path.to_owned()),
             start_seconds: 0.0,
             duration_seconds: 1.0,
-            placement,
-            opacity: 1.0,
+            motion: Motion::still(placement),
             reaction: AudioReaction::default(),
             input_audio: Vec::new(),
             audio_gain: 1.0,
@@ -585,6 +588,78 @@ mod tests {
         let right = pixel(52, 24);
         assert!(left[0] > 180 && left[1] < 80, "left: {left:?}");
         assert!(right.iter().all(|part| *part < 50), "right: {right:?}");
+    }
+
+    /// A red square that moves from the left edge to the right edge with
+    /// keyframes: the video shows it on the left first and on the right
+    /// at the end.
+    #[test]
+    fn keyframes_move_a_layer_in_the_exported_video() {
+        let (Some(ffmpeg), true) = (find_ffmpeg(), vizx_render::open_device("test").is_ok()) else {
+            eprintln!("FFmpeg or a graphics adapter is missing: skipping");
+            return;
+        };
+        let image_path = temporary_path("moving.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 0, 0, 255]))
+            .save(&image_path)
+            .unwrap();
+        let output = temporary_path("moving.mp4");
+        let square = |x: f64| vizx_project::Transform {
+            placement: Placement {
+                x,
+                y: 0.25,
+                width: 0.25,
+                height: 0.5,
+            },
+            rotation_degrees: 0.0,
+            opacity: 1.0,
+        };
+        let keyframe = |time_milliseconds, x| vizx_project::Keyframe {
+            time_milliseconds,
+            transform: square(x),
+            easing: vizx_project::Easing::Linear,
+        };
+        let mut layer = image_layer(&image_path, Placement::FULL);
+        layer.motion.keyframes = vec![keyframe(0, 0.0), keyframe(900, 0.75)];
+
+        let export = Export::start(
+            ExportJob {
+                output: output.clone(),
+                ffmpeg: ffmpeg.clone(),
+                width: 64,
+                height: 48,
+                frame_rate: (10, 1),
+                duration_seconds: 1.0,
+                audio: Vec::new(),
+                layers: vec![layer],
+            },
+            || {},
+        );
+        let result = wait_for(&export);
+        let _ = std::fs::remove_file(&image_path);
+        assert_eq!(result, Ok(()));
+
+        let mut reader = VideoReader::open(&ffmpeg, &output, (64, 48), 10, 0.0).unwrap();
+        let mut frames = Vec::new();
+        for _ in 0..10 {
+            let mut pixels = Vec::new();
+            reader.read_frame(&mut pixels).unwrap();
+            frames.push(pixels);
+        }
+        drop(reader);
+        let _ = std::fs::remove_file(&output);
+
+        let red_at = |pixels: &[u8], x: usize| pixels[(24 * 64 + x) * 4] > 150;
+        assert!(
+            red_at(&frames[0], 8) && !red_at(&frames[0], 56),
+            "first frame"
+        );
+        assert!(
+            red_at(&frames[9], 56) && !red_at(&frames[9], 8),
+            "last frame"
+        );
+        // Halfway it is in the middle.
+        assert!(red_at(&frames[5], 32) && !red_at(&frames[5], 4));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use eframe::egui;
 use vizx_core::{EditorSession, ParameterKind, VisualizerCatalog};
 use vizx_project::{
-    AudioInput, AudioReaction, Clip, MediaId, Placement, ReactionBand, TextAlignment,
+    AudioInput, AudioReaction, Clip, Easing, MediaId, Placement, ReactionBand, TextAlignment,
     TextProperties, Track,
 };
 
@@ -113,7 +113,7 @@ fn track_properties(
                 audio_input_selector(ui, session, clip);
             }
             if is_visual {
-                placement_editor(ui, session, clip);
+                transform_editor(ui, session, clip);
                 opacity_and_reaction_editor(ui, session, clip, is_visualizer);
             }
             if let Some(plugin_path) = plugin_path {
@@ -180,13 +180,43 @@ fn audio_input_selector(ui: &mut egui::Ui, session: &mut EditorSession, clip: &C
     }
 }
 
-/// Position and size of a visual clip in the picture, as percentages of
-/// the composition. The same values change when the clip is dragged in the
-/// preview.
-fn placement_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {
-    let mut edited = clip.placement;
+/// Where and how a visual clip is shown: position and size (percentages of
+/// the picture), rotation, opacity and steady spin, plus its keyframes.
+///
+/// The values are those at the playhead. Without keyframes they hold for
+/// the whole clip; with keyframes, changing a value changes the keyframe at
+/// the playhead, or makes one there. Dragging the clip in the preview does
+/// the same.
+fn transform_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {
+    let playhead_milliseconds = (session.playhead_seconds() * 1000.0).round() as u64;
+    let moment = playhead_milliseconds
+        .saturating_sub(clip.start_milliseconds)
+        .min(clip.duration_milliseconds);
+    let is_playhead_inside = playhead_milliseconds >= clip.start_milliseconds
+        && playhead_milliseconds <= clip.end_milliseconds();
+    let current = clip.transform_at(moment as f64);
+    let keyframe_here = clip.keyframe_at(moment).copied();
 
-    egui::Grid::new(("placement", clip.id))
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("Transform").strong());
+    ui.separator();
+    let hint = match (clip.keyframes.is_empty(), is_playhead_inside) {
+        (true, _) => "No keyframes: these values hold for the whole clip.".to_owned(),
+        (false, true) if keyframe_here.is_some() => {
+            "Values of the keyframe at the playhead.".to_owned()
+        }
+        (false, true) => format!(
+            "{} keyframes. Changing a value adds one at the playhead.",
+            clip.keyframes.len()
+        ),
+        (false, false) => {
+            "The playhead is outside this clip; values at its nearest edge.".to_owned()
+        }
+    };
+    ui.label(egui::RichText::new(hint).small().color(theme::TEXT_MUTED));
+
+    let mut edited = current;
+    egui::Grid::new(("transform", clip.id))
         .num_columns(4)
         .show(ui, |ui| {
             let percent_field = |ui: &mut egui::Ui, label: &str, value: &mut f64| {
@@ -200,39 +230,153 @@ fn placement_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
                 );
                 *value = percent / 100.0;
             };
-            percent_field(ui, "X", &mut edited.x);
-            percent_field(ui, "Y", &mut edited.y);
+            percent_field(ui, "X", &mut edited.placement.x);
+            percent_field(ui, "Y", &mut edited.placement.y);
             ui.end_row();
-            percent_field(ui, "Width", &mut edited.width);
-            percent_field(ui, "Height", &mut edited.height);
+            percent_field(ui, "Width", &mut edited.placement.width);
+            percent_field(ui, "Height", &mut edited.placement.height);
+            ui.end_row();
+            ui.label("Rotation");
+            ui.add(
+                egui::DragValue::new(&mut edited.rotation_degrees)
+                    .speed(0.5)
+                    .max_decimals(1)
+                    .suffix("\u{b0}"),
+            );
+            percent_field(ui, "Opacity", &mut edited.opacity);
             ui.end_row();
         });
+    edited.opacity = edited.opacity.clamp(0.0, 1.0);
     if ui
         .add_enabled(
-            clip.placement != Placement::FULL,
+            edited.placement != Placement::FULL,
             egui::Button::new("Fill Frame"),
         )
-        .on_hover_text("Make the visualizer cover the whole picture again")
+        .on_hover_text("Make the element cover the whole picture")
         .clicked()
     {
-        edited = Placement::FULL;
+        edited.placement = Placement::FULL;
     }
 
     // Converting to percent and back can change the last digits; only a
     // real edit may touch the project.
-    let has_changed = [
-        (edited.x, clip.placement.x),
-        (edited.y, clip.placement.y),
-        (edited.width, clip.placement.width),
-        (edited.height, clip.placement.height),
-    ]
-    .iter()
-    .any(|(new, old)| (new - old).abs() > 1e-9);
+    let values = |transform: &vizx_project::Transform| {
+        [
+            transform.placement.x,
+            transform.placement.y,
+            transform.placement.width,
+            transform.placement.height,
+            transform.rotation_degrees,
+            transform.opacity,
+        ]
+    };
+    let has_changed = values(&edited)
+        .iter()
+        .zip(values(&current))
+        .any(|(new, old)| (new - old).abs() > 1e-9);
     if has_changed {
-        session.edit_project(|project| project.set_clip_placement(clip.id, edited));
+        session.edit_project(|project| {
+            project.edit_clip_transform_at(clip.id, playhead_milliseconds, |transform| {
+                *transform = edited;
+            })
+        });
+    }
+
+    // Keyframes.
+    ui.horizontal(|ui| {
+        match keyframe_here {
+            Some(keyframe) => {
+                if ui.button("Remove Keyframe").clicked() {
+                    session.edit_project(|project| {
+                        project.remove_keyframe(clip.id, playhead_milliseconds)
+                    });
+                }
+                let mut easing = keyframe.easing;
+                egui::ComboBox::from_id_salt(("easing", clip.id))
+                    .selected_text(easing.label())
+                    .show_ui(ui, |ui| {
+                        for choice in Easing::ALL {
+                            ui.selectable_value(&mut easing, choice, choice.label());
+                        }
+                    })
+                    .response
+                    .on_hover_text("How the element travels to this keyframe from the one before");
+                if easing != keyframe.easing {
+                    session.edit_project(|project| {
+                        project.set_keyframe_easing(clip.id, playhead_milliseconds, easing)
+                    });
+                }
+            }
+            None => {
+                let add = ui
+                    .add_enabled(is_playhead_inside, egui::Button::new("Add Keyframe"))
+                    .on_hover_text("Remember the values above at the playhead");
+                if add.clicked() {
+                    session.edit_project(|project| {
+                        project.add_keyframe(clip.id, playhead_milliseconds)
+                    });
+                }
+            }
+        }
+
+        // Jump to the keyframe before or after the playhead (within the clip).
+        let visible: Vec<i64> = clip
+            .keyframes
+            .iter()
+            .map(|keyframe| keyframe.time_milliseconds)
+            .filter(|time| (0..=clip.duration_milliseconds as i64).contains(time))
+            .collect();
+        let here = moment as i64;
+        let tolerance = vizx_project::KEYFRAME_TOLERANCE_MILLISECONDS as i64;
+        let previous = visible
+            .iter()
+            .rev()
+            .find(|time| **time < here - tolerance)
+            .copied();
+        let next = visible
+            .iter()
+            .find(|time| **time > here + tolerance)
+            .copied();
+        for (symbol, target, tooltip) in [
+            ("\u{23EE}", previous, "Previous keyframe"),
+            ("\u{23ED}", next, "Next keyframe"),
+        ] {
+            if ui
+                .add_enabled(target.is_some(), egui::Button::new(symbol))
+                .on_hover_text(tooltip)
+                .clicked()
+                && let Some(time) = target
+            {
+                session
+                    .set_playhead_seconds((clip.start_milliseconds as i64 + time) as f64 / 1000.0);
+            }
+        }
+        if !clip.keyframes.is_empty()
+            && ui
+                .button("Clear")
+                .on_hover_text("Remove all keyframes; the element keeps the values at the playhead")
+                .clicked()
+        {
+            session.edit_project(|project| project.clear_keyframes(clip.id, playhead_milliseconds));
+        }
+    });
+
+    // Steady turning, on top of everything else.
+    let mut spin = clip.spin_degrees_per_second;
+    ui.horizontal(|ui| {
+        ui.label("Spin")
+            .on_hover_text("Keeps the element turning at a steady speed");
+        ui.add(
+            egui::DragValue::new(&mut spin)
+                .speed(1.0)
+                .max_decimals(1)
+                .suffix("\u{b0}/s"),
+        );
+    });
+    if (spin - clip.spin_degrees_per_second).abs() > 1e-9 {
+        session.edit_project(|project| project.set_clip_spin(clip.id, spin));
     }
 }
-
 /// When a clip starts and how long it lasts, as numbers. The same values
 /// change when the clip is dragged or trimmed on the timeline.
 fn timing_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {
@@ -363,7 +507,7 @@ fn text_editor(
     }
 }
 
-/// The opacity of a visual clip and how it moves with the music.
+/// How a visual clip moves with the music.
 ///
 /// A visualizer already has a "Reacts to" list above; for anything else
 /// (an image) the list is shown here, next to the reaction it belongs to.
@@ -373,15 +517,6 @@ fn opacity_and_reaction_editor(
     clip: &Clip,
     has_audio_input_above: bool,
 ) {
-    let mut opacity_percent = clip.opacity * 100.0;
-    ui.horizontal(|ui| {
-        ui.label("Opacity");
-        ui.add(egui::Slider::new(&mut opacity_percent, 0.0..=100.0).suffix(" %"));
-    });
-    if (opacity_percent / 100.0 - clip.opacity).abs() > 1e-6 {
-        session.edit_project(|project| project.set_clip_opacity(clip.id, opacity_percent / 100.0));
-    }
-
     ui.add_space(6.0);
     ui.label(egui::RichText::new("Animation to Sound").strong())
         .on_hover_text("Makes this element grow, move, turn or appear with the music");

@@ -23,6 +23,8 @@ const VISUAL_TRACK_HEIGHT: f32 = 28.0;
 /// Audio tracks are taller, to leave room for the waveform.
 const AUDIO_TRACK_HEIGHT: f32 = 64.0;
 const TRACK_HEADER_WIDTH: f32 = 150.0;
+/// Half the size of the diamond that marks a keyframe, in screen points.
+const KEYFRAME_MARK_SIZE: f32 = 4.5;
 /// How much one click on a zoom button zooms.
 const ZOOM_BUTTON_FACTOR: f32 = 1.5;
 /// Width of the zones at a clip's left and right edge that trim it when
@@ -580,6 +582,62 @@ fn show_lanes(
             }
         }
 
+        // Keyframes: a small diamond on the clip for each one inside it,
+        // on top of everything else. Clicking one moves the playhead there.
+        let mut jump_to_keyframe: Option<(ClipId, f64)> = None;
+        for (track, row) in session.project().tracks().iter().zip(&rows.rows) {
+            let middle_y = content_rect.top() + row.top + row.height - CLIP_VERTICAL_MARGIN - 6.0;
+            for clip in &track.clips {
+                for keyframe in &clip.keyframes {
+                    if !(0..=clip.duration_milliseconds as i64)
+                        .contains(&keyframe.time_milliseconds)
+                    {
+                        continue; // trimmed away
+                    }
+                    let seconds = (clip.start_milliseconds as i64 + keyframe.time_milliseconds)
+                        as f64
+                        / 1000.0;
+                    let x = content_rect.left() + seconds as f32 * scale.pixels_per_second;
+                    if x < visible_left - 6.0 || x > visible_right + 6.0 {
+                        continue;
+                    }
+                    let center = egui::pos2(x, middle_y);
+                    let diamond = vec![
+                        center + egui::vec2(0.0, -KEYFRAME_MARK_SIZE),
+                        center + egui::vec2(KEYFRAME_MARK_SIZE, 0.0),
+                        center + egui::vec2(0.0, KEYFRAME_MARK_SIZE),
+                        center + egui::vec2(-KEYFRAME_MARK_SIZE, 0.0),
+                    ];
+                    painter.add(egui::Shape::convex_polygon(
+                        diamond,
+                        Color32::from_rgb(255, 210, 90),
+                        Stroke::new(1.0, Color32::BLACK),
+                    ));
+                    let response = ui
+                        .interact(
+                            Rect::from_center_size(
+                                center,
+                                egui::Vec2::splat(2.0 * KEYFRAME_MARK_SIZE + 2.0),
+                            ),
+                            ui.id().with((
+                                "timeline_keyframe",
+                                clip.id,
+                                keyframe.time_milliseconds,
+                            )),
+                            Sense::click(),
+                        )
+                        .on_hover_text(format!(
+                            "Keyframe at {} ({})",
+                            format_time(seconds as f32, true),
+                            keyframe.easing.label()
+                        ));
+                    if response.clicked() {
+                        jump_to_keyframe = Some((clip.id, seconds));
+                    }
+                }
+            }
+        }
+
         ui.data_mut(|data| match drag {
             Some(drag) => {
                 data.insert_temp(drag_id, drag);
@@ -598,6 +656,10 @@ fn show_lanes(
             session.select(clicked_track.map_or(Selection::Nothing, Selection::Track));
         }
         response.context_menu(|ui| add_menu_section(ui, requested_command));
+        if let Some((clip_id, seconds)) = jump_to_keyframe {
+            session.select(Selection::Clip(clip_id));
+            session.set_playhead_seconds(seconds);
+        }
         if let Some(clip_id) = clicked_clip {
             session.select(Selection::Clip(clip_id));
         }

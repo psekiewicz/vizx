@@ -136,7 +136,8 @@ parameter values for them. Version **10** added images as a kind of media
 and a clip's `opacity` and `reaction`. Version **11** extended reactions
 (move, rotate, sensitivity, release). Version **12** added video files as a
 kind of media, version **13** text elements. Version **14** added a clip's
-`source_offset_milliseconds`, version **15** its `audio_gain`.
+`source_offset_milliseconds`, version **15** its `audio_gain`,
+version **16** its `rotation_degrees`, `spin_degrees_per_second` and `keyframes`.
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -237,8 +238,7 @@ This is the first part of the animation and behavior engine.
   nothing else (for the release, from a few earlier moments as well), so a
   moment of the song always looks the same, whether played or jumped to.
   The animation is applied when the picture is drawn; a clip's frame and
-  handles stay at its placement. A fixed rotation of a clip and keyframes
-  are not implemented yet.
+  handles stay at its placement.
 
 ### One compositor for preview and export
 
@@ -310,6 +310,35 @@ visualizer (MilkDrop or plugin) or its animation measures it. Playback is
 not affected. Lowering it is how a visualizer that is too wild is calmed
 down; it ranges from 1 % to 400 % and is part of the pre-render key, so a
 change renders the clip again.
+### Keyframes, rotation and spin
+
+How a visual clip is shown at a moment is a `Transform`: placement,
+rotation and opacity (`vizx-project/src/motion.rs`).
+
+- **Resting state.** Without keyframes the clip's own placement, rotation
+  and opacity hold for the whole clip.
+- **Keyframes** (`Clip::keyframes`) are transforms at moments of the clip.
+  Between two of them every value glides from one to the other; the easing
+  of the later one decides how (Smooth, Linear or Hold). Before the first
+  and after the last, that keyframe holds.
+- **Editing at the playhead.** The Properties panel shows the values at the
+  playhead, and every change (also dragging in the preview) goes through
+  `Project::edit_clip_transform_at`: without keyframes it changes the
+  resting state, with keyframes it changes the keyframe at the playhead or
+  makes a new one there ("auto-key"). Add/Remove Keyframe, Previous/Next
+  and Clear are next to the values; keyframes show as diamonds on the clip
+  in the timeline, and clicking one moves the playhead there.
+- **Trimming never changes the motion.** Keyframe times are relative to the
+  clip's start and may lie outside it after trimming (`i64`); such
+  keyframes are not shown but still shape the motion. Splitting gives both
+  parts all keyframes.
+- **Spin** (`spin_degrees_per_second`) turns the clip steadily on top of
+  everything ("continuous animation"). The animation to sound comes on top
+  of that again.
+- **Rendering.** A visualizer or video is rendered at the largest size its
+  keyframes reach (`Motion::largest_size`), so it stays sharp; the
+  compositor scales and turns it per frame. Preview and export take the
+  transform from the same `Motion::animated_at`.
 ### Beats
 
 `vizx_audio::detect_beats` finds the beats of an audio file once, when it
