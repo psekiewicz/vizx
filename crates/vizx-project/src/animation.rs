@@ -22,7 +22,7 @@ pub struct FrameAnimation {
 }
 
 /// How the frames of an animation are stored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrameLayout {
     /// Separate files whose names differ only in a number: the media's path
     /// is the first one, the others count up from `first_number`, written
@@ -35,6 +35,12 @@ pub enum FrameLayout {
         rows: u32,
         sheet_width: u32,
         sheet_height: u32,
+        /// How many frames each row holds, from the top, when rows are not
+        /// all full (for example 5, 4 and 6 in a grid 6 columns wide; the
+        /// frames of a row start at its left edge). Empty: every row is
+        /// full, and `frame_count` may still leave the last ones out.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        row_lengths: Vec<u32>,
     },
 }
 
@@ -55,6 +61,7 @@ impl FrameAnimation {
                 rows,
                 sheet_width,
                 sheet_height,
+                row_lengths: Vec::new(),
             },
             frame_width: 0,
             frame_height: 0,
@@ -79,16 +86,61 @@ impl FrameAnimation {
             rows,
             sheet_width,
             sheet_height,
+            row_lengths,
         } = &mut self.layout
         {
             *columns = (*columns).clamp(1, (*sheet_width).max(1));
             *rows = (*rows).clamp(1, (*sheet_height).max(1));
             self.frame_width = (*sheet_width / *columns).max(1);
             self.frame_height = (*sheet_height / *rows).max(1);
-            self.frame_count = self.frame_count.clamp(1, *columns * *rows);
+            if row_lengths.is_empty() {
+                self.frame_count = self.frame_count.clamp(1, *columns * *rows);
+            } else {
+                // One count per row, none longer than the grid is wide.
+                row_lengths.resize(*rows as usize, *columns);
+                for length in row_lengths.iter_mut() {
+                    *length = (*length).min(*columns);
+                }
+                self.frame_count = row_lengths.iter().sum();
+                if self.frame_count == 0 {
+                    row_lengths[0] = 1;
+                    self.frame_count = 1;
+                }
+            }
         }
         self.frame_count = self.frame_count.max(1);
         self
+    }
+
+    /// Where frame `index` (counted from 0) of a sprite sheet sits: its
+    /// column and row in the grid. `None` for an image sequence.
+    pub fn sheet_cell(&self, index: u32) -> Option<(u32, u32)> {
+        let FrameLayout::SpriteSheet {
+            columns,
+            row_lengths,
+            ..
+        } = &self.layout
+        else {
+            return None;
+        };
+        if row_lengths.is_empty() {
+            let columns = (*columns).max(1);
+            return Some((index % columns, index / columns));
+        }
+        let mut left = index;
+        for (row, length) in row_lengths.iter().enumerate() {
+            if left < *length {
+                return Some((left, row as u32));
+            }
+            left -= length;
+        }
+        // Past the end: the last frame.
+        let (row, length) = row_lengths
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, length)| **length > 0)?;
+        Some((length - 1, row as u32))
     }
 
     /// Which frame is shown `seconds_into_clip` into the clip, when
@@ -194,5 +246,31 @@ mod tests {
         walk.on_beat = true;
         assert_eq!(walk.frame_at(0.26, 0), 0);
         assert_eq!(walk.frame_at(9.0, 5), 1);
+    }
+
+    #[test]
+    fn rows_of_different_lengths_are_read_one_after_another() {
+        // Rows of 5, 4 and 6 frames in a grid 6 wide.
+        let mut sheet = FrameAnimation::sprite_sheet((600, 300), 6, 3, 10.0);
+        if let FrameLayout::SpriteSheet { row_lengths, .. } = &mut sheet.layout {
+            *row_lengths = vec![5, 4, 6];
+        }
+        let sheet = sheet.sanitized();
+
+        assert_eq!(sheet.frame_count, 15);
+        assert_eq!(sheet.sheet_cell(0), Some((0, 0)));
+        assert_eq!(sheet.sheet_cell(4), Some((4, 0)));
+        assert_eq!(sheet.sheet_cell(5), Some((0, 1)));
+        assert_eq!(sheet.sheet_cell(8), Some((3, 1)));
+        assert_eq!(sheet.sheet_cell(9), Some((0, 2)));
+        assert_eq!(sheet.sheet_cell(14), Some((5, 2)));
+        assert_eq!(sheet.sheet_cell(99), Some((5, 2)));
+
+        // Too long a row is cut to the grid; a missing row counts as full.
+        let mut odd = FrameAnimation::sprite_sheet((400, 200), 4, 2, 10.0);
+        if let FrameLayout::SpriteSheet { row_lengths, .. } = &mut odd.layout {
+            *row_lengths = vec![9];
+        }
+        assert_eq!(odd.sanitized().frame_count, 8);
     }
 }

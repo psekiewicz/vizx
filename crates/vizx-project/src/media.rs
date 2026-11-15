@@ -71,6 +71,14 @@ impl MediaSource {
         self.image().is_some() || self.text().is_some()
     }
 
+    /// Whether pictures from this source keep sharp pixels when enlarged,
+    /// unless the clip says otherwise: PNG images and animations (often
+    /// pixel art) do, everything else is smoothed.
+    pub fn sharp_pixels_by_default(&self) -> bool {
+        let is_png = self.path.to_ascii_lowercase().ends_with(".png");
+        is_png && (self.image().is_some() || self.animation().is_some())
+    }
+
     /// The name to show for this source: its file name, or for a text its
     /// first line.
     pub fn display_name(&self) -> &str {

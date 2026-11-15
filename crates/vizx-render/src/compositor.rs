@@ -44,6 +44,9 @@ pub struct LayerDraw<'a> {
     pub rotation_degrees: f32,
     /// 0 (invisible) to 1.
     pub opacity: f32,
+    /// When drawn larger than it is, show its pixels as sharp squares (for
+    /// pixel art) instead of smoothing between them.
+    pub sharp_pixels: bool,
 }
 
 /// A layer's picture on the graphics card.
@@ -54,6 +57,7 @@ struct UploadedLayer {
     width: u32,
     height: u32,
     version: u64,
+    sharp_pixels: bool,
 }
 
 /// Lays pictures over each other into one frame, on the graphics card.
@@ -67,6 +71,8 @@ pub struct Compositor {
     pipeline: RenderPipeline,
     bind_group_layout: BindGroupLayout,
     sampler: Sampler,
+    /// Like sampler, but enlarged pictures keep sharp pixels.
+    sharp_sampler: Sampler,
     frame_texture: Texture,
     frame_view: TextureView,
     readback_buffer: Buffer,
@@ -124,6 +130,14 @@ impl Compositor {
             min_filter: FilterMode::Linear,
             ..Default::default()
         });
+        let sharp_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("vizx sharp layer sampler"),
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Linear,
+            ..Default::default()
+        });
         let (frame_texture, frame_view, readback_buffer, padded_row_bytes) =
             create_frame(&device, width, height);
 
@@ -133,6 +147,7 @@ impl Compositor {
             pipeline,
             bind_group_layout,
             sampler,
+            sharp_sampler,
             frame_texture,
             frame_view,
             readback_buffer,
@@ -245,9 +260,10 @@ impl Compositor {
 
         let fits_existing = self.layers.get(&layer.key).is_some_and(|uploaded| {
             (uploaded.width, uploaded.height) == (layer.width, layer.height)
+                && uploaded.sharp_pixels == layer.sharp_pixels
         });
         if !fits_existing {
-            let uploaded = self.create_layer(layer.width, layer.height);
+            let uploaded = self.create_layer(layer.width, layer.height, layer.sharp_pixels);
             self.layers.insert(layer.key, uploaded);
         }
         let Some(uploaded) = self.layers.get_mut(&layer.key) else {
@@ -297,7 +313,12 @@ impl Compositor {
         Ok(())
     }
 
-    fn create_layer(&self, width: u32, height: u32) -> UploadedLayer {
+    fn create_layer(&self, width: u32, height: u32, sharp_pixels: bool) -> UploadedLayer {
+        let sampler = if sharp_pixels {
+            &self.sharp_sampler
+        } else {
+            &self.sampler
+        };
         let texture = self.device.create_texture(&TextureDescriptor {
             label: Some("vizx layer"),
             size: Extent3d {
@@ -329,7 +350,7 @@ impl Compositor {
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: BindingResource::Sampler(&self.sampler),
+                    resource: BindingResource::Sampler(sampler),
                 },
                 BindGroupEntry {
                     binding: 2,
@@ -343,6 +364,7 @@ impl Compositor {
             bind_group,
             width,
             height,
+            sharp_pixels,
             // Anything: the picture is uploaded right after creation.
             version: 0,
         }
@@ -446,6 +468,7 @@ mod tests {
             size: [1.0, 1.0],
             rotation_degrees: 0.0,
             opacity: 1.0,
+            sharp_pixels: false,
         }
     }
 
@@ -473,6 +496,36 @@ mod tests {
 
         assert_eq!(pixels.len(), 70 * 40 * 4);
         assert!(pixels.chunks(4).all(|pixel| pixel == [0, 0, 0, 255]));
+    }
+
+    #[test]
+    fn enlarged_pixel_art_keeps_sharp_pixels_when_asked() {
+        let Some(mut compositor) = compositor(64, 16) else {
+            return;
+        };
+        // Two pixels, black and white, stretched over the whole frame.
+        let picture = [0, 0, 0, 255, 255, 255, 255, 255];
+        let mut smooth = Vec::new();
+        let mut sharp = Vec::new();
+
+        compositor
+            .render(&[layer(1, &picture, 2, 1)], &mut smooth)
+            .unwrap();
+        compositor
+            .render(
+                &[LayerDraw {
+                    sharp_pixels: true,
+                    ..layer(1, &picture, 2, 1)
+                }],
+                &mut sharp,
+            )
+            .unwrap();
+
+        // Just left of the middle: grey when smoothed, still black when sharp.
+        let smoothed = pixel(&smooth, 64, 28, 8);
+        assert!(smoothed[0] > 40 && smoothed[0] < 215, "{smoothed:?}");
+        assert_near(pixel(&sharp, 64, 28, 8), [0, 0, 0, 255]);
+        assert_near(pixel(&sharp, 64, 36, 8), [255, 255, 255, 255]);
     }
 
     #[test]

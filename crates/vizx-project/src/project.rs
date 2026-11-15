@@ -513,6 +513,7 @@ impl Project {
             rotation_degrees: 0.0,
             spin_degrees_per_second: 0.0,
             keyframes: Vec::new(),
+            sharp_pixels: None,
         };
         self.next_clip_id += 1;
         let clip_end = clip.end_milliseconds();
@@ -683,6 +684,7 @@ impl Project {
             rotation_degrees: 0.0,
             spin_degrees_per_second: 0.0,
             keyframes: Vec::new(),
+            sharp_pixels: None,
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -725,6 +727,7 @@ impl Project {
             rotation_degrees: 0.0,
             spin_degrees_per_second: 0.0,
             keyframes: Vec::new(),
+            sharp_pixels: None,
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -1079,6 +1082,27 @@ impl Project {
         match self.clip_mut(clip_id) {
             Some(clip) if clip.opacity != opacity => {
                 clip.opacity = opacity;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a clip's picture keeps sharp pixels when enlarged: its own
+    /// choice, or else what suits its media.
+    pub fn clip_sharp_pixels(&self, clip: &Clip) -> bool {
+        clip.sharp_pixels.unwrap_or_else(|| {
+            self.media_source(clip.media)
+                .is_some_and(MediaSource::sharp_pixels_by_default)
+        })
+    }
+
+    /// Sets whether a clip's picture keeps sharp pixels when enlarged.
+    /// Returns `true` only if this changed something.
+    pub fn set_clip_sharp_pixels(&mut self, clip_id: ClipId, sharp: bool) -> bool {
+        match self.clip_mut(clip_id) {
+            Some(clip) if clip.sharp_pixels != Some(sharp) => {
+                clip.sharp_pixels = Some(sharp);
                 true
             }
             _ => false,

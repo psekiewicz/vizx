@@ -435,7 +435,10 @@ is a picture that changes by itself, made of separate frames:
 - a **sprite sheet**: one image with the frames in a grid, read left to
   right, then top to bottom (Add > Sprite Sheet). A long strip of square
   frames is recognized; otherwise columns, rows and the number of frames
-  are set in the Properties panel.
+  are set in the Properties panel. Rows need not be full: "Frames per row"
+  (`row_lengths`, for example 5, 4, 6) says how many frames each row holds,
+  typed or found with "Find", which ends each row after its last cell that
+  is not empty (fully transparent, or the flat color of the sheet's corner).
 
 It loops at a set speed (frames per second), or with "On beats" steps one
 frame on every beat of the clip's audio. Like an image it can be placed,
@@ -446,6 +449,12 @@ turned, keyed and animated to the sound, and keeps its transparency.
 memory budget, so a short loop is decoded once. The preview reads at most
 1024 pixels per edge; the export at full size. Both pick the frame with
 `FrameAnimation::frame_at`, so they show the same frame at the same moment.
+
+**Sharp pixels.** Pixel art enlarged with smoothing turns blurry. A clip
+can keep sharp pixels instead (`Clip::sharp_pixels`, a checkbox in the
+Properties panel); when it has not chosen, PNG images and animations are
+sharp and everything else smooth. The compositor then samples the layer
+with nearest-neighbour filtering when enlarging (shrinking stays smooth).
 ### Text
 
 A text element (Add > Text, Ctrl+T) is a kind of media that is not a file

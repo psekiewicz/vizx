@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use image::imageops;
+use image::{GenericImageView, imageops};
 use vizx_project::{FrameAnimation, FrameLayout, sequence_frame_path, split_numbered_path};
 
 use crate::DecodedImage;
@@ -64,17 +64,17 @@ impl AnimationReader {
             return Ok(Arc::clone(frame));
         }
 
-        let picture = match self.animation.layout {
+        let picture = match &self.animation.layout {
             FrameLayout::Sequence {
                 first_number,
                 digits,
             } => {
-                let file = sequence_frame_path(&self.path, first_number, digits, index);
+                let file = sequence_frame_path(&self.path, *first_number, *digits, index);
                 image::open(&file)
                     .map_err(|error| format!("could not read {file}: {error}"))?
                     .into_rgba8()
             }
-            FrameLayout::SpriteSheet { columns, .. } => {
+            FrameLayout::SpriteSheet { .. } => {
                 if self.sheet.is_none() {
                     let sheet = image::open(&self.path)
                         .map_err(|error| format!("could not read {}: {error}", self.path))?;
@@ -82,7 +82,7 @@ impl AnimationReader {
                 }
                 let sheet = self.sheet.as_ref().ok_or("the sprite sheet is missing")?;
                 let (width, height) = (self.animation.frame_width, self.animation.frame_height);
-                let (column, row) = (index % columns.max(1), index / columns.max(1));
+                let (column, row) = self.animation.sheet_cell(index).unwrap_or((0, 0));
                 imageops::crop_imm(sheet, column * width, row * height, width, height).to_image()
             }
         };
@@ -186,6 +186,35 @@ pub fn guess_sprite_sheet(file: &Path, frames_per_second: f64) -> Result<FrameAn
     ))
 }
 
+/// How many frames each row of the sprite sheet at `path` holds, cut into`n/// the grid of `animation`: a row ends after its last cell that is not empty.
+/// A cell is empty when it is fully transparent, or when the sheet has no
+/// transparency and the cell is one flat color like the sheet's top left
+/// corner (a plain background).
+pub fn find_row_lengths(path: &str, animation: &FrameAnimation) -> Result<Vec<u32>, String> {
+    let FrameLayout::SpriteSheet { columns, rows, .. } = animation.layout else {
+        return Err("this is not a sprite sheet".to_owned());
+    };
+    let sheet = image::open(path)
+        .map_err(|error| format!("could not read {path}: {error}"))?
+        .into_rgba8();
+    let background = *sheet.get_pixel(0, 0);
+    let (width, height) = (animation.frame_width, animation.frame_height);
+    let is_empty = |column: u32, row: u32| {
+        let cell = imageops::crop_imm(&sheet, column * width, row * height, width, height);
+        let mut pixels = cell.pixels().map(|(_, _, pixel)| pixel);
+        pixels.all(|pixel| pixel[3] == 0 || pixel == background)
+    };
+    let lengths = (0..rows)
+        .map(|row| {
+            (0..columns)
+                .rev()
+                .find(|column| !is_empty(*column, row))
+                .map_or(0, |column| column + 1)
+        })
+        .collect();
+    Ok(lengths)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +280,7 @@ mod tests {
         let path_text = path.to_string_lossy().into_owned();
 
         let mut reader = AnimationReader::new(&path_text, &animation, 1024, 0);
+        let filled = find_row_lengths(&path_text, &animation);
         let firsts: Vec<[u8; 4]> = (0..4)
             .map(|index| {
                 let frame = reader.frame(index).unwrap();
@@ -273,6 +303,42 @@ mod tests {
         // 8 x 6 is no strip of squares: one frame until the user says more.
         assert_eq!(strip.unwrap().frame_count, 1);
         assert!(reader.reads(&path_text, &animation));
+        // Red is the corner color, so the first cell counts as background;
+        // the green one after it still ends the row.
+        assert_eq!(filled.unwrap(), [2, 2]);
+    }
+
+    #[test]
+    fn empty_cells_at_the_ends_of_rows_are_found_and_skipped() {
+        let folder = temporary_folder("uneven");
+        // 3 x 2 cells of 2 x 2 pixels on a transparent sheet: three frames
+        // in the first row, one in the second.
+        let mut sheet = solid(6, 4, [0; 4]);
+        for (column, row, color) in [
+            (0, 0, [255, 0, 0, 255]),
+            (1, 0, [0, 255, 0, 255]),
+            (2, 0, [0, 0, 255, 255]),
+            (0, 1, [255, 255, 0, 255]),
+        ] {
+            imageops::replace(&mut sheet, &solid(2, 2, color), column * 2, row * 2);
+        }
+        let path = folder.join("uneven.png");
+        sheet.save(&path).unwrap();
+        let path_text = path.to_string_lossy().into_owned();
+        let mut animation = FrameAnimation::sprite_sheet((6, 4), 3, 2, 10.0);
+
+        let lengths = find_row_lengths(&path_text, &animation).unwrap();
+        if let FrameLayout::SpriteSheet { row_lengths, .. } = &mut animation.layout {
+            *row_lengths = lengths.clone();
+        }
+        let animation = animation.sanitized();
+        let mut reader = AnimationReader::new(&path_text, &animation, 1024, 0);
+        let fourth = reader.frame(3).unwrap();
+        let _ = fs::remove_dir_all(&folder);
+
+        assert_eq!(lengths, [3, 1]);
+        assert_eq!(animation.frame_count, 4);
+        assert_eq!(fourth.pixels[..4], [255, 255, 0, 255]);
     }
 
     #[test]

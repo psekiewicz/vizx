@@ -100,11 +100,12 @@ fn track_properties(
             let is_visualizer = source.is_visualizer();
             let plugin_path = source.is_visualizer_plugin().then(|| source.path.clone());
             let is_visual = source.is_visual();
+            let is_picture = source.image().is_some() || source.animation().is_some();
             let audio_media = source.audio().is_some().then_some(source.id);
             let animation = source
                 .animation()
                 .cloned()
-                .map(|animation| (source.id, animation));
+                .map(|animation| (source.id, source.path.clone(), animation));
             // Cloned, so the session is free to be modified by the editor.
             let text = source.text().cloned().map(|text| (source.id, text));
             ui.label(source.display_name()).on_hover_text(&source.path);
@@ -114,8 +115,8 @@ fn track_properties(
                     .color(theme::TEXT_MUTED),
             );
             timing_editor(ui, session, clip);
-            if let Some((media_id, animation)) = animation {
-                animation_editor(ui, session, media_id, &animation);
+            if let Some((media_id, path, animation)) = animation {
+                animation_editor(ui, session, media_id, &path, &animation);
             }
             if let Some(media_id) = audio_media {
                 beats_editor(ui, session, audio_store, media_id);
@@ -130,6 +131,16 @@ fn track_properties(
             }
             if is_visual {
                 transform_editor(ui, session, clip);
+                if is_picture {
+                    let mut sharp = session.project().clip_sharp_pixels(clip);
+                    if ui
+                        .checkbox(&mut sharp, "Sharp pixels when enlarged")
+                        .on_hover_text("Show pixel art as crisp squares instead of smoothing it; on by default for PNG files")
+                        .changed()
+                    {
+                        session.edit_project(|project| project.set_clip_sharp_pixels(clip.id, sharp));
+                    }
+                }
                 opacity_and_reaction_editor(ui, session, clip, is_visualizer);
             }
             if let Some(plugin_path) = plugin_path {
@@ -524,6 +535,7 @@ fn animation_editor(
     ui: &mut egui::Ui,
     session: &mut EditorSession,
     media_id: MediaId,
+    path: &str,
     animation: &FrameAnimation,
 ) {
     ui.add_space(6.0);
@@ -546,7 +558,13 @@ fn animation_editor(
     egui::Grid::new(("animation", media_id))
         .num_columns(2)
         .show(ui, |ui| {
-            if let FrameLayout::SpriteSheet { columns, rows, .. } = &mut edited.layout {
+            if let FrameLayout::SpriteSheet {
+                columns,
+                rows,
+                row_lengths,
+                ..
+            } = &mut edited.layout
+            {
                 ui.label("Columns");
                 ui.add(egui::DragValue::new(columns).range(1..=256));
                 ui.end_row();
@@ -556,7 +574,11 @@ fn animation_editor(
                 ui.label("Frames").on_hover_text(
                     "How many cells hold a frame, counted left to right, top to bottom",
                 );
-                ui.add(egui::DragValue::new(&mut edited.frame_count).range(1..=65_536));
+                // With rows of their own lengths, those set the count.
+                ui.add_enabled(
+                    row_lengths.is_empty(),
+                    egui::DragValue::new(&mut edited.frame_count).range(1..=65_536),
+                );
                 ui.end_row();
             }
             ui.label("Speed");
@@ -576,24 +598,111 @@ fn animation_editor(
             ui.end_row();
         });
 
+    if matches!(edited.layout, FrameLayout::SpriteSheet { .. }) {
+        row_lengths_editor(ui, media_id, path, &mut edited);
+    }
+
     // When the grid changes, all of its cells are frames again.
     if let (
-        FrameLayout::SpriteSheet { columns, rows, .. },
+        FrameLayout::SpriteSheet {
+            columns,
+            rows,
+            row_lengths,
+            ..
+        },
         FrameLayout::SpriteSheet {
             columns: old_columns,
             rows: old_rows,
             ..
         },
-    ) = (edited.layout, animation.layout)
-        && (columns, rows) != (old_columns, old_rows)
+    ) = (&mut edited.layout, &animation.layout)
+        && (*columns, *rows) != (*old_columns, *old_rows)
     {
-        edited.frame_count = columns * rows;
+        row_lengths.clear();
+        edited.frame_count = *columns * *rows;
     }
     if edited != *animation {
         session.edit_project(|project| project.set_animation(media_id, edited));
     }
 }
 
+/// How many frames each row of a sprite sheet holds, for sheets whose rows
+/// are not all full (say 5, then 4, then 6): typed as a list, or found by
+/// looking for empty cells.
+fn row_lengths_editor(
+    ui: &mut egui::Ui,
+    media_id: MediaId,
+    path: &str,
+    animation: &mut FrameAnimation,
+) {
+    let FrameLayout::SpriteSheet { row_lengths, .. } = &animation.layout else {
+        return;
+    };
+    let shown = row_lengths
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    // What the user is typing is kept until the field is left, and a
+    // problem until the next try.
+    let typing_id = egui::Id::new(("row_lengths", media_id));
+    let problem_id = egui::Id::new(("row_lengths_problem", media_id));
+    let mut typed: String = ui.data(|data| data.get_temp(typing_id)).unwrap_or(shown);
+
+    let mut found: Option<Result<Vec<u32>, String>> = None;
+    ui.horizontal(|ui| {
+        ui.label("Frames per row").on_hover_text(
+            "For rows that are not all full, how many frames each row holds, from the top, \
+             for example 5, 4, 6. Empty: every row is full.",
+        );
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut typed)
+                .hint_text("all full")
+                .desired_width(90.0),
+        );
+        if field.changed() {
+            ui.data_mut(|data| data.insert_temp(typing_id, typed.clone()));
+        }
+        if field.lost_focus() {
+            let parsed: Result<Vec<u32>, _> = typed
+                .split([',', ';', ' '])
+                .filter(|part| !part.trim().is_empty())
+                .map(|part| part.trim().parse::<u32>())
+                .collect();
+            found = Some(parsed.map_err(|_| "Type whole numbers, like 5, 4, 6".to_owned()));
+        }
+        if ui
+            .button("Find")
+            .on_hover_text("Look at the sheet and end each row after its last non-empty cell")
+            .clicked()
+        {
+            let mut grid = animation.clone();
+            if let FrameLayout::SpriteSheet { row_lengths, .. } = &mut grid.layout {
+                row_lengths.clear();
+            }
+            found = Some(vizx_core::find_row_lengths(path, &grid.sanitized()));
+        }
+    });
+
+    match found {
+        Some(Ok(lengths)) => {
+            ui.data_mut(|data| {
+                data.remove::<String>(typing_id);
+                data.remove::<String>(problem_id);
+            });
+            if let FrameLayout::SpriteSheet { row_lengths, .. } = &mut animation.layout {
+                *row_lengths = lengths;
+            }
+        }
+        Some(Err(problem)) => ui.data_mut(|data| {
+            data.insert_temp(problem_id, problem);
+        }),
+        None => {}
+    }
+    if let Some(problem) = ui.data(|data| data.get_temp::<String>(problem_id)) {
+        ui.colored_label(theme::PLAYHEAD, problem);
+    }
+}
 /// When a clip starts and how long it lasts, as numbers. The same values
 /// change when the clip is dragged or trimmed on the timeline.
 fn timing_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {

@@ -77,6 +77,8 @@ pub struct ExportLayer {
     /// known).
     pub beats: Arc<Vec<Beat>>,
     pub tempo_bpm: f64,
+    /// Enlarged, the picture keeps sharp pixels instead of being smoothed.
+    pub sharp_pixels: bool,
 }
 
 pub enum ExportContent {
@@ -136,6 +138,7 @@ impl ExportJob {
                     duration_seconds: clip.duration_milliseconds as f64 / 1000.0,
                     motion: clip.motion(),
                     reaction: clip.reaction,
+                    sharp_pixels: project.clip_sharp_pixels(clip),
                     input_audio: audio_sources(project, audio_store, clip.audio_input).0,
                     audio_gain: clip.audio_gain,
                     beats: Arc::new(beats),
@@ -348,6 +351,7 @@ fn run(
                     size: geometry.size,
                     rotation_degrees: geometry.rotation_degrees,
                     opacity: geometry.opacity,
+                    sharp_pixels: layer.sharp_pixels,
                 });
             }
             compositor.render(&draws, &mut frame_pixels)?;
@@ -540,6 +544,7 @@ mod tests {
             audio_gain: 1.0,
             beats: Arc::new(Vec::new()),
             tempo_bpm: 0.0,
+            sharp_pixels: false,
         }
     }
 

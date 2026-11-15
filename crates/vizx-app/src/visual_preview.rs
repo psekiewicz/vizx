@@ -75,6 +75,8 @@ pub struct LayerView {
     pub placement: Placement,
     /// Its keyed rotation at the playhead, in degrees clockwise.
     pub rotation_degrees: f64,
+    /// Enlarged, its picture keeps sharp pixels instead of being smoothed.
+    pub sharp_pixels: bool,
     pub state: LayerState,
 }
 
@@ -334,6 +336,7 @@ impl VisualPreview {
                 // it is at the playhead.
                 placement: keyed.placement,
                 rotation_degrees: keyed.rotation_degrees,
+                sharp_pixels: project.clip_sharp_pixels(clip),
                 state,
             });
         }
@@ -388,6 +391,7 @@ impl VisualPreview {
                     size: geometry.size,
                     rotation_degrees: geometry.rotation_degrees,
                     opacity: geometry.opacity,
+                    sharp_pixels: layer.sharp_pixels,
                 })
             })
             .collect();

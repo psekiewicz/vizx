@@ -141,6 +141,11 @@ pub struct Clip {
     /// rotation, opacity) holds for the whole clip.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keyframes: Vec<Keyframe>,
+    /// Whether a picture drawn larger than it is shows its pixels as sharp
+    /// squares (pixel art) instead of smoothing between them. None decides
+    /// by the file: sharp for PNG images and animations, smooth otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sharp_pixels: Option<bool>,
 }
 
 fn full_opacity() -> f64 {

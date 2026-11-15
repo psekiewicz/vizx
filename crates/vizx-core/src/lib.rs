@@ -19,7 +19,7 @@ mod session;
 mod text;
 mod visualizer_catalog;
 
-pub use animation::{AnimationReader, find_image_sequence, guess_sprite_sheet};
+pub use animation::{AnimationReader, find_image_sequence, find_row_lengths, guess_sprite_sheet};
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
 pub use composition::{
     LayerGeometry, ReactionMeter, audio_sources, beat_count, beat_pulse, beat_times, frame_source,
