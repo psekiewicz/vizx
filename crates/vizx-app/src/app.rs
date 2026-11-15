@@ -9,6 +9,7 @@ use crate::transport::Transport;
 use crate::ui::lyrics_window::{self, LyricsWindow};
 use crate::ui::preset_browser::PresetBrowser;
 use crate::ui::visualizer_browser::VisualizerBrowser;
+use crate::ui::welcome_window::{self, Template};
 use crate::ui::workspace::Workspace;
 use crate::ui::{
     about_window, export_window, menu_bar, preset_browser, project_settings_window,
@@ -28,6 +29,10 @@ use crate::visual_preview::VisualPreview;
 pub enum AppCommand {
     NewProject,
     OpenProject,
+    /// Start a new project from a ready-made template.
+    StartFromTemplate(Template),
+    /// Show the welcome window again.
+    ShowWelcome,
     /// Open one of the recently used projects (its place in the list).
     OpenRecent(usize),
     SaveProject,
@@ -107,7 +112,11 @@ impl AppCommand {
     fn discards_current_project(self) -> bool {
         matches!(
             self,
-            Self::NewProject | Self::OpenProject | Self::OpenRecent(_) | Self::Exit
+            Self::NewProject
+                | Self::OpenProject
+                | Self::OpenRecent(_)
+                | Self::StartFromTemplate(_)
+                | Self::Exit
         )
     }
 }
@@ -151,6 +160,8 @@ pub struct VizxApp {
     /// The clip copied last.
     clipboard: Option<vizx_core::CopiedClip>,
     pub is_shortcuts_open: bool,
+    /// The welcome window shown at startup.
+    pub is_welcome_open: bool,
     /// The stem separation running in the background, if any.
     stem_job: Option<vizx_core::StemJob>,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
@@ -178,7 +189,7 @@ impl VizxApp {
         let ffmpeg = vizx_core::find_ffmpeg();
         let app_data = vizx_core::app_data_dir();
 
-        Self {
+        let mut app = Self {
             session: EditorSession::new_untitled(),
             workspace: Workspace::new(),
             audio_store: AudioStore::default(),
@@ -214,7 +225,14 @@ impl VizxApp {
             is_exit_confirmed: false,
             window_title: String::new(),
             has_maximized_on_startup: false,
+            is_welcome_open: false,
+        };
+        if let Some(layout) = app.settings.panel_layout.clone() {
+            app.workspace.restore_layout(&layout);
         }
+        // Like Blender's splash screen; not over the offer to recover work.
+        app.is_welcome_open = app.settings.show_welcome && app.recoveries.is_empty();
+        app
     }
 
     /// Pre-render progress of the MilkDrop clips, for the status bar.
@@ -592,6 +610,8 @@ impl VizxApp {
                 self.session.jump_to_clip_edge(true);
             }
             AppCommand::ShowShortcuts => self.is_shortcuts_open = true,
+            AppCommand::ShowWelcome => self.is_welcome_open = true,
+            AppCommand::StartFromTemplate(template) => self.start_from_template(template, frame),
             AppCommand::SaveProject => {
                 self.save_project(frame);
             }
@@ -858,6 +878,60 @@ impl VizxApp {
             Err(error) => {
                 self.status_message = format!("Could not save {}: {error}", path.display());
                 false
+            }
+        }
+    }
+
+    /// Whether the welcome window opens at startup; stored right away.
+    pub fn set_show_welcome(&mut self, show: bool) {
+        self.settings.show_welcome = show;
+        if let Some(folder) = &self.app_data {
+            let _ = self.settings.save(folder);
+        }
+    }
+
+    /// Starts a new project from `template`: a fresh project, then the
+    /// files the template needs, picked by the user.
+    fn start_from_template(&mut self, template: Template, frame: &eframe::Frame) {
+        self.transport.pause();
+        self.forget_autosave();
+        self.session = EditorSession::new_untitled();
+        if template == Template::Empty {
+            self.status_message = "New project created".to_owned();
+            return;
+        }
+
+        self.import_audio(frame);
+        let has_song = self
+            .session
+            .project()
+            .audio_tracks()
+            .any(|track| !track.clips.is_empty());
+        if !has_song {
+            self.status_message =
+                "New project created; add a song with right-click on the timeline > Add".to_owned();
+            return;
+        }
+        match template {
+            Template::Empty => {}
+            Template::MusicVisualizer => {
+                self.session
+                    .add_visualizer_plugin("bundled-visualizers:/spectrum-bars");
+                self.status_message =
+                    "Press Space to play; change the visualizer's look in Properties".to_owned();
+            }
+            Template::LyricsVideo => {
+                let project_seconds = self.session.project().settings.duration_seconds();
+                self.lyrics.open(project_seconds);
+                self.status_message = "Paste the lyrics into the Lyrics window".to_owned();
+            }
+            Template::CoverArtVideo => {
+                self.import_background_image(frame);
+                self.session
+                    .add_visualizer_plugin("bundled-visualizers:/core");
+                self.status_message =
+                    "Resize the ring in the preview so the cover shows through its middle"
+                        .to_owned();
             }
         }
     }
@@ -1152,6 +1226,11 @@ impl eframe::App for VizxApp {
     /// the autosaved copy is not needed.
     fn on_exit(&mut self) {
         self.forget_autosave();
+        // The panel arrangement is kept for the next run.
+        self.settings.panel_layout = self.workspace.layout();
+        if let Some(folder) = &self.app_data {
+            let _ = self.settings.save(folder);
+        }
     }
 
     /// Called by eframe every time the window needs to be redrawn.
@@ -1201,6 +1280,7 @@ impl eframe::App for VizxApp {
         project_settings_window::show(&ctx, self);
         lyrics_window::show(&ctx, self);
         recovery_window::show(&ctx, self);
+        welcome_window::show(&ctx, self);
         shortcuts_window::show(&ctx, self);
         preset_browser::show(&ctx, self);
         visualizer_browser::show(&ctx, self);

@@ -37,7 +37,7 @@ eframe = { version = "0.36", default-features = false, features = [
     "x11",           # Linux display servers; ignored on Windows
     "wayland",
 ] }
-egui_dock = "0.21"
+egui_dock = { version = "0.21", features = ["serde"] }
 # The same wgpu that eframe draws the window with, used directly to render
 # visualizer plugins off-screen. Must stay on eframe's wgpu version.
 wgpu = "30"

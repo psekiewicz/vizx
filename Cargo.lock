@@ -24,6 +24,8 @@ version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3b7f7f85a7e5f68090000ed7622545829afd484d210358702ae4cb97dd0c320"
 dependencies = [
+ "enumn",
+ "serde",
  "uuid",
 ]
 
@@ -42,6 +44,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.3.4",
  "once_cell",
+ "serde",
  "version_check",
  "zerocopy",
 ]
@@ -559,6 +562,7 @@ checksum = "0656a7530b9e2841ee7a5f983965bdd9840c32f4012f759cfd44b912cced6b34"
 dependencies = [
  "bytemuck",
  "emath",
+ "serde",
 ]
 
 [[package]]
@@ -611,6 +615,7 @@ dependencies = [
  "log",
  "nohash-hasher",
  "profiling",
+ "serde",
  "smallvec",
  "unicode-segmentation",
  "web-sys",
@@ -665,6 +670,7 @@ dependencies = [
  "duplicate",
  "egui",
  "paste",
+ "serde",
  "thiserror 2.0.21",
 ]
 
@@ -695,6 +701,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c8d4141cf0f60fb2f7aefaf352d3ffa5171ef0ab09731c64391801e95e48f1"
 dependencies = [
  "bytemuck",
+ "serde",
+]
+
+[[package]]
+name = "enumn"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f9ed6b3789237c8a0c1c505af1c7eb2c560df6186f01b098c3a1064ea532f38"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -715,6 +733,7 @@ dependencies = [
  "parking_lot",
  "profiling",
  "self_cell",
+ "serde",
  "skrifa",
  "smallvec",
  "unicode-general-category",
@@ -816,6 +835,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "835ae9d781464a79026cde387f9cbc650c9a4909d7cf7e658b127e3c35d2f35d"
 dependencies = [
  "bytemuck",
+ "serde",
 ]
 
 [[package]]
@@ -2513,6 +2533,9 @@ name = "smallvec"
 version = "1.16.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "smithay-client-toolkit"
@@ -2954,6 +2977,9 @@ name = "uuid"
 version = "1.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bed99139f7dac9b5cfe5f17be4d66dc7079a34dee1d74bcc77217119240e267c"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "vello_common"
@@ -2995,6 +3021,8 @@ dependencies = [
  "eframe",
  "egui_dock",
  "rfd",
+ "serde",
+ "serde_json",
  "vizx-audio",
  "vizx-core",
  "vizx-project",

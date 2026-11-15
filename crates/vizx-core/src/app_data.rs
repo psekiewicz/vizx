@@ -31,11 +31,26 @@ pub fn app_data_dir() -> Option<PathBuf> {
 }
 
 /// Settings of VizX itself (not of a project).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
     /// The projects opened or saved last, the newest first.
     pub recent_projects: Vec<PathBuf>,
+    /// Whether the welcome window opens when VizX starts.
+    pub show_welcome: bool,
+    /// How the panels were arranged when VizX closed, as the user interface
+    /// stores it (`None`: the default layout).
+    pub panel_layout: Option<serde_json::Value>,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            recent_projects: Vec::new(),
+            show_welcome: true,
+            panel_layout: None,
+        }
+    }
 }
 
 impl AppSettings {

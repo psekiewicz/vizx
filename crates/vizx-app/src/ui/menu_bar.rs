@@ -171,6 +171,7 @@ fn playback_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
 }
 
 fn help_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
+    command_item(ui, app, "Welcome Screen", "", AppCommand::ShowWelcome);
     command_item(
         ui,
         app,

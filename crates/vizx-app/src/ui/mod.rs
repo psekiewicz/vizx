@@ -19,6 +19,7 @@ pub mod status_bar;
 pub mod toolbar;
 pub mod unsaved_changes_dialog;
 pub mod visualizer_browser;
+pub mod welcome_window;
 pub mod workspace;
 
 /// The entries of the "Add" menu. Returns the command of the entry that

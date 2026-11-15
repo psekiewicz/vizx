@@ -15,7 +15,7 @@ use crate::visual_preview::VisualPreview;
 /// The docking system only stores these small values. The actual panel
 /// content is drawn by [`PanelViewer`] from the shared [`EditorSession`], so
 /// a panel never owns project data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PanelKind {
     MediaLibrary,
     Preview,
@@ -54,6 +54,25 @@ impl Workspace {
         Self {
             dock_state: default_layout(),
             timeline_view: TimelineView::default(),
+        }
+    }
+
+    /// The panel arrangement, to be stored between runs.
+    pub fn layout(&self) -> Option<serde_json::Value> {
+        serde_json::to_value(&self.dock_state).ok()
+    }
+
+    /// Brings back an arrangement stored by [`Self::layout`]. One that cannot
+    /// be read (from another VizX version, say) leaves the default layout.
+    pub fn restore_layout(&mut self, layout: &serde_json::Value) {
+        if let Ok(dock_state) = serde_json::from_value::<DockState<PanelKind>>(layout.clone()) {
+            // Every panel must still be reachable; otherwise keep the default.
+            if PanelKind::ALL
+                .iter()
+                .any(|panel| dock_state.find_tab(panel).is_some())
+            {
+                self.dock_state = dock_state;
+            }
         }
     }
 
