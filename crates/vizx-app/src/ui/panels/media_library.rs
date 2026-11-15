@@ -89,6 +89,24 @@ pub fn show(ui: &mut egui::Ui, session: &EditorSession) {
         .show(ui, |ui| {
             let mut is_empty = true;
             for source in media {
+                if let Some(animation) = source.animation() {
+                    is_empty = false;
+                    ui.label(source.file_name()).on_hover_text(&source.path);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}  |  {} frames",
+                            match animation.layout {
+                                vizx_project::FrameLayout::Sequence { .. } => "Image sequence",
+                                vizx_project::FrameLayout::SpriteSheet { .. } => "Sprite sheet",
+                            },
+                            animation.frame_count
+                        ))
+                        .small()
+                        .color(theme::TEXT_MUTED),
+                    );
+                    ui.add_space(2.0);
+                    continue;
+                }
                 let Some(video) = source.video() else {
                     continue;
                 };

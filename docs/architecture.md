@@ -424,6 +424,28 @@ audio and video, `source_offset` (where in the file the clip begins).
   (`Project::move_clip_to_track`). While a clip is dragged, its start and
   end times are shown on it.
 - Clips on one track may overlap; nothing prevents it yet.
+### Frame animations: image sequences and sprite sheets
+
+A frame animation (`MediaContent::Animation`, `vizx-project/src/animation.rs`)
+is a picture that changes by itself, made of separate frames:
+
+- an **image sequence**: numbered files such as `walk_0001.png`,
+  `walk_0002.png`... (Add > Image Sequence: pick any of them; VizX finds the
+  run of numbers without gaps, starting at the lowest), or
+- a **sprite sheet**: one image with the frames in a grid, read left to
+  right, then top to bottom (Add > Sprite Sheet). A long strip of square
+  frames is recognized; otherwise columns, rows and the number of frames
+  are set in the Properties panel.
+
+It loops at a set speed (frames per second), or with "On beats" steps one
+frame on every beat of the clip's audio. Like an image it can be placed,
+turned, keyed and animated to the sound, and keeps its transparency.
+
+`vizx_core::AnimationReader` decodes frames when they are first needed
+(premultiplied, scaled down to an edge limit) and keeps them within a
+memory budget, so a short loop is decoded once. The preview reads at most
+1024 pixels per edge; the export at full size. Both pick the frame with
+`FrameAnimation::frame_at`, so they show the same frame at the same moment.
 ### Text
 
 A text element (Add > Text, Ctrl+T) is a kind of media that is not a file
@@ -478,7 +500,8 @@ VizX are plugins too, in `assets/visualizers`. See
 
 ### One "Add" menu
 
-Everything that can be added to a project (audio file, image, video, text, MilkDrop preset,
+Everything that can be added to a project (audio file, image, video, image sequence,
+sprite sheet, text, MilkDrop preset,
 visualizer plugin, visual layer, audio track) is listed in one function, `ui::add_menu_items`.
 It is shown in exactly one place, the context menu of the timeline
 (right-click a track, a lane or the empty area), plus keyboard shortcuts

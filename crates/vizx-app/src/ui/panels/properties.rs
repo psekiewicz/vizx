@@ -1,8 +1,8 @@
 use eframe::egui;
 use vizx_core::{AudioStore, EditorSession, ParameterKind, VisualizerCatalog};
 use vizx_project::{
-    AudioInput, AudioReaction, Clip, Easing, MediaId, Placement, ReactionBand, TextAlignment,
-    TextProperties, Track,
+    AudioInput, AudioReaction, Clip, Easing, FrameAnimation, FrameLayout, MediaId, Placement,
+    ReactionBand, TextAlignment, TextProperties, Track,
 };
 
 use crate::app::AppCommand;
@@ -88,6 +88,7 @@ fn track_properties(
                         None if source.is_milkdrop_preset() => "MilkDrop preset".to_owned(),
                         None if source.video().is_some() => "Video".to_owned(),
                         None if source.text().is_some() => "Text".to_owned(),
+                        None if source.animation().is_some() => "Frame animation".to_owned(),
                         None => "Visualizer plugin".to_owned(),
                     };
                     format!(
@@ -100,6 +101,10 @@ fn track_properties(
             let plugin_path = source.is_visualizer_plugin().then(|| source.path.clone());
             let is_visual = source.is_visual();
             let audio_media = source.audio().is_some().then_some(source.id);
+            let animation = source
+                .animation()
+                .cloned()
+                .map(|animation| (source.id, animation));
             // Cloned, so the session is free to be modified by the editor.
             let text = source.text().cloned().map(|text| (source.id, text));
             ui.label(source.display_name()).on_hover_text(&source.path);
@@ -109,6 +114,9 @@ fn track_properties(
                     .color(theme::TEXT_MUTED),
             );
             timing_editor(ui, session, clip);
+            if let Some((media_id, animation)) = animation {
+                animation_editor(ui, session, media_id, &animation);
+            }
             if let Some(media_id) = audio_media {
                 beats_editor(ui, session, audio_store, media_id);
             }
@@ -508,6 +516,81 @@ fn beats_editor(
                 }
             });
         }
+    }
+}
+
+/// How a frame animation is played, and for a sprite sheet its grid.
+fn animation_editor(
+    ui: &mut egui::Ui,
+    session: &mut EditorSession,
+    media_id: MediaId,
+    animation: &FrameAnimation,
+) {
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("Animation").strong());
+    ui.separator();
+    let mut edited = animation.clone();
+    let kind = match animation.layout {
+        FrameLayout::Sequence { .. } => "Image sequence",
+        FrameLayout::SpriteSheet { .. } => "Sprite sheet",
+    };
+    ui.label(
+        egui::RichText::new(format!(
+            "{kind}: {} frames of {} x {}",
+            animation.frame_count, animation.frame_width, animation.frame_height
+        ))
+        .small()
+        .color(theme::TEXT_MUTED),
+    );
+
+    egui::Grid::new(("animation", media_id))
+        .num_columns(2)
+        .show(ui, |ui| {
+            if let FrameLayout::SpriteSheet { columns, rows, .. } = &mut edited.layout {
+                ui.label("Columns");
+                ui.add(egui::DragValue::new(columns).range(1..=256));
+                ui.end_row();
+                ui.label("Rows");
+                ui.add(egui::DragValue::new(rows).range(1..=256));
+                ui.end_row();
+                ui.label("Frames").on_hover_text(
+                    "How many cells hold a frame, counted left to right, top to bottom",
+                );
+                ui.add(egui::DragValue::new(&mut edited.frame_count).range(1..=65_536));
+                ui.end_row();
+            }
+            ui.label("Speed");
+            let (slowest, fastest) = FrameAnimation::SPEED_RANGE;
+            ui.add_enabled(
+                !edited.on_beat,
+                egui::DragValue::new(&mut edited.frames_per_second)
+                    .range(slowest..=fastest)
+                    .speed(0.1)
+                    .max_decimals(1)
+                    .suffix(" fps"),
+            );
+            ui.end_row();
+            ui.label("On beats")
+                .on_hover_text("Step one frame on every beat instead of at a steady speed");
+            ui.checkbox(&mut edited.on_beat, "");
+            ui.end_row();
+        });
+
+    // When the grid changes, all of its cells are frames again.
+    if let (
+        FrameLayout::SpriteSheet { columns, rows, .. },
+        FrameLayout::SpriteSheet {
+            columns: old_columns,
+            rows: old_rows,
+            ..
+        },
+    ) = (edited.layout, animation.layout)
+        && (columns, rows) != (old_columns, old_rows)
+    {
+        edited.frame_count = columns * rows;
+    }
+    if edited != *animation {
+        session.edit_project(|project| project.set_animation(media_id, edited));
     }
 }
 

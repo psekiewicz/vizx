@@ -14,11 +14,13 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use vizx_core::{
-    AudioStore, Compositor, DecodedImage, EditorSession, ImageState, ImageStore, LayerDraw,
-    LayerGeometry, Prerender, PrerenderJob, ReactionMeter, VisualizerCatalog, audio_sources,
-    beat_times, frame_source, layer_geometry,
+    AnimationReader, AudioStore, Compositor, DecodedImage, EditorSession, ImageState, ImageStore,
+    LayerDraw, LayerGeometry, Prerender, PrerenderJob, ReactionMeter, VisualizerCatalog,
+    audio_sources, beat_count, beat_times, frame_source, layer_geometry,
 };
-use vizx_project::{AudioInput, ClipId, Placement, ReactionEffect, TextProperties, TrackId};
+use vizx_project::{
+    AudioInput, ClipId, FrameAnimation, Placement, ReactionEffect, TextProperties, TrackId,
+};
 
 /// Width in pixels at which a clip that fills the whole frame is
 /// pre-rendered. The height follows from the project's aspect ratio, and a
@@ -30,6 +32,10 @@ const PREVIEW_WIDTH: u32 = 640;
 const RENDER_EDGE_RANGE: (u32, u32) = (16, 1920);
 /// Largest width, in pixels, of the composed preview picture.
 const MAX_COMPOSITION_WIDTH: u32 = 1280;
+/// Longest edge, in pixels, of a frame of a frame animation in the preview.
+const ANIMATION_EDGE_LIMIT: u32 = 1024;
+/// At most this many bytes of decoded animation frames are kept per clip.
+const ANIMATION_BYTE_BUDGET: usize = 128 * 1024 * 1024;
 /// A render starts only after its settings have stayed the same for this
 /// long. Dragging a size value changes them many times per second, and
 /// each change would otherwise start and throw away a render.
@@ -130,6 +136,8 @@ pub struct VisualPreview {
     /// job and since when it has been wanted unchanged.
     waiting_since: HashMap<ClipId, (String, Instant)>,
     pictures: HashMap<ClipId, LayerPicture>,
+    /// Readers of the frame animations, by clip.
+    animations: HashMap<ClipId, AnimationReader>,
     last_picture_version: u64,
     /// The visual clips at the playhead, bottom layer first.
     layers: Vec<LayerView>,
@@ -153,6 +161,7 @@ impl VisualPreview {
             prerenders: HashMap::new(),
             waiting_since: HashMap::new(),
             pictures: HashMap::new(),
+            animations: HashMap::new(),
             last_picture_version: 0,
             layers: Vec::new(),
             meter: ReactionMeter::default(),
@@ -178,6 +187,8 @@ impl VisualPreview {
         // Pictures of clips that no longer exist are not needed any more.
         self.pictures
             .retain(|clip_id, _| project.visual_clips().any(|(clip, _)| clip.id == *clip_id));
+        self.animations
+            .retain(|clip_id, _| project.visual_clips().any(|(clip, _)| clip.id == *clip_id));
 
         // Rendering waits until all audio is loaded, not only the audio a
         // clip reacts to, so that no clip is rendered twice.
@@ -189,9 +200,10 @@ impl VisualPreview {
             // What should be rendered: one job per visualizer or video clip.
             let mut wanted: Vec<(ClipId, PrerenderJob)> = Vec::new();
             for (clip, media) in project.visual_clips() {
-                // An image or a text is one picture; nothing is rendered
-                // frame by frame for it.
-                if media.is_still() {
+                // An image or a text is one picture, and a frame animation
+                // is read frame by frame as it is shown; nothing is
+                // rendered ahead for them.
+                if media.is_still() || media.animation().is_some() {
                     continue;
                 }
                 // A clip that cannot be rendered at all (for example a
@@ -261,6 +273,12 @@ impl VisualPreview {
         {
             let state = if media.image().is_some() {
                 self.show_image(clip.id, &media.path, image_store)
+            } else if let Some(animation) = media.animation() {
+                let seconds_into_clip = playhead_seconds - clip.start_milliseconds as f64 / 1000.0;
+                let (beats, _) = beat_times(project, audio_store, clip.audio_input);
+                let frame =
+                    animation.frame_at(seconds_into_clip, beat_count(&beats, playhead_seconds));
+                self.show_animation_frame(clip.id, &media.path, animation, frame)
             } else if let Some(text) = media.text() {
                 self.show_text(clip.id, text, settings.height)
             } else {
@@ -522,6 +540,56 @@ impl VisualPreview {
                 height: image.height,
                 pixels: Pixels::Image(image),
                 frame_index: 0,
+                render_key: key,
+                version: self.last_picture_version,
+            },
+        );
+        LayerState::Shown
+    }
+
+    /// Makes sure the picture of a frame animation clip is frame `frame`,
+    /// and says whether the clip can be shown.
+    fn show_animation_frame(
+        &mut self,
+        clip_id: ClipId,
+        path: &str,
+        animation: &FrameAnimation,
+        frame: u32,
+    ) -> LayerState {
+        let key = format!("animation:{path}:{animation:?}:{frame}");
+        if self
+            .pictures
+            .get(&clip_id)
+            .is_some_and(|picture| picture.render_key == key)
+        {
+            return LayerState::Shown;
+        }
+        let is_current = self
+            .animations
+            .get(&clip_id)
+            .is_some_and(|reader| reader.reads(path, animation));
+        if !is_current {
+            self.animations.insert(
+                clip_id,
+                AnimationReader::new(path, animation, ANIMATION_EDGE_LIMIT, ANIMATION_BYTE_BUDGET),
+            );
+        }
+        let Some(reader) = self.animations.get_mut(&clip_id) else {
+            return LayerState::Failed("the animation could not be opened".to_owned());
+        };
+        let image = match reader.frame(frame) {
+            Ok(image) => image,
+            Err(problem) => return LayerState::Failed(problem),
+        };
+
+        self.last_picture_version += 1;
+        self.pictures.insert(
+            clip_id,
+            LayerPicture {
+                width: image.width,
+                height: image.height,
+                pixels: Pixels::Image(image),
+                frame_index: frame,
                 render_key: key,
                 version: self.last_picture_version,
             },

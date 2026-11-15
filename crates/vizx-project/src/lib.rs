@@ -9,6 +9,7 @@
 //! clips, keyframes and effects will be added to [`Project`] in later
 //! milestones.
 
+mod animation;
 mod file;
 mod media;
 mod metadata;
@@ -17,6 +18,7 @@ mod project;
 mod settings;
 mod track;
 
+pub use animation::{FrameAnimation, FrameLayout, sequence_frame_path, split_numbered_path};
 pub use file::{ProjectFileError, with_project_extension};
 pub use media::{
     AudioProperties, ImageProperties, MediaContent, MediaId, MediaSource, TextAlignment,
@@ -68,4 +70,6 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 /// - 16: a visual clip's `rotation_degrees`, `spin_degrees_per_second` and
 ///   `keyframes`. Older files load unturned and without keyframes.
 /// - 17: an audio file's hand-placed `manual_beats` and chosen `tempo_bpm`.
-pub const CURRENT_FORMAT_VERSION: u32 = 17;
+/// - 18: frame animations (image sequences and sprite sheets) as a kind of
+///   media.
+pub const CURRENT_FORMAT_VERSION: u32 = 18;

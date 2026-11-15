@@ -15,10 +15,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use vizx_audio::{Beat, PlaybackSource};
-use vizx_project::{AudioReaction, Motion, Project, TextProperties};
+use vizx_project::{AudioReaction, FrameAnimation, Motion, Project, TextProperties};
 use vizx_render::{Compositor, LayerDraw};
 
-use crate::composition::{ReactionMeter, audio_sources, beat_times, frame_source, layer_geometry};
+use crate::animation::AnimationReader;
+use crate::composition::{
+    ReactionMeter, audio_sources, beat_count, beat_times, frame_source, layer_geometry,
+};
 use crate::ffmpeg::VideoWriter;
 use crate::image_store::{DecodedImage, decode_image_file};
 use crate::prerender::{FrameRenderer, apply_opacity_from_brightness};
@@ -32,6 +35,8 @@ const RENDER_EDGE_RANGE: (f64, f64) = (16.0, 4096.0);
 /// Largest edge, in pixels, of an image used in an export. Far beyond any
 /// video size, it only guards against absurd files.
 const IMAGE_EDGE_LIMIT: u32 = 8192;
+/// At most this many bytes of decoded animation frames are kept per layer.
+const ANIMATION_BYTE_BUDGET: usize = 256 * 1024 * 1024;
 /// How often (in frames) the UI is told that progress was made.
 const PROGRESS_INTERVAL: u32 = 10;
 
@@ -75,6 +80,8 @@ pub struct ExportLayer {
 }
 
 pub enum ExportContent {
+    /// A frame animation (image sequence or sprite sheet) stored at the path.
+    Animation(PathBuf, FrameAnimation),
     /// A still image file.
     Image(PathBuf),
     /// A text element, drawn once.
@@ -113,6 +120,8 @@ impl ExportJob {
                 }
                 let content = if media.image().is_some() {
                     ExportContent::Image(PathBuf::from(&media.path))
+                } else if let Some(animation) = media.animation() {
+                    ExportContent::Animation(PathBuf::from(&media.path), animation.clone())
                 } else if let Some(text) = media.text() {
                     ExportContent::Text(text.clone())
                 } else {
@@ -236,6 +245,12 @@ impl Drop for Export {
 
 /// What a layer is drawn from during the export.
 enum LayerPicture {
+    /// A frame animation, with the frame shown now and its number.
+    Animation {
+        reader: Box<AnimationReader>,
+        frame: Arc<DecodedImage>,
+        index: u32,
+    },
     /// Not looked at yet; clips are prepared when they first appear.
     NotPrepared,
     Image(DecodedImage),
@@ -286,7 +301,7 @@ fn run(
             // First bring every visible layer's picture up to this frame...
             for (layer, picture) in job.layers.iter().zip(&mut pictures) {
                 if is_visible(layer, seconds) {
-                    advance(job, layer, picture, frames_per_second)?;
+                    advance(job, layer, picture, frames_per_second, seconds)?;
                 }
             }
             // ...then describe where each one goes, and draw them all.
@@ -297,6 +312,9 @@ fn run(
                 }
                 let (width, height, pixels) = match picture {
                     LayerPicture::Image(image) => (image.width, image.height, &image.pixels),
+                    LayerPicture::Animation { frame, .. } => {
+                        (frame.width, frame.height, &frame.pixels)
+                    }
                     LayerPicture::Frames {
                         width,
                         height,
@@ -320,6 +338,7 @@ fn run(
                     // frame.
                     version: match picture {
                         LayerPicture::Image(_) => 0,
+                        LayerPicture::Animation { index, .. } => u64::from(*index),
                         _ => u64::from(frame),
                     },
                     width,
@@ -361,6 +380,7 @@ fn advance(
     layer: &ExportLayer,
     picture: &mut LayerPicture,
     frames_per_second: f64,
+    seconds: f64,
 ) -> Result<(), String> {
     if matches!(picture, LayerPicture::NotPrepared) {
         *picture = match &layer.content {
@@ -371,6 +391,20 @@ fn advance(
             }
             // The same drawing as in the preview, for the video's height.
             ExportContent::Text(text) => LayerPicture::Image(render_text(text, job.height)?),
+            ExportContent::Animation(path, animation) => {
+                let mut reader = AnimationReader::new(
+                    &path.to_string_lossy(),
+                    animation,
+                    IMAGE_EDGE_LIMIT,
+                    ANIMATION_BYTE_BUDGET,
+                );
+                let frame = reader.frame(0)?;
+                LayerPicture::Animation {
+                    reader: Box::new(reader),
+                    frame,
+                    index: 0,
+                }
+            }
             ExportContent::Frames(source) => {
                 // Rendered at the size the clip has in the video.
                 // Rendered at the largest size the clip reaches in the video.
@@ -399,6 +433,25 @@ fn advance(
                 }
             }
         };
+    }
+
+    if let (
+        LayerPicture::Animation {
+            reader,
+            frame,
+            index,
+        },
+        ExportContent::Animation(_, animation),
+    ) = (&mut *picture, &layer.content)
+    {
+        let wanted = animation.frame_at(
+            seconds - layer.start_seconds,
+            beat_count(&layer.beats, seconds),
+        );
+        if wanted != *index {
+            *frame = reader.frame(wanted)?;
+            *index = wanted;
+        }
     }
 
     if let LayerPicture::Frames {
@@ -660,6 +713,67 @@ mod tests {
         );
         // Halfway it is in the middle.
         assert!(red_at(&frames[5], 32) && !red_at(&frames[5], 4));
+    }
+
+    /// A sprite sheet of two frames, red and blue, at 5 frames per second:
+    /// the video changes color every 0.2 s.
+    #[test]
+    fn a_sprite_sheet_plays_in_the_exported_video() {
+        let (Some(ffmpeg), true) = (find_ffmpeg(), vizx_render::open_device("test").is_ok()) else {
+            eprintln!("FFmpeg or a graphics adapter is missing: skipping");
+            return;
+        };
+        let sheet_path = temporary_path("sheet.png");
+        let mut sheet = image::RgbaImage::from_pixel(16, 8, image::Rgba([255, 0, 0, 255]));
+        image::imageops::replace(
+            &mut sheet,
+            &image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 0, 255, 255])),
+            8,
+            0,
+        );
+        sheet.save(&sheet_path).unwrap();
+        let output = temporary_path("sheet.mp4");
+        let mut layer = image_layer(&sheet_path, Placement::FULL);
+        layer.content = ExportContent::Animation(
+            sheet_path.clone(),
+            FrameAnimation::sprite_sheet((16, 8), 2, 1, 5.0),
+        );
+
+        let export = Export::start(
+            ExportJob {
+                output: output.clone(),
+                ffmpeg: ffmpeg.clone(),
+                width: 64,
+                height: 48,
+                frame_rate: (10, 1),
+                duration_seconds: 1.0,
+                audio: Vec::new(),
+                layers: vec![layer],
+            },
+            || {},
+        );
+        let result = wait_for(&export);
+        let _ = std::fs::remove_file(&sheet_path);
+        assert_eq!(result, Ok(()));
+
+        let mut reader = VideoReader::open(&ffmpeg, &output, (64, 48), 10, 0.0).unwrap();
+        let mut colors = Vec::new();
+        for _ in 0..10 {
+            let mut pixels = Vec::new();
+            reader.read_frame(&mut pixels).unwrap();
+            let middle = (24 * 64 + 32) * 4;
+            colors.push(if pixels[middle] > 150 {
+                'R'
+            } else if pixels[middle + 2] > 150 {
+                'B'
+            } else {
+                '?'
+            });
+        }
+        drop(reader);
+        let _ = std::fs::remove_file(&output);
+
+        assert_eq!(colors.iter().collect::<String>(), "RRBBRRBBRR");
     }
 
     #[test]

@@ -14,7 +14,7 @@ single project and share one timeline.
 > visualizer plugins (WGSL shaders) and images, all with transparency, that can
 > be moved and resized in the preview and react to the sound, video files as
 > layers or background, text, clip editing on the timeline (move, trim,
-> split), keyframe animation, beat detection, undo/redo and export to MP4 exist. There is no export yet.
+> split), image sequences and sprite sheets, keyframe animation, beat detection, undo/redo and export to MP4 exist. There is no export yet.
 
 ## Technology
 

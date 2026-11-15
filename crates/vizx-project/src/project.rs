@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::Easing;
 use crate::{
     AudioInput, AudioProperties, AudioReaction, CURRENT_FORMAT_VERSION, Clip, ClipId,
     ImageProperties, MediaContent, MediaId, MediaSource, Placement, ProjectMetadata,
     ProjectSettings, TextProperties, Track, TrackId, TrackKind, Transform,
 };
+use crate::{Easing, FrameAnimation};
 
 /// Root of all data that belongs to one VizX project.
 ///
@@ -612,6 +612,38 @@ impl Project {
             clip.placement = placement;
         }
         (media_id, track_id)
+    }
+
+    /// Adds a frame animation (image sequence or sprite sheet) on a visual
+    /// layer for the whole project, fitted into the frame like an image.
+    pub fn add_animation(
+        &mut self,
+        path: impl Into<String>,
+        animation: FrameAnimation,
+    ) -> (MediaId, TrackId) {
+        let animation = animation.sanitized();
+        let frame_size = (animation.frame_width, animation.frame_height);
+        let (media_id, track_id) = self.add_visual(path.into(), MediaContent::Animation(animation));
+        let placement = fitted_placement(frame_size, (self.settings.width, self.settings.height));
+        if let Some(clip) = self.clip_of_media_mut(media_id) {
+            clip.placement = placement;
+        }
+        (media_id, track_id)
+    }
+
+    /// Changes how a frame animation is laid out or played. Returns `true`
+    /// only if this changed something.
+    pub fn set_animation(&mut self, media_id: MediaId, animation: FrameAnimation) -> bool {
+        let animation = animation.sanitized();
+        let Some(source) = self.media.iter_mut().find(|source| source.id == media_id) else {
+            return false;
+        };
+        let MediaContent::Animation(current) = &mut source.content else {
+            return false;
+        };
+        let has_changed = *current != animation;
+        *current = animation;
+        has_changed
     }
 
     fn add_background(
@@ -2062,6 +2094,28 @@ mod tests {
         assert!(!project.set_audio_tempo(preset, Some(90.0)));
         assert!(project.use_automatic_beats(song));
         assert_eq!(manual(&project), None);
+    }
+
+    #[test]
+    fn a_frame_animation_is_a_visual_element_fitted_like_an_image() {
+        let mut project = Project::with_starter_tracks(); // 1920 x 1080
+        let sheet = FrameAnimation::sprite_sheet((800, 200), 4, 1, 12.0);
+
+        let (media_id, layer) = project.add_animation("run.png", sheet.clone());
+
+        let source = project.media_source(media_id).unwrap();
+        assert!(source.is_visual() && !source.is_still() && source.animation().is_some());
+        // Square frames: as tall as the frame, centered.
+        let placement = project.track(layer).unwrap().clips[0].placement;
+        assert!((placement.height - 1.0).abs() < 1e-9);
+        assert!((placement.width - 0.5625).abs() < 1e-9);
+
+        let mut faster = sheet;
+        faster.frames_per_second = 24.0;
+        assert!(project.set_animation(media_id, faster.clone()));
+        assert!(!project.set_animation(media_id, faster));
+        let saved = project.to_vzx_string().unwrap();
+        assert_eq!(Project::from_vzx_str(&saved).unwrap(), project);
     }
 
     #[test]

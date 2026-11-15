@@ -9,6 +9,9 @@ use vizx_project::{
 use crate::history::History;
 use crate::{PresetEntry, PresetLibrary, Selection};
 
+/// Frames per second of a newly imported frame animation.
+const DEFAULT_ANIMATION_SPEED: f64 = 12.0;
+
 /// Name shown for a project that has not been saved to a file yet.
 pub const UNTITLED_PROJECT_NAME: &str = "Untitled";
 
@@ -411,6 +414,32 @@ impl EditorSession {
             width,
             height,
         })
+    }
+
+    /// Imports the image sequence that `file` belongs to (the numbered files
+    /// next to it) as a frame animation on a visual layer, which becomes
+    /// selected.
+    pub fn import_image_sequence(&mut self, file: &Path) -> Result<TrackId, String> {
+        let (first_file, animation) = crate::find_image_sequence(file, DEFAULT_ANIMATION_SPEED)?;
+        let (_media_id, track_id) = self.project.add_animation(first_file, animation);
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        Ok(track_id)
+    }
+
+    /// Imports an image as a sprite sheet on a visual layer, which becomes
+    /// selected. Its grid is guessed; it can be set in the Properties panel.
+    pub fn import_sprite_sheet(&mut self, file: &Path) -> Result<TrackId, String> {
+        if !crate::has_supported_image_extension(file) {
+            return Err("not a PNG or JPEG image".to_owned());
+        }
+        let animation = crate::guess_sprite_sheet(file, DEFAULT_ANIMATION_SPEED)?;
+        let (_media_id, track_id) = self
+            .project
+            .add_animation(file.to_string_lossy(), animation);
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        Ok(track_id)
     }
 
     /// Adds a visualizer plugin and places it on a visual layer, which

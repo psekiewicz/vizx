@@ -34,6 +34,10 @@ pub enum AppCommand {
     ImportBackgroundImage,
     /// Pick a video file and put its picture on a layer of its own.
     ImportVideo,
+    /// Pick one file of a numbered image sequence.
+    ImportImageSequence,
+    /// Pick an image holding the frames of an animation in a grid.
+    ImportSpriteSheet,
     /// Pick a video file and put it behind everything else.
     ImportBackgroundVideo,
     /// Write the project as a video file.
@@ -237,6 +241,36 @@ impl VizxApp {
         };
     }
 
+    /// Lets the user pick a file of an image sequence (any of its frames)
+    /// or a sprite sheet, and adds it as a frame animation.
+    fn import_animation(&mut self, frame: &eframe::Frame, is_sequence: bool) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(if is_sequence {
+                "Pick any frame of the image sequence"
+            } else {
+                "Pick the sprite sheet"
+            })
+            .add_filter("Image", &vizx_core::SUPPORTED_IMAGE_EXTENSIONS)
+            .set_parent(frame)
+            .pick_file()
+        else {
+            return; // dialog cancelled
+        };
+        let result = if is_sequence {
+            self.session.import_image_sequence(&path)
+        } else {
+            self.session.import_sprite_sheet(&path)
+        };
+        self.status_message = match result {
+            Ok(_) if is_sequence => format!("Added image sequence {}", path.display()),
+            Ok(_) => format!(
+                "Added sprite sheet {}; set its grid in Properties",
+                path.display()
+            ),
+            Err(problem) => format!("Could not import {}: {problem}", path.display()),
+        };
+    }
+
     /// Asks where to save the video and starts exporting in the background.
     fn export_video(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         if self
@@ -361,6 +395,8 @@ impl VizxApp {
             AppCommand::ImportImage => self.import_images(frame),
             AppCommand::ImportBackgroundImage => self.import_background_image(frame),
             AppCommand::ImportVideo => self.import_video(frame, false),
+            AppCommand::ImportImageSequence => self.import_animation(frame, true),
+            AppCommand::ImportSpriteSheet => self.import_animation(frame, false),
             AppCommand::ImportBackgroundVideo => self.import_video(frame, true),
             AppCommand::ExportVideo => self.export_video(ctx, frame),
             AppCommand::AddText => {

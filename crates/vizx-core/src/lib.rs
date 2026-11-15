@@ -5,6 +5,7 @@
 //! at, and it is where future subsystems (timeline, audio, composition,
 //! rendering) will be coordinated. It must never depend on a GUI library.
 
+mod animation;
 mod audio_store;
 mod composition;
 mod export;
@@ -18,6 +19,7 @@ mod session;
 mod text;
 mod visualizer_catalog;
 
+pub use animation::{AnimationReader, find_image_sequence, guess_sprite_sheet};
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
 pub use composition::{
     LayerGeometry, ReactionMeter, audio_sources, beat_count, beat_pulse, beat_times, frame_source,

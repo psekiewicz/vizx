@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::FrameAnimation;
+
 /// Identifies a media source within one project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -50,6 +52,7 @@ impl MediaSource {
             | MediaContent::VisualizerPlugin
             | MediaContent::Image(_)
             | MediaContent::Video(_)
+            | MediaContent::Animation(_)
             | MediaContent::Text(_) => None,
         }
     }
@@ -83,6 +86,14 @@ impl MediaSource {
     }
 
     /// The picture properties, if this is a video file.
+    /// The frame animation, if this is an image sequence or a sprite sheet.
+    pub fn animation(&self) -> Option<&FrameAnimation> {
+        match &self.content {
+            MediaContent::Animation(animation) => Some(animation),
+            _ => None,
+        }
+    }
+
     pub fn video(&self) -> Option<&ImageProperties> {
         match &self.content {
             MediaContent::Video(video) => Some(video),
@@ -113,7 +124,10 @@ impl MediaSource {
 
     /// Whether this source produces a picture (as opposed to sound).
     pub fn is_visual(&self) -> bool {
-        self.is_visualizer() || self.is_still() || self.video().is_some()
+        self.is_visualizer()
+            || self.is_still()
+            || self.video().is_some()
+            || self.animation().is_some()
     }
 }
 
@@ -136,6 +150,9 @@ pub enum MediaContent {
     /// start when its clip starts and begins again when it ends. The
     /// properties are the size of its picture.
     Video(ImageProperties),
+    /// A frame animation: an image sequence (`path` is its first file) or
+    /// a sprite sheet (`path` is the sheet). It plays in a loop.
+    Animation(FrameAnimation),
     /// A piece of text (a title, a caption). It is not a file: `path` is
     /// empty and everything about it is stored here.
     Text(TextProperties),
