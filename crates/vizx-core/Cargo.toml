@@ -16,3 +16,9 @@ epaint_default_fonts.workspace = true
 image.workspace = true
 jpeg-encoder.workspace = true
 vizx-project.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Whether the VizX that wrote an autosave is still running.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }

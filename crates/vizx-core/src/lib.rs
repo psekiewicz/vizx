@@ -6,6 +6,7 @@
 //! rendering) will be coordinated. It must never depend on a GUI library.
 
 mod animation;
+mod app_data;
 mod audio_store;
 mod composition;
 mod export;
@@ -22,6 +23,9 @@ mod text;
 mod visualizer_catalog;
 
 pub use animation::{AnimationReader, find_image_sequence, find_row_lengths, guess_sprite_sheet};
+pub use app_data::{
+    AUTOSAVE_INTERVAL, AppSettings, Autosaver, Recovery, app_data_dir, find_recoveries,
+};
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
 pub use composition::{
     LayerGeometry, ReactionMeter, audio_sources, beat_count, beat_pulse, beat_times, frame_source,
@@ -44,7 +48,7 @@ pub use preset_library::{
     BUNDLED_PRESET_PREFIX, PresetEntry, PresetLibrary, find_bundled_presets, resolve_preset_path,
 };
 pub use selection::Selection;
-pub use session::{EditorSession, UNTITLED_PROJECT_NAME};
+pub use session::{CopiedClip, EditorSession, UNTITLED_PROJECT_NAME};
 pub use stems::{STEM_NAMES, StemEngine, StemFiles, StemJob, stem_folder};
 pub use text::render_text;
 pub use visualizer_catalog::{

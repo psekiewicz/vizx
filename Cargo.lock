@@ -3017,12 +3017,15 @@ dependencies = [
  "epaint_default_fonts",
  "image",
  "jpeg-encoder",
+ "serde",
+ "serde_json",
  "vizx-audio",
  "vizx-milkdrop",
  "vizx-ml",
  "vizx-project",
  "vizx-render",
  "vizx-visualizer",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

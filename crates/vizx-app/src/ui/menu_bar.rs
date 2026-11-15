@@ -1,7 +1,6 @@
 use eframe::egui;
 
 use crate::app::{AppCommand, VizxApp};
-use crate::ui::NOT_AVAILABLE_YET;
 use crate::ui::workspace::PanelKind;
 
 pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
@@ -23,6 +22,24 @@ fn file_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
         "Ctrl+O",
         AppCommand::OpenProject,
     );
+    let recent = app.settings.recent_projects.clone();
+    ui.add_enabled_ui(!recent.is_empty(), |ui| {
+        ui.menu_button("Open Recent", |ui| {
+            for (index, path) in recent.iter().enumerate() {
+                let name = path.file_stem().map_or_else(
+                    || path.display().to_string(),
+                    |stem| stem.to_string_lossy().into_owned(),
+                );
+                let button = ui
+                    .add_enabled(path.is_file(), egui::Button::new(name))
+                    .on_hover_text(path.display().to_string())
+                    .on_disabled_hover_text("This file no longer exists");
+                if button.clicked() {
+                    app.request(AppCommand::OpenRecent(index));
+                }
+            }
+        });
+    });
     ui.separator();
     command_item(ui, app, "Save", "Ctrl+S", AppCommand::SaveProject);
     command_item(
@@ -85,9 +102,9 @@ fn edit_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
         app.session.can_redo(),
     );
     ui.separator();
-    unavailable_item(ui, "Cut", "Ctrl+X");
-    unavailable_item(ui, "Copy", "Ctrl+C");
-    unavailable_item(ui, "Paste", "Ctrl+V");
+    command_item(ui, app, "Cut Clip", "Ctrl+X", AppCommand::CutClip);
+    command_item(ui, app, "Copy Clip", "Ctrl+C", AppCommand::CopyClip);
+    command_item(ui, app, "Paste Clip", "Ctrl+V", AppCommand::PasteClip);
     command_item(ui, app, "Delete", "Del", AppCommand::DeleteSelection);
     ui.separator();
     command_item(
@@ -128,9 +145,39 @@ fn playback_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
     ui.separator();
     command_item(ui, app, "Go to Start", "Home", AppCommand::GoToStart);
     command_item(ui, app, "Go to End", "End", AppCommand::GoToEnd);
+    ui.separator();
+    command_item(
+        ui,
+        app,
+        "Previous Frame",
+        "Left",
+        AppCommand::MovePlayheadFrames(-1),
+    );
+    command_item(
+        ui,
+        app,
+        "Next Frame",
+        "Right",
+        AppCommand::MovePlayheadFrames(1),
+    );
+    command_item(
+        ui,
+        app,
+        "Previous Clip Edge",
+        "Up",
+        AppCommand::PreviousClipEdge,
+    );
+    command_item(ui, app, "Next Clip Edge", "Down", AppCommand::NextClipEdge);
 }
 
 fn help_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
+    command_item(
+        ui,
+        app,
+        "Keyboard Shortcuts",
+        "F1",
+        AppCommand::ShowShortcuts,
+    );
     if ui.button("About VizX").clicked() {
         app.is_about_window_open = true;
     }
@@ -149,13 +196,4 @@ fn history_item(
     if ui.add_enabled(is_available, button).clicked() {
         app.request(command);
     }
-}
-
-/// A greyed-out menu entry for a feature planned for a later milestone.
-///
-/// The entries are shown so the menu structure is already in place, but they
-/// are disabled instead of pretending to work.
-fn unavailable_item(ui: &mut egui::Ui, label: &str, shortcut: &str) {
-    ui.add_enabled(false, egui::Button::new(label).shortcut_text(shortcut))
-        .on_disabled_hover_text(NOT_AVAILABLE_YET);
 }

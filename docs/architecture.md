@@ -542,6 +542,30 @@ the executable or `%VIZX_DEMUCS_MODEL%` (huggingface.co/StemSplitio/
 htdemucs-onnx). On the development machine both live in `D:\tools` and the
 variables are set in cargo's `config.toml`. `cargo run --release -p vizx-ml
 --example demucs -- <song> <folder>` separates a file without the window.
+### Long sessions: autosave, recent projects, clipboard, shortcuts
+
+VizX is used for hours at a time, so losing work or reaching for the mouse
+for every step is expensive.
+
+- **Autosave and recovery** (`vizx_core::Autosaver`, `app_data.rs`): once a
+  minute, while the project has unsaved changes, a copy is written to
+  `%APPDATA%\VizX\autosave\autosave-<process id>.vzx` with a note saying
+  which file it belongs to. Saving, closing on purpose, or replacing the
+  project deletes it. At startup, copies whose VizX is no longer running
+  (checked by process id) are offered in a "Recover Work" window; a
+  recovered project belongs to its original file again and counts as
+  unsaved. The copies are small (the project only, never media).
+- **Open Recent** (File menu): the last ten projects opened or saved, in
+  `%APPDATA%\VizX\settings.json` (`AppSettings`).
+- **Clipboard**: Ctrl+C / Ctrl+X / Ctrl+V copy, cut and paste the selected
+  clip at the playhead (`EditorSession::copy_selected_clip`, `paste_clip`).
+  The copy carries its media, so it can be pasted into another project; a
+  text becomes a text of its own. egui delivers these keys as clipboard
+  events, not key presses, so they are read from the input events.
+- **Moving around**: Left/Right step one frame, Shift+Left/Right one
+  second, Up/Down jump to the previous/next clip start or end.
+- **F1** shows all shortcuts in one window (`shortcuts_window.rs`); keep
+  its list in step with `handle_keyboard_shortcuts`.
 ### Visualizer plugins
 
 Visualizers other than MilkDrop presets are **plugins**: a folder with a

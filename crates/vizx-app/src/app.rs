@@ -11,8 +11,9 @@ use crate::ui::preset_browser::PresetBrowser;
 use crate::ui::visualizer_browser::VisualizerBrowser;
 use crate::ui::workspace::Workspace;
 use crate::ui::{
-    about_window, export_window, menu_bar, preset_browser, project_settings_window, status_bar,
-    toolbar, unsaved_changes_dialog, visualizer_browser,
+    about_window, export_window, menu_bar, preset_browser, project_settings_window,
+    recovery_window, shortcuts_window, status_bar, toolbar, unsaved_changes_dialog,
+    visualizer_browser,
 };
 use crate::visual_preview::VisualPreview;
 
@@ -27,6 +28,8 @@ use crate::visual_preview::VisualPreview;
 pub enum AppCommand {
     NewProject,
     OpenProject,
+    /// Open one of the recently used projects (its place in the list).
+    OpenRecent(usize),
     SaveProject,
     SaveProjectAs,
     ImportAudio,
@@ -61,6 +64,21 @@ pub enum AppCommand {
     DeleteSelection,
     Undo,
     Redo,
+    /// Put the selected clip on VizX's clipboard.
+    CopyClip,
+    /// Copy the selected clip, then delete it.
+    CutClip,
+    /// Paste the clip on the clipboard at the playhead.
+    PasteClip,
+    /// Move the playhead by this many frames (negative: back).
+    MovePlayheadFrames(i32),
+    /// Move the playhead by this many seconds (negative: back).
+    MovePlayheadSeconds(i32),
+    /// Move the playhead to the previous or next clip start or end.
+    PreviousClipEdge,
+    NextClipEdge,
+    /// Show the list of keyboard shortcuts.
+    ShowShortcuts,
     /// Place a beat at the playhead on the selected audio clip.
     TapBeat,
     /// Open the browser for the presets that ship with VizX.
@@ -87,7 +105,10 @@ impl AppCommand {
     /// Whether the command throws away the currently open project, in which
     /// case unsaved changes must be confirmed first.
     fn discards_current_project(self) -> bool {
-        matches!(self, Self::NewProject | Self::OpenProject | Self::Exit)
+        matches!(
+            self,
+            Self::NewProject | Self::OpenProject | Self::OpenRecent(_) | Self::Exit
+        )
     }
 }
 
@@ -118,6 +139,18 @@ pub struct VizxApp {
     pub is_about_window_open: bool,
     pub is_project_settings_open: bool,
     pub lyrics: LyricsWindow,
+    /// VizX's own folder for settings and autosaves, if the system has one.
+    app_data: Option<PathBuf>,
+    /// Settings of VizX itself, such as the recent projects.
+    pub settings: vizx_core::AppSettings,
+    /// Keeps an autosaved copy of the project while it has unsaved changes.
+    autosaver: Option<vizx_core::Autosaver>,
+    /// Autosaved projects of a VizX that did not close properly, offered
+    /// for recovery at startup.
+    pub recoveries: Vec<vizx_core::Recovery>,
+    /// The clip copied last.
+    clipboard: Option<vizx_core::CopiedClip>,
+    pub is_shortcuts_open: bool,
     /// The stem separation running in the background, if any.
     stem_job: Option<vizx_core::StemJob>,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
@@ -143,6 +176,7 @@ impl VizxApp {
         // Looked up once: both the preset browser and the preview need it.
         let bundled_presets = vizx_core::find_bundled_presets();
         let ffmpeg = vizx_core::find_ffmpeg();
+        let app_data = vizx_core::app_data_dir();
 
         Self {
             session: EditorSession::new_untitled(),
@@ -161,6 +195,18 @@ impl VizxApp {
             is_project_settings_open: false,
             lyrics: LyricsWindow::default(),
             stem_job: None,
+            settings: app_data
+                .as_deref()
+                .map(vizx_core::AppSettings::load)
+                .unwrap_or_default(),
+            autosaver: app_data.as_deref().map(vizx_core::Autosaver::new),
+            recoveries: app_data
+                .as_deref()
+                .map(vizx_core::find_recoveries)
+                .unwrap_or_default(),
+            app_data,
+            clipboard: None,
+            is_shortcuts_open: false,
             graphics_summary: describe_graphics_adapter(creation_context),
             status_message: "Ready".to_owned(),
             requested_command: None,
@@ -498,10 +544,54 @@ impl VizxApp {
         match command {
             AppCommand::NewProject => {
                 self.transport.pause();
+                self.forget_autosave();
                 self.session = EditorSession::new_untitled();
                 self.status_message = "New project created".to_owned();
             }
             AppCommand::OpenProject => self.open_project(frame),
+            AppCommand::OpenRecent(index) => {
+                if let Some(path) = self.settings.recent_projects.get(index).cloned() {
+                    self.open_project_at(&path);
+                }
+            }
+            AppCommand::CopyClip => {
+                self.clipboard = self.session.copy_selected_clip();
+                self.status_message = if self.clipboard.is_some() {
+                    "Clip copied; paste it with Ctrl+V at the playhead".to_owned()
+                } else {
+                    "Select a clip to copy it".to_owned()
+                };
+            }
+            AppCommand::CutClip => match self.session.copy_selected_clip() {
+                Some(copied) => {
+                    self.clipboard = Some(copied);
+                    self.session.delete_selection();
+                    self.status_message =
+                        "Clip cut; paste it with Ctrl+V at the playhead".to_owned();
+                }
+                None => self.status_message = "Select a clip to cut it".to_owned(),
+            },
+            AppCommand::PasteClip => {
+                self.status_message = match &self.clipboard {
+                    Some(copied) => match self.session.paste_clip(copied) {
+                        Some(_) => "Clip pasted at the playhead".to_owned(),
+                        None => "Could not paste the clip there".to_owned(),
+                    },
+                    None => "Nothing to paste; copy a clip first (Ctrl+C)".to_owned(),
+                };
+            }
+            AppCommand::MovePlayheadFrames(frames) => self.session.step_playhead_frames(frames),
+            AppCommand::MovePlayheadSeconds(seconds) => {
+                let now = self.session.playhead_seconds();
+                self.session.set_playhead_seconds(now + f64::from(seconds));
+            }
+            AppCommand::PreviousClipEdge => {
+                self.session.jump_to_clip_edge(false);
+            }
+            AppCommand::NextClipEdge => {
+                self.session.jump_to_clip_edge(true);
+            }
+            AppCommand::ShowShortcuts => self.is_shortcuts_open = true,
             AppCommand::SaveProject => {
                 self.save_project(frame);
             }
@@ -601,11 +691,17 @@ impl VizxApp {
         let Some(path) = project_file_dialog(frame).pick_file() else {
             return; // dialog cancelled
         };
+        self.open_project_at(&path);
+    }
 
-        match EditorSession::open(&path) {
+    /// Opens the project file at `path` in place of the current project.
+    fn open_project_at(&mut self, path: &Path) {
+        match EditorSession::open(path) {
             Ok(session) => {
                 self.transport.pause();
+                self.forget_autosave();
                 self.session = session;
+                self.remember_recent_project(path);
                 self.status_message = format!("Opened {}", path.display());
             }
             Err(error) => {
@@ -754,6 +850,8 @@ impl VizxApp {
     fn save_project_to(&mut self, path: PathBuf) -> bool {
         match self.session.save_as(&path) {
             Ok(()) => {
+                self.forget_autosave();
+                self.remember_recent_project(&path);
                 self.status_message = format!("Saved {}", path.display());
                 true
             }
@@ -761,6 +859,60 @@ impl VizxApp {
                 self.status_message = format!("Could not save {}: {error}", path.display());
                 false
             }
+        }
+    }
+
+    /// Puts `path` at the top of File > Open Recent and stores the list.
+    fn remember_recent_project(&mut self, path: &Path) {
+        self.settings.remember_project(path);
+        if let Some(folder) = &self.app_data {
+            let _ = self.settings.save(folder);
+        }
+    }
+
+    /// Removes the autosaved copy of the current project (it was saved,
+    /// or deliberately replaced or closed).
+    fn forget_autosave(&mut self) {
+        if let Some(autosaver) = &mut self.autosaver {
+            autosaver.clear();
+        }
+    }
+
+    /// Autosaves the project now and then while it has unsaved changes.
+    fn autosave(&mut self) {
+        if let Some(autosaver) = &mut self.autosaver
+            && let Err(problem) = autosaver.tick(&self.session, std::time::Instant::now())
+        {
+            self.status_message = format!("Autosave failed: {problem}");
+        }
+    }
+
+    /// Opens an autosaved project left behind by a VizX that did not close
+    /// properly.
+    pub fn recover(&mut self, index: usize) {
+        if index >= self.recoveries.len() {
+            return;
+        }
+        let recovery = self.recoveries.remove(index);
+        match EditorSession::recover(&recovery.autosave, recovery.project_path.clone()) {
+            Ok(session) => {
+                self.transport.pause();
+                self.session = session;
+                recovery.discard();
+                self.status_message =
+                    format!("Recovered {}; save it to keep it", recovery.project_name);
+            }
+            Err(error) => {
+                self.status_message =
+                    format!("Could not recover {}: {error}", recovery.project_name);
+            }
+        }
+    }
+
+    /// Deletes an autosaved project the user does not want back.
+    pub fn discard_recovery(&mut self, index: usize) {
+        if index < self.recoveries.len() {
+            self.recoveries.remove(index).discard();
         }
     }
 
@@ -840,10 +992,35 @@ impl VizxApp {
                 (Key::B, AppCommand::TapBeat),
                 (Key::Home, AppCommand::GoToStart),
                 (Key::End, AppCommand::GoToEnd),
+                (Key::ArrowLeft, AppCommand::MovePlayheadFrames(-1)),
+                (Key::ArrowRight, AppCommand::MovePlayheadFrames(1)),
+                (Key::ArrowUp, AppCommand::PreviousClipEdge),
+                (Key::ArrowDown, AppCommand::NextClipEdge),
+                (Key::F1, AppCommand::ShowShortcuts),
             ] {
                 if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key)) {
                     self.request(command);
                 }
+            }
+            for (key, command) in [
+                (Key::ArrowLeft, AppCommand::MovePlayheadSeconds(-1)),
+                (Key::ArrowRight, AppCommand::MovePlayheadSeconds(1)),
+            ] {
+                if ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, key)) {
+                    self.request(command);
+                }
+            }
+            // egui turns Ctrl+C, Ctrl+X and Ctrl+V into clipboard events.
+            let clipboard_command = ctx.input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::Copy => Some(AppCommand::CopyClip),
+                    egui::Event::Cut => Some(AppCommand::CutClip),
+                    egui::Event::Paste(_) => Some(AppCommand::PasteClip),
+                    _ => None,
+                })
+            });
+            if let Some(command) = clipboard_command {
+                self.request(command);
             }
         }
         for (shortcut, command) in shortcuts {
@@ -971,6 +1148,12 @@ impl VizxApp {
 }
 
 impl eframe::App for VizxApp {
+    /// The window is closing for good (unsaved changes were dealt with):
+    /// the autosaved copy is not needed.
+    fn on_exit(&mut self) {
+        self.forget_autosave();
+    }
+
     /// Called by eframe every time the window needs to be redrawn.
     ///
     /// egui is an "immediate mode" GUI: there are no persistent widget
@@ -986,6 +1169,7 @@ impl eframe::App for VizxApp {
         self.load_project_audio(&ctx);
         self.load_project_images(&ctx);
         self.collect_stems();
+        self.autosave();
         self.visual_preview.update(
             &ctx,
             &self.session,
@@ -1016,6 +1200,8 @@ impl eframe::App for VizxApp {
         about_window::show(&ctx, self);
         project_settings_window::show(&ctx, self);
         lyrics_window::show(&ctx, self);
+        recovery_window::show(&ctx, self);
+        shortcuts_window::show(&ctx, self);
         preset_browser::show(&ctx, self);
         visualizer_browser::show(&ctx, self);
         export_window::show(&ctx, self);

@@ -15,6 +15,14 @@ const DEFAULT_ANIMATION_SPEED: f64 = 12.0;
 /// Name shown for a project that has not been saved to a file yet.
 pub const UNTITLED_PROJECT_NAME: &str = "Untitled";
 
+/// A clip on the clipboard, with the media it shows or plays, so it can be
+/// pasted even into another project.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CopiedClip {
+    pub clip: vizx_project::Clip,
+    pub source: vizx_project::MediaSource,
+}
+
 /// The state of one open project while it is being edited.
 ///
 /// There is exactly one session in the application and every UI panel is a
@@ -100,6 +108,19 @@ impl EditorSession {
         ))
     }
 
+    /// Starts a session from an autosaved copy of a project (after VizX did
+    /// not close properly). It belongs to `original_path` again, the file it
+    /// was a copy of (`None` for a project that was never saved), and counts
+    /// as unsaved until the user saves it.
+    pub fn recover(
+        autosave: &Path,
+        original_path: Option<PathBuf>,
+    ) -> Result<Self, ProjectFileError> {
+        let mut session = Self::with_project(Project::load_from_file(autosave)?, original_path);
+        session.has_unsaved_changes = true;
+        Ok(session)
+    }
+
     /// Where the playhead is on the project timeline, in seconds.
     ///
     /// Every panel that shows "now" (the timeline, the time display, later
@@ -110,6 +131,43 @@ impl EditorSession {
     }
 
     /// Moves the playhead, keeping it within the project.
+    /// Moves the playhead by whole frames of the project (negative: back),
+    /// landing exactly on a frame.
+    pub fn step_playhead_frames(&mut self, frames: i32) {
+        let rate = self.project.settings.frame_rate.as_f64().max(1.0);
+        let current = (self.playhead_seconds * rate).round();
+        self.set_playhead_seconds((current + f64::from(frames)) / rate);
+    }
+
+    /// Moves the playhead to the nearest place after it (`forward`) or
+    /// before it where a clip starts or ends, or to the project's start or
+    /// end. Returns `false` if there is none in that direction.
+    pub fn jump_to_clip_edge(&mut self, forward: bool) -> bool {
+        // A moment closer than this counts as "here".
+        const HERE: f64 = 0.001;
+        let now = self.playhead_seconds;
+        let edges = self
+            .project
+            .tracks()
+            .iter()
+            .flat_map(|track| &track.clips)
+            .flat_map(|clip| [clip.start_milliseconds, clip.end_milliseconds()])
+            .map(|milliseconds| milliseconds as f64 / 1000.0)
+            .chain([0.0, self.project.settings.duration_seconds()]);
+        let target = if forward {
+            edges.filter(|edge| *edge > now + HERE).reduce(f64::min)
+        } else {
+            edges.filter(|edge| *edge < now - HERE).reduce(f64::max)
+        };
+        match target {
+            Some(edge) => {
+                self.set_playhead_seconds(edge);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn set_playhead_seconds(&mut self, seconds: f64) {
         let project_end = self.project.settings.duration_seconds();
         self.playhead_seconds = if seconds.is_finite() {
@@ -232,6 +290,46 @@ impl EditorSession {
         self.has_unsaved_changes = true;
         self.selection = Selection::Clip(copy);
         true
+    }
+
+    /// A copy of the selected clip with its media, for pasting later
+    /// (also into another project).
+    pub fn copy_selected_clip(&self) -> Option<CopiedClip> {
+        let (_, clip) = self.project.clip(self.selected_clip_id()?)?;
+        let source = self.project.media_source(clip.media)?;
+        Some(CopiedClip {
+            clip: clip.clone(),
+            source: source.clone(),
+        })
+    }
+
+    /// Pastes a copied clip at the playhead: on the selected track if it
+    /// is of the right kind, otherwise on the first track that is, otherwise
+    /// on a new one. The pasted clip becomes selected.
+    pub fn paste_clip(&mut self, copied: &CopiedClip) -> Option<ClipId> {
+        let kind = if copied.source.audio().is_some() {
+            TrackKind::Audio
+        } else {
+            TrackKind::Visual
+        };
+        let track_id = self
+            .selected_track()
+            .filter(|track| track.kind == kind)
+            .or_else(|| {
+                self.project
+                    .tracks()
+                    .iter()
+                    .find(|track| track.kind == kind)
+            })
+            .map(|track| track.id)
+            .unwrap_or_else(|| self.project.add_default_named_track(kind));
+        let at = (self.playhead_seconds * 1000.0).round() as u64;
+        let clip_id = self
+            .project
+            .paste_clip(&copied.clip, &copied.source, track_id, at)?;
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Clip(clip_id);
+        Some(clip_id)
     }
 
     /// Adds a track to the timeline and selects it.
@@ -777,6 +875,56 @@ mod tests {
         assert_eq!(texts[1].text, "two\nrows");
         assert!(texts.iter().all(|text| text.size == style.text.size));
         assert!(track.clips[0].placement.height > 1.5 * first_size);
+    }
+
+    #[test]
+    fn a_copied_clip_is_pasted_at_the_playhead_even_into_another_project() {
+        let mut session = EditorSession::new_untitled();
+        session.add_text().unwrap();
+        let text_clip = session.project().visual_clips().next().unwrap().0.id;
+        session.select(Selection::Clip(text_clip));
+        let copied = session.copy_selected_clip().unwrap();
+
+        session.set_playhead_seconds(0.0);
+        let pasted = session.paste_clip(&copied).unwrap();
+        let mut other = EditorSession::new_untitled();
+        other.set_playhead_seconds(1.5);
+        let pasted_elsewhere = other.paste_clip(&copied).unwrap();
+
+        let (_, clip) = session.project().clip(pasted).unwrap();
+        // A pasted text is a text of its own, so it can be edited alone.
+        assert_ne!(clip.media, copied.clip.media);
+        assert_eq!(session.selected_clip_id(), Some(pasted));
+        let (track, clip) = other.project().clip(pasted_elsewhere).unwrap();
+        assert_eq!(track.kind, TrackKind::Visual);
+        assert_eq!(clip.start_milliseconds, 1500);
+        let source = other.project().media_source(clip.media).unwrap();
+        assert_eq!(source.text(), copied.source.text());
+    }
+
+    #[test]
+    fn the_playhead_steps_by_frames_and_jumps_between_clip_edges() {
+        let mut session = EditorSession::new_untitled();
+        session.add_text().unwrap();
+        let clip = session.project().visual_clips().next().unwrap().0.id;
+        session.edit_project(|project| {
+            project.move_clip(clip, 2000);
+            project.trim_clip_end(clip, 3000)
+        });
+
+        session.step_playhead_frames(3);
+        assert!((session.playhead_seconds() - 0.1).abs() < 1e-9); // 30 fps
+        session.step_playhead_frames(-10);
+        assert_eq!(session.playhead_seconds(), 0.0);
+
+        assert!(session.jump_to_clip_edge(true));
+        assert_eq!(session.playhead_seconds(), 2.0);
+        assert!(session.jump_to_clip_edge(true));
+        assert_eq!(session.playhead_seconds(), 3.0);
+        assert!(session.jump_to_clip_edge(false));
+        assert_eq!(session.playhead_seconds(), 2.0);
+        session.set_playhead_seconds(0.0);
+        assert!(!session.jump_to_clip_edge(false));
     }
 
     #[test]

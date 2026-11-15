@@ -13,6 +13,8 @@ pub mod menu_bar;
 pub mod panels;
 pub mod preset_browser;
 pub mod project_settings_window;
+pub mod recovery_window;
+pub mod shortcuts_window;
 pub mod status_bar;
 pub mod toolbar;
 pub mod unsaved_changes_dialog;
@@ -110,6 +112,3 @@ pub fn format_duration(milliseconds: u64) -> String {
     let total_seconds = (milliseconds + 500) / 1000;
     format!("{}:{:02}", total_seconds / 60, total_seconds % 60)
 }
-
-/// Tooltip for controls whose feature belongs to a later milestone.
-pub const NOT_AVAILABLE_YET: &str = "Not available yet in this prototype";

@@ -398,6 +398,60 @@ impl Project {
         true
     }
 
+    /// Pastes a copy of `clip`, copied earlier together with its media
+    /// `source` (perhaps from another project), onto the track `track_id`
+    /// starting at `start_milliseconds`. A file already in the media library
+    /// is shared; a text, or a file the project does not have (any more),
+    /// gets a media entry of its own. `None` if the track does not exist or
+    /// is of the wrong kind (audio on a visual layer or the other way).
+    pub fn paste_clip(
+        &mut self,
+        clip: &Clip,
+        source: &MediaSource,
+        track_id: TrackId,
+        start_milliseconds: u64,
+    ) -> Option<ClipId> {
+        let wanted_kind = if source.audio().is_some() {
+            TrackKind::Audio
+        } else {
+            TrackKind::Visual
+        };
+        if self.track(track_id)?.kind != wanted_kind {
+            return None;
+        }
+        let shared = self
+            .media
+            .iter()
+            .find(|media| {
+                source.text().is_none()
+                    && media.path == source.path
+                    && media.content == source.content
+            })
+            .map(|media| media.id);
+        let media_id = shared.unwrap_or_else(|| {
+            let mut copy = source.clone();
+            copy.id = MediaId(self.next_media_id);
+            self.next_media_id += 1;
+            let id = copy.id;
+            self.media.push(copy);
+            id
+        });
+
+        let mut copy = clip.clone();
+        copy.id = ClipId(self.next_clip_id);
+        self.next_clip_id += 1;
+        copy.media = media_id;
+        copy.start_milliseconds = start_milliseconds;
+        let copy_id = copy.id;
+        self.tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)?
+            .clips
+            .push(copy);
+        self.grow_to_fit_clips();
+        Some(copy_id)
+    }
+
     /// The media a copied clip should use: files are shared between clips,
     /// but a text is duplicated, because each copy is edited on its own.
     fn own_media_for_copy(&mut self, media_id: MediaId) -> MediaId {
