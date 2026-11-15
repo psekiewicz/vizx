@@ -455,6 +455,7 @@ can keep sharp pixels instead (`Clip::sharp_pixels`, a checkbox in the
 Properties panel); when it has not chosen, PNG images and animations are
 sharp and everything else smooth. The compositor then samples the layer
 with nearest-neighbour filtering when enlarging (shrinking stays smooth).
+
 ### Text
 
 A text element (Add > Text, Ctrl+T) is a kind of media that is not a file
@@ -472,7 +473,30 @@ both.
 - When the text changes, its placement is resized around the same middle to
   fit the new text exactly (`EditorSession::set_text`).
 - A new text lasts for the whole project; trim, split and duplicate its
-  clip on the timeline to make texts that appear at set times (lyrics).
+  clip on the timeline to make texts that appear at set times.
+
+### Lyrics and subtitles ("text video")
+
+The Lyrics window (Add > Lyrics / Subtitles, Ctrl+L) makes many texts at
+once: the words are pasted in, one subtitle per line (`|` splits a line in
+two rows), and each line becomes a text clip on one layer (a new "Lyrics"
+layer, or a chosen one). There is no special lyrics media: every line is an
+ordinary text clip that can be moved, trimmed and edited afterwards.
+
+The lines are timed in one of four ways (`vizx-core/src/lyrics.rs`):
+
+- **Tap along**: playback starts and Enter starts each line, ending the one
+  before; Backspace ends a line early (a pause), Esc stops
+  (`EditorSession::start_lyric_line` / `end_lyric_line`).
+- **Spread** over a stretch of time, longer lines getting more of it.
+- **On beats**: one line every N beats of the mix, from a chosen moment.
+- **Import** an `.lrc` (with repeated times, pauses, enhanced word times)
+  or `.srt` file that already carries the times.
+
+All lines share a `LyricsStyle`: font, size, color, alignment, the height
+of the line's middle (subtitle-like near the bottom by default), and a
+fade in/out, optionally popping in, made of four keyframes per clip.
+"Restyle Layer" gives every text on a layer the current look again.
 
 ### Visualizer plugins
 

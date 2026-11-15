@@ -7,7 +7,7 @@ use crate::{
     ImageProperties, MediaContent, MediaId, MediaSource, Placement, ProjectMetadata,
     ProjectSettings, TextProperties, Track, TrackId, TrackKind, Transform,
 };
-use crate::{Easing, FrameAnimation};
+use crate::{Easing, FrameAnimation, Keyframe};
 
 /// Root of all data that belongs to one VizX project.
 ///
@@ -810,6 +810,74 @@ impl Project {
             clip.placement = placement.sanitized();
         }
         (media_id, track_id)
+    }
+
+    /// Adds a text element on the visual layer `track_id`, from
+    /// `start_milliseconds` for `duration_milliseconds` (lines of lyrics
+    /// are added this way, one after another on one layer). `None` if there
+    /// is no such visual layer.
+    pub fn add_text_clip(
+        &mut self,
+        track_id: TrackId,
+        properties: TextProperties,
+        placement: Placement,
+        start_milliseconds: u64,
+        duration_milliseconds: u64,
+    ) -> Option<ClipId> {
+        if self.track(track_id)?.kind != TrackKind::Visual {
+            return None;
+        }
+        let media_id = MediaId(self.next_media_id);
+        self.next_media_id += 1;
+        self.media.push(MediaSource {
+            id: media_id,
+            path: String::new(),
+            content: MediaContent::Text(properties.sanitized()),
+            manual_beats: None,
+            tempo_bpm: None,
+        });
+        let clip_id = ClipId(self.next_clip_id);
+        self.next_clip_id += 1;
+        let clip = Clip {
+            id: clip_id,
+            media: media_id,
+            start_milliseconds,
+            duration_milliseconds: duration_milliseconds.max(Clip::MIN_DURATION_MILLISECONDS),
+            source_offset_milliseconds: 0,
+            audio_gain: 1.0,
+            audio_input: AudioInput::Mix,
+            placement: placement.sanitized(),
+            parameters: BTreeMap::new(),
+            opacity: 1.0,
+            reaction: AudioReaction::default(),
+            rotation_degrees: 0.0,
+            spin_degrees_per_second: 0.0,
+            keyframes: Vec::new(),
+            sharp_pixels: None,
+        };
+        self.tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)?
+            .clips
+            .push(clip);
+        self.grow_to_fit_clips();
+        Some(clip_id)
+    }
+
+    /// Replaces all keyframes of a clip (they are put in order of time).
+    /// Returns `true` only if this changed something.
+    pub fn set_clip_keyframes(&mut self, clip_id: ClipId, mut keyframes: Vec<Keyframe>) -> bool {
+        for keyframe in &mut keyframes {
+            keyframe.transform = keyframe.transform.sanitized();
+        }
+        keyframes.sort_by_key(|keyframe| keyframe.time_milliseconds);
+        match self.clip_mut(clip_id) {
+            Some(clip) if clip.keyframes != keyframes => {
+                clip.keyframes = keyframes;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Changes what a text element says or how it looks, and the place it

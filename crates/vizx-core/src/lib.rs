@@ -12,6 +12,7 @@ mod export;
 mod ffmpeg;
 mod history;
 mod image_store;
+mod lyrics;
 mod prerender;
 mod preset_library;
 mod selection;
@@ -32,6 +33,10 @@ pub use ffmpeg::{
 };
 pub use image_store::{
     DecodedImage, ImageState, ImageStore, SUPPORTED_IMAGE_EXTENSIONS, has_supported_image_extension,
+};
+pub use lyrics::{
+    LyricLine, LyricsStyle, lines_on_beats, lyric_keyframes, parse_timed_lyrics, split_lyrics,
+    spread_lines,
 };
 pub use prerender::{FrameSource, Prerender, PrerenderJob, PrerenderedFrame};
 pub use preset_library::{

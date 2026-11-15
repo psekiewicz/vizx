@@ -396,6 +396,148 @@ impl EditorSession {
         Ok(())
     }
 
+    /// Adds a visual layer named "Lyrics" for lines of lyrics, and selects
+    /// it.
+    pub fn add_lyrics_track(&mut self) -> TrackId {
+        let track_id = self.project.add_track("Lyrics", TrackKind::Visual);
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        track_id
+    }
+
+    /// Adds timed lines of lyrics as text clips, one after another on the
+    /// layer `track_id` (a new "Lyrics" layer if `None`), in `style`.
+    /// Returns the layer.
+    pub fn add_lyrics(
+        &mut self,
+        lines: &[crate::LyricLine],
+        style: &crate::LyricsStyle,
+        track_id: Option<TrackId>,
+    ) -> Result<TrackId, String> {
+        if lines.is_empty() {
+            return Err("there are no lines".to_owned());
+        }
+        // Measured before anything changes, so a bad font changes nothing.
+        let mut placements = Vec::new();
+        for line in lines {
+            placements.push(self.lyric_placement(&line.text, style)?);
+        }
+        let track_id = track_id.unwrap_or_else(|| self.add_lyrics_track());
+        for (line, placement) in lines.iter().zip(placements) {
+            let start = (line.start_seconds.max(0.0) * 1000.0).round() as u64;
+            let end = (line.end_seconds.max(0.0) * 1000.0).round() as u64;
+            let duration = end.saturating_sub(start);
+            let properties = TextProperties {
+                text: line.text.clone(),
+                ..style.text.clone()
+            };
+            let clip_id = self
+                .project
+                .add_text_clip(track_id, properties, placement, start, duration)
+                .ok_or("the lyrics layer is gone")?;
+            let duration = self.clip_duration(clip_id);
+            self.project
+                .set_clip_keyframes(clip_id, crate::lyric_keyframes(placement, duration, style));
+        }
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        Ok(track_id)
+    }
+
+    /// Starts a line of lyrics at `at_seconds` while it is being tapped
+    /// along with the music. It lasts until it is ended with
+    /// [`Self::end_lyric_line`] (or a few seconds, if it never is).
+    pub fn start_lyric_line(
+        &mut self,
+        track_id: TrackId,
+        text: &str,
+        at_seconds: f64,
+        style: &crate::LyricsStyle,
+    ) -> Result<ClipId, String> {
+        const UNTIL_ENDED_MILLISECONDS: u64 = 5000;
+        let placement = self.lyric_placement(text, style)?;
+        let properties = TextProperties {
+            text: text.to_owned(),
+            ..style.text.clone()
+        };
+        let start = (at_seconds.max(0.0) * 1000.0).round() as u64;
+        let clip_id = self
+            .project
+            .add_text_clip(
+                track_id,
+                properties,
+                placement,
+                start,
+                UNTIL_ENDED_MILLISECONDS,
+            )
+            .ok_or("the lyrics layer is gone")?;
+        self.has_unsaved_changes = true;
+        Ok(clip_id)
+    }
+
+    /// Ends a line of lyrics started by [`Self::start_lyric_line`] at
+    /// `at_seconds`, and lets it fade as `style` says.
+    pub fn end_lyric_line(&mut self, clip_id: ClipId, at_seconds: f64, style: &crate::LyricsStyle) {
+        let end = (at_seconds.max(0.0) * 1000.0).round() as u64;
+        self.project.trim_clip_end(clip_id, end);
+        if let Some((_, clip)) = self.project.clip(clip_id) {
+            let keyframes =
+                crate::lyric_keyframes(clip.placement, clip.duration_milliseconds, style);
+            self.project.set_clip_keyframes(clip_id, keyframes);
+        }
+        self.has_unsaved_changes = true;
+    }
+
+    /// Gives every text on the layer `track_id` the look of `style` (each
+    /// keeps its words and timing). Returns how many texts changed.
+    pub fn restyle_lyrics(
+        &mut self,
+        track_id: TrackId,
+        style: &crate::LyricsStyle,
+    ) -> Result<usize, String> {
+        let texts: Vec<(ClipId, MediaId, String)> = self
+            .project
+            .track(track_id)
+            .ok_or("the layer is gone")?
+            .clips
+            .iter()
+            .filter_map(|clip| {
+                let source = self.project.media_source(clip.media)?;
+                Some((clip.id, source.id, source.text()?.text.clone()))
+            })
+            .collect();
+        for (clip_id, media_id, text) in &texts {
+            let placement = self.lyric_placement(text, style)?;
+            let properties = TextProperties {
+                text: text.clone(),
+                ..style.text.clone()
+            };
+            self.project.set_text(*media_id, properties, placement);
+            let duration = self.clip_duration(*clip_id);
+            self.project
+                .set_clip_keyframes(*clip_id, crate::lyric_keyframes(placement, duration, style));
+        }
+        if !texts.is_empty() {
+            self.has_unsaved_changes = true;
+        }
+        Ok(texts.len())
+    }
+
+    /// Where a line of lyrics goes: centered across, at the style's height.
+    fn lyric_placement(&self, text: &str, style: &crate::LyricsStyle) -> Result<Placement, String> {
+        let properties = TextProperties {
+            text: text.to_owned(),
+            ..style.text.clone()
+        };
+        self.text_placement(&properties, (0.5, style.height.clamp(0.0, 1.0)))
+    }
+
+    fn clip_duration(&self, clip_id: ClipId) -> u64 {
+        self.project
+            .clip(clip_id)
+            .map_or(0, |(_, clip)| clip.duration_milliseconds)
+    }
+
     /// The part of the picture a text takes up when its middle is at
     /// `middle` (fractions of the frame): exactly as large as the text is
     /// drawn, so it is neither stretched nor squeezed.
@@ -553,6 +695,58 @@ mod tests {
             crate::resolve_preset_path(&preset.path, Some(&root)),
             Some(root.join("pack/Fractal/Swirl.milk"))
         );
+    }
+
+    #[test]
+    fn lyrics_become_timed_texts_on_one_layer_and_share_a_style() {
+        let mut session = EditorSession::new_untitled();
+        let lines = crate::spread_lines(&crate::split_lyrics("one\ntwo|rows"), 1.0, 5.0);
+        let mut style = crate::LyricsStyle::default();
+
+        let track_id = session.add_lyrics(&lines, &style, None).unwrap();
+        // Tapped along: a third line, started and ended by hand.
+        let tapped = session
+            .start_lyric_line(track_id, "three", 6.0, &style)
+            .unwrap();
+        session.end_lyric_line(tapped, 7.5, &style);
+
+        let track = session.project().track(track_id).unwrap();
+        assert_eq!(track.name, "Lyrics");
+        let timing: Vec<(u64, u64)> = track
+            .clips
+            .iter()
+            .map(|clip| (clip.start_milliseconds, clip.end_milliseconds()))
+            .collect();
+        assert_eq!(timing[0].0, 1000);
+        assert_eq!(timing[0].1, timing[1].0);
+        assert_eq!(timing[1].1, 5000);
+        assert_eq!(timing[2], (6000, 7500));
+        // Faded in and out: invisible at both ends, shown in the middle.
+        let tapped_clip = &track.clips[2];
+        assert_eq!(tapped_clip.transform_at(0.0).opacity, 0.0);
+        assert_eq!(tapped_clip.transform_at(750.0).opacity, 1.0);
+        assert_eq!(tapped_clip.transform_at(1500.0).opacity, 0.0);
+        let first_size = track.clips[0].placement.height;
+
+        style.text.size *= 2.0;
+        assert_eq!(session.restyle_lyrics(track_id, &style), Ok(3));
+
+        let track = session.project().track(track_id).unwrap();
+        let texts: Vec<_> = track
+            .clips
+            .iter()
+            .map(|clip| {
+                session
+                    .project()
+                    .media_source(clip.media)
+                    .unwrap()
+                    .text()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(texts[1].text, "two\nrows");
+        assert!(texts.iter().all(|text| text.size == style.text.size));
+        assert!(track.clips[0].placement.height > 1.5 * first_size);
     }
 
     #[test]

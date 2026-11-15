@@ -8,6 +8,7 @@ use crate::app::AppCommand;
 
 pub mod about_window;
 pub mod export_window;
+pub mod lyrics_window;
 pub mod menu_bar;
 pub mod panels;
 pub mod preset_browser;
@@ -52,6 +53,12 @@ pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
         AppCommand::ImportBackgroundVideo,
     );
     item(ui, "Text", "Ctrl+T", AppCommand::AddText);
+    item(
+        ui,
+        "Lyrics / Subtitles...",
+        "Ctrl+L",
+        AppCommand::OpenLyrics,
+    );
     item(
         ui,
         "MilkDrop Preset...",

@@ -6,6 +6,7 @@ use vizx_project::{PROJECT_FILE_EXTENSION, TrackKind, with_project_extension};
 
 use crate::theme;
 use crate::transport::Transport;
+use crate::ui::lyrics_window::{self, LyricsWindow};
 use crate::ui::preset_browser::PresetBrowser;
 use crate::ui::visualizer_browser::VisualizerBrowser;
 use crate::ui::workspace::Workspace;
@@ -44,6 +45,10 @@ pub enum AppCommand {
     ExportVideo,
     /// Add a text element in the middle of the picture.
     AddText,
+    /// Open the Lyrics window, to turn the words of a song into subtitles.
+    OpenLyrics,
+    /// Pick an .lrc or .srt file and add its timed lines as subtitles.
+    ImportLyricsFile,
     /// Pick a font file for the text on the selected layer.
     ChooseTextFont,
     /// Cut the selected clip in two at the playhead.
@@ -110,6 +115,7 @@ pub struct VizxApp {
     pub visualizer_catalog: VisualizerCatalog,
     pub is_about_window_open: bool,
     pub is_project_settings_open: bool,
+    pub lyrics: LyricsWindow,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
     pub graphics_summary: String,
     /// Result of the last command, shown in the status bar.
@@ -149,6 +155,7 @@ impl VizxApp {
             visualizer_catalog: VisualizerCatalog::new(),
             is_about_window_open: false,
             is_project_settings_open: false,
+            lyrics: LyricsWindow::default(),
             graphics_summary: describe_graphics_adapter(creation_context),
             status_message: "Ready".to_owned(),
             requested_command: None,
@@ -239,6 +246,39 @@ impl VizxApp {
             Ok(()) => format!("Using font {}", path.display()),
             Err(problem) => format!("Could not use that font: {problem}"),
         };
+    }
+
+    /// The beats of all the project's audio, in seconds of project time.
+    pub fn mix_beat_seconds(&self) -> Vec<f64> {
+        let (beats, _) = vizx_core::beat_times(
+            self.session.project(),
+            &self.audio_store,
+            vizx_project::AudioInput::Mix,
+        );
+        beats.iter().map(|beat| beat.seconds).collect()
+    }
+
+    /// Lets the user pick an .lrc or .srt file and adds its lines.
+    fn import_lyrics_file(&mut self, frame: &eframe::Frame) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Timed lyrics or subtitles", &["lrc", "srt"])
+            .set_parent(frame)
+            .pick_file()
+        else {
+            return; // dialog cancelled
+        };
+        let lines = std::fs::read(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| vizx_core::parse_timed_lyrics(&String::from_utf8_lossy(&bytes)));
+        match lines {
+            Ok(lines) => {
+                lyrics_window::add_timed_lines(self, &lines);
+                self.status_message = format!("Added the lyrics of {}", path.display());
+            }
+            Err(problem) => {
+                self.status_message = format!("Could not read {}: {problem}", path.display());
+            }
+        }
     }
 
     /// Lets the user pick a file of an image sequence (any of its frames)
@@ -405,6 +445,11 @@ impl VizxApp {
                     Err(problem) => format!("Could not add text: {problem}"),
                 };
             }
+            AppCommand::OpenLyrics => {
+                let project_seconds = self.session.project().settings.duration_seconds();
+                self.lyrics.open(project_seconds);
+            }
+            AppCommand::ImportLyricsFile => self.import_lyrics_file(frame),
             AppCommand::ChooseTextFont => self.choose_text_font(frame),
             AppCommand::SplitClip => {
                 self.status_message = if self.session.split_selected_clip() {
@@ -662,6 +707,10 @@ impl VizxApp {
                 AppCommand::AddText,
             ),
             (
+                KeyboardShortcut::new(Modifiers::COMMAND, Key::L),
+                AppCommand::OpenLyrics,
+            ),
+            (
                 KeyboardShortcut::new(Modifiers::COMMAND, Key::E),
                 AppCommand::ExportVideo,
             ),
@@ -887,6 +936,7 @@ impl eframe::App for VizxApp {
 
         about_window::show(&ctx, self);
         project_settings_window::show(&ctx, self);
+        lyrics_window::show(&ctx, self);
         preset_browser::show(&ctx, self);
         visualizer_browser::show(&ctx, self);
         export_window::show(&ctx, self);
