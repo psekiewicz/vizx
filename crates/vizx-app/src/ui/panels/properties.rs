@@ -1,5 +1,5 @@
 use eframe::egui;
-use vizx_core::{EditorSession, ParameterKind, VisualizerCatalog};
+use vizx_core::{AudioStore, EditorSession, ParameterKind, VisualizerCatalog};
 use vizx_project::{
     AudioInput, AudioReaction, Clip, Easing, MediaId, Placement, ReactionBand, TextAlignment,
     TextProperties, Track,
@@ -18,6 +18,7 @@ pub fn show(
     ui: &mut egui::Ui,
     session: &mut EditorSession,
     catalog: &mut VisualizerCatalog,
+    audio_store: &AudioStore,
     requested_command: &mut Option<AppCommand>,
 ) {
     // A clip with many settings can be taller than the panel.
@@ -26,7 +27,9 @@ pub fn show(
         .show(ui, |ui| {
             // The track is cloned so the session is free to be modified below.
             match session.selected_track().cloned() {
-                Some(track) => track_properties(ui, session, catalog, requested_command, &track),
+                Some(track) => {
+                    track_properties(ui, session, catalog, audio_store, requested_command, &track)
+                }
                 None => nothing_selected(ui),
             }
         });
@@ -36,6 +39,7 @@ fn track_properties(
     ui: &mut egui::Ui,
     session: &mut EditorSession,
     catalog: &mut VisualizerCatalog,
+    audio_store: &AudioStore,
     requested_command: &mut Option<AppCommand>,
     track: &Track,
 ) {
@@ -95,6 +99,7 @@ fn track_properties(
             let is_visualizer = source.is_visualizer();
             let plugin_path = source.is_visualizer_plugin().then(|| source.path.clone());
             let is_visual = source.is_visual();
+            let audio_media = source.audio().is_some().then_some(source.id);
             // Cloned, so the session is free to be modified by the editor.
             let text = source.text().cloned().map(|text| (source.id, text));
             ui.label(source.display_name()).on_hover_text(&source.path);
@@ -104,6 +109,9 @@ fn track_properties(
                     .color(theme::TEXT_MUTED),
             );
             timing_editor(ui, session, clip);
+            if let Some(media_id) = audio_media {
+                beats_editor(ui, session, audio_store, media_id);
+            }
             // What the text says comes first; where and how it is shown
             // follows, as for every other element.
             if let Some((media_id, text)) = text {
@@ -377,6 +385,88 @@ fn transform_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
         session.edit_project(|project| project.set_clip_spin(clip.id, spin));
     }
 }
+/// Where the beats of an audio file come from: found automatically, or
+/// placed by hand (which replaces the found ones everywhere: animations,
+/// visualizers and the beat marks on the timeline).
+fn beats_editor(
+    ui: &mut egui::Ui,
+    session: &mut EditorSession,
+    audio_store: &AudioStore,
+    media_id: MediaId,
+) {
+    let Some(source) = session.project().media_source(media_id).cloned() else {
+        return;
+    };
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("Beats").strong());
+    ui.separator();
+
+    match &source.manual_beats {
+        None => {
+            let found = audio_store.loaded(&source.path).map(|loaded| &loaded.beats);
+            let summary = match found {
+                Some(found) => match found.tempo_bpm {
+                    Some(tempo) => format!(
+                        "Found automatically: {} beats, {tempo:.0} BPM",
+                        found.beats.len()
+                    ),
+                    None => format!("Found automatically: {} beats", found.beats.len()),
+                },
+                None => "Reading the file...".to_owned(),
+            };
+            ui.label(summary);
+            ui.horizontal(|ui| {
+                let edit = ui
+                    .add_enabled(found.is_some(), egui::Button::new("Edit These Beats"))
+                    .on_hover_text("Start from the beats found automatically and correct them");
+                if edit.clicked()
+                    && let Some(found) = found
+                {
+                    let seconds = found.beats.iter().map(|beat| beat.seconds).collect();
+                    session.edit_project(|project| project.use_manual_beats(media_id, seconds));
+                }
+                if ui
+                    .button("Draw My Own")
+                    .on_hover_text("Start with no beats and place every beat yourself")
+                    .clicked()
+                {
+                    session.edit_project(|project| project.use_manual_beats(media_id, Vec::new()));
+                }
+            });
+        }
+        Some(beats) => {
+            let tempo = vizx_core::tempo_of(beats)
+                .map_or(String::new(), |tempo| format!(", about {tempo:.0} BPM"));
+            ui.label(format!("Drawn by hand: {} beats{tempo}", beats.len()));
+            ui.label(
+                egui::RichText::new(
+                    "Click the strip along the bottom of the selected clip to add a beat, \
+                     click a mark to remove it. Press B during playback to tap beats in.",
+                )
+                .small()
+                .color(theme::TEXT_MUTED),
+            );
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(!beats.is_empty(), egui::Button::new("Clear"))
+                    .clicked()
+                {
+                    session.edit_project(|project| project.use_manual_beats(media_id, Vec::new()));
+                }
+                if ui
+                    .button("Back to Automatic")
+                    .on_hover_text(
+                        "Forget the beats drawn by hand and use the ones found automatically",
+                    )
+                    .clicked()
+                {
+                    session.edit_project(|project| project.use_automatic_beats(media_id));
+                }
+            });
+        }
+    }
+}
+
 /// When a clip starts and how long it lasts, as numbers. The same values
 /// change when the clip is dragged or trimmed on the timeline.
 fn timing_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {

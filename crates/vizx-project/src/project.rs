@@ -486,6 +486,7 @@ impl Project {
             id: media_id,
             path: path.into(),
             content: MediaContent::Audio(properties),
+            manual_beats: None,
         });
 
         let free_audio_track = self
@@ -624,6 +625,7 @@ impl Project {
             id: media_id,
             path,
             content,
+            manual_beats: None,
         });
 
         let track_id = self.add_track("Background", TrackKind::Visual);
@@ -662,6 +664,7 @@ impl Project {
             id: media_id,
             path,
             content,
+            manual_beats: None,
         });
 
         let free_layer = self
@@ -906,6 +909,93 @@ impl Project {
         }
     }
 
+    /// Uses beats placed by hand for an audio file instead of the ones
+    /// found automatically: `beats` (seconds in the file) to start from,
+    /// for example a copy of the found ones, or none. Returns `true` only
+    /// if this changed something.
+    pub fn use_manual_beats(&mut self, media_id: MediaId, mut beats: Vec<f64>) -> bool {
+        beats.retain(|seconds| seconds.is_finite() && *seconds >= 0.0);
+        beats.sort_by(f64::total_cmp);
+        beats.dedup_by(|a, b| (*a - *b).abs() < MANUAL_BEAT_MERGE_SECONDS);
+        self.set_manual_beats(media_id, Some(beats))
+    }
+
+    /// Goes back to the beats found automatically for an audio file. Its
+    /// hand-placed beats are forgotten. Returns `true` only if it had any.
+    pub fn use_automatic_beats(&mut self, media_id: MediaId) -> bool {
+        self.set_manual_beats(media_id, None)
+    }
+
+    /// Adds a hand-placed beat at `seconds` of an audio file. Nothing
+    /// happens if the file uses automatic beats, or if there already is a
+    /// beat right there. Returns `true` only if a beat was added.
+    pub fn add_manual_beat(&mut self, media_id: MediaId, seconds: f64) -> bool {
+        let Some(beats) = self.manual_beats_mut(media_id) else {
+            return false;
+        };
+        if !seconds.is_finite() || seconds < 0.0 {
+            return false;
+        }
+        let index = beats.partition_point(|beat| *beat < seconds);
+        let is_taken = [index.checked_sub(1), Some(index)]
+            .into_iter()
+            .flatten()
+            .filter_map(|neighbour| beats.get(neighbour))
+            .any(|beat| (beat - seconds).abs() < MANUAL_BEAT_MERGE_SECONDS);
+        if is_taken {
+            return false;
+        }
+        beats.insert(index, seconds);
+        true
+    }
+
+    /// Removes the hand-placed beat nearest to `seconds` of an audio file,
+    /// if it is within `reach_seconds`. Returns `true` only if one was
+    /// removed.
+    pub fn remove_manual_beat_near(
+        &mut self,
+        media_id: MediaId,
+        seconds: f64,
+        reach_seconds: f64,
+    ) -> bool {
+        let Some(beats) = self.manual_beats_mut(media_id) else {
+            return false;
+        };
+        let nearest = (0..beats.len()).min_by(|a, b| {
+            (beats[*a] - seconds)
+                .abs()
+                .total_cmp(&(beats[*b] - seconds).abs())
+        });
+        match nearest {
+            Some(index) if (beats[index] - seconds).abs() <= reach_seconds => {
+                beats.remove(index);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn set_manual_beats(&mut self, media_id: MediaId, beats: Option<Vec<f64>>) -> bool {
+        let Some(source) = self
+            .media
+            .iter_mut()
+            .find(|source| source.id == media_id && source.audio().is_some())
+        else {
+            return false;
+        };
+        let has_changed = source.manual_beats != beats;
+        source.manual_beats = beats;
+        has_changed
+    }
+
+    fn manual_beats_mut(&mut self, media_id: MediaId) -> Option<&mut Vec<f64>> {
+        self.media
+            .iter_mut()
+            .find(|source| source.id == media_id)?
+            .manual_beats
+            .as_mut()
+    }
+
     /// Sets how strongly a visual clip hears its audio (see
     /// `Clip::audio_gain`). Returns `true` only if this changed something.
     pub fn set_clip_audio_gain(&mut self, clip_id: ClipId, gain: f64) -> bool {
@@ -1012,6 +1102,9 @@ impl Project {
         }
     }
 }
+
+/// Two hand-placed beats closer than this are one beat, in seconds.
+const MANUAL_BEAT_MERGE_SECONDS: f64 = 0.03;
 
 /// A moment of the project as a moment of the clip, kept within the clip.
 fn moment_in_clip(clip: &Clip, project_milliseconds: u64) -> u64 {
@@ -1909,6 +2002,39 @@ mod tests {
         assert!((x_at(&project, id, 3_000) - before[0]).abs() < 1e-9);
         assert!((x_at(&project, second, 4_000) - before[1]).abs() < 1e-9);
         assert!((x_at(&project, second, 5_000) - before[2]).abs() < 1e-9);
+    }
+
+    #[test]
+    fn beats_can_be_placed_by_hand_instead_of_the_found_ones() {
+        let mut project = Project::with_starter_tracks();
+        let (song, _) = project.import_audio("song.wav", audio(10_000));
+        let (_, layer) = project.add_milkdrop_preset("a.milk");
+        let preset = project.track(layer).unwrap().clips[0].media;
+        let manual = |project: &Project| project.media_source(song).unwrap().manual_beats.clone();
+
+        // Automatic at first; nothing can be added by hand yet.
+        assert_eq!(manual(&project), None);
+        assert!(!project.add_manual_beat(song, 1.0));
+
+        // Starting from a copy of found beats: sorted, without doubles.
+        assert!(project.use_manual_beats(song, vec![2.0, 1.0, 1.01, f64::NAN]));
+        assert_eq!(manual(&project), Some(vec![1.0, 2.0]));
+        assert!(project.add_manual_beat(song, 1.5));
+        assert!(!project.add_manual_beat(song, 1.51)); // already one there
+        assert_eq!(manual(&project), Some(vec![1.0, 1.5, 2.0]));
+
+        assert!(project.remove_manual_beat_near(song, 1.97, 0.05));
+        assert!(!project.remove_manual_beat_near(song, 3.0, 0.05));
+        assert_eq!(manual(&project), Some(vec![1.0, 1.5]));
+
+        // Only audio has beats.
+        assert!(!project.use_manual_beats(preset, Vec::new()));
+
+        // Saved with the project, and given up again.
+        let saved = project.to_vzx_string().unwrap();
+        assert_eq!(Project::from_vzx_str(&saved).unwrap(), project);
+        assert!(project.use_automatic_beats(song));
+        assert_eq!(manual(&project), None);
     }
 
     #[test]

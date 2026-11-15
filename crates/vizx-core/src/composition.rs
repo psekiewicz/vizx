@@ -90,19 +90,31 @@ pub fn beat_times(
             continue;
         }
         for clip in &track.clips {
-            let Some(loaded) = project
-                .media_source(clip.media)
-                .and_then(|source| audio_store.loaded(&source.path))
-            else {
+            let Some(source) = project.media_source(clip.media) else {
                 continue;
+            };
+            // Beats placed by hand win over the ones found automatically.
+            let (file_beats, file_tempo) = match &source.manual_beats {
+                Some(manual) => (
+                    manual
+                        .iter()
+                        .map(|seconds| Beat {
+                            seconds: *seconds,
+                            strength: 1.0,
+                        })
+                        .collect::<Vec<_>>(),
+                    tempo_of(manual),
+                ),
+                None => match audio_store.loaded(&source.path) {
+                    Some(loaded) => (loaded.beats.beats.clone(), loaded.beats.tempo_bpm),
+                    None => continue,
+                },
             };
             let start = clip.start_milliseconds as f64 / 1000.0;
             let offset = clip.source_offset_milliseconds as f64 / 1000.0;
             let duration = clip.duration_milliseconds as f64 / 1000.0;
             beats.extend(
-                loaded
-                    .beats
-                    .beats
+                file_beats
                     .iter()
                     .filter(|beat| beat.seconds >= offset && beat.seconds < offset + duration)
                     .map(|beat| Beat {
@@ -110,7 +122,7 @@ pub fn beat_times(
                         strength: beat.strength,
                     }),
             );
-            tempo = tempo.or(loaded.beats.tempo_bpm);
+            tempo = tempo.or(file_tempo);
         }
     }
 
@@ -126,6 +138,22 @@ pub fn beat_times(
         }
     }
     (merged, tempo)
+}
+
+/// The tempo of beats placed by hand: from the typical distance between
+/// two of them, if there are enough and it is a plausible tempo.
+pub fn tempo_of(beat_seconds: &[f64]) -> Option<f64> {
+    let mut gaps: Vec<f64> = beat_seconds
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .filter(|gap| *gap > 0.0)
+        .collect();
+    if gaps.len() < 3 {
+        return None;
+    }
+    gaps.sort_by(f64::total_cmp);
+    let bpm = 60.0 / gaps[gaps.len() / 2];
+    (30.0..=300.0).contains(&bpm).then_some(bpm)
 }
 
 /// How strongly the beats are felt at `seconds`: the last beat's strength
@@ -487,6 +515,34 @@ mod tests {
         assert_eq!(meter.level(&[], &beats, &reaction, 1.0, 1.0), 1.0);
         assert_eq!(meter.level(&[], &beats, &reaction, 0.5, 1.0), 0.5);
         assert_eq!(meter.level(&[], &beats, &reaction, 1.0, 1.5), 0.0);
+    }
+
+    #[test]
+    fn beats_placed_by_hand_replace_the_found_ones_where_the_clip_plays_them() {
+        let mut project = Project::with_starter_tracks();
+        let (song, track) = project.import_audio(
+            "song.wav",
+            vizx_project::AudioProperties {
+                duration_milliseconds: 10_000,
+                sample_rate: 44_100,
+                channel_count: 2,
+            },
+        );
+        project.use_manual_beats(song, vec![0.5, 1.0, 1.5, 2.0, 2.5]);
+        // The clip plays the file from 1 s on, starting at 4 s of the
+        // project.
+        let clip = project.track(track).unwrap().clips[0].id;
+        project.trim_clip_start(clip, 1_000);
+        project.move_clip(clip, 4_000);
+
+        // Hand-placed beats need no loaded audio.
+        let (beats, tempo) = beat_times(&project, &AudioStore::default(), AudioInput::Mix);
+
+        let seconds: Vec<f64> = beats.iter().map(|beat| beat.seconds).collect();
+        assert_eq!(seconds, [4.0, 4.5, 5.0, 5.5]);
+        assert!(beats.iter().all(|beat| beat.strength == 1.0));
+        assert_eq!(tempo, Some(120.0));
+        assert_eq!(tempo_of(&[1.0, 2.0]), None);
     }
 
     #[test]

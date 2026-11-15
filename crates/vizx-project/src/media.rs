@@ -20,6 +20,11 @@ pub struct MediaSource {
     /// relative to the project file, and re-linking moved files, is planned.
     pub path: String,
     pub content: MediaContent,
+    /// For an audio file: beats placed by hand, in seconds from the start
+    /// of the file and in order. They replace the beats VizX finds by
+    /// itself; `None` uses those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_beats: Option<Vec<f64>>,
 }
 
 impl MediaSource {

@@ -175,6 +175,7 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
                     ui,
                     self.session,
                     self.visualizer_catalog,
+                    self.audio_store,
                     self.requested_command,
                 );
             }

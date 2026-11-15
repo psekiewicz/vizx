@@ -50,6 +50,8 @@ pub enum AppCommand {
     DeleteSelection,
     Undo,
     Redo,
+    /// Place a beat at the playhead on the selected audio clip.
+    TapBeat,
     /// Open the browser for the presets that ship with VizX.
     BrowseMilkdropPresets,
     /// Pick a preset file of the user's own.
@@ -382,6 +384,11 @@ impl VizxApp {
                     "Select a clip to duplicate it".to_owned()
                 };
             }
+            AppCommand::TapBeat => {
+                if let Err(reason) = self.session.tap_beat() {
+                    self.status_message = format!("Cannot tap a beat: {reason}");
+                }
+            }
             AppCommand::Undo => {
                 self.status_message = if self.session.undo() {
                     "Undone".to_owned()
@@ -667,6 +674,7 @@ impl VizxApp {
             for (key, command) in [
                 (Key::Space, AppCommand::TogglePlayback),
                 (Key::Delete, AppCommand::DeleteSelection),
+                (Key::B, AppCommand::TapBeat),
                 (Key::Home, AppCommand::GoToStart),
                 (Key::End, AppCommand::GoToEnd),
             ] {

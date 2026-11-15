@@ -12,7 +12,7 @@
 use eframe::egui::{self, Align2, Color32, CursorIcon, FontId, Rect, Sense, Stroke};
 use vizx_audio::WaveformPeaks;
 use vizx_core::{AudioState, AudioStore, EditorSession, Selection};
-use vizx_project::{ClipId, LayerMove, Track, TrackId, TrackKind};
+use vizx_project::{ClipId, LayerMove, MediaId, Track, TrackId, TrackKind};
 
 use crate::app::AppCommand;
 use crate::theme;
@@ -23,6 +23,14 @@ const VISUAL_TRACK_HEIGHT: f32 = 28.0;
 /// Audio tracks are taller, to leave room for the waveform.
 const AUDIO_TRACK_HEIGHT: f32 = 64.0;
 const TRACK_HEADER_WIDTH: f32 = 150.0;
+/// Color of beats placed by hand.
+const MANUAL_BEAT_COLOR: Color32 = Color32::from_rgb(90, 230, 255);
+/// Height of the strip along the bottom of an audio clip where beats are
+/// placed by hand, in screen points.
+const BEAT_STRIP_HEIGHT: f32 = 14.0;
+/// A click closer than this to a hand-placed beat removes it, in screen
+/// points.
+const BEAT_REMOVE_REACH: f32 = 5.0;
 /// Half the size of the diamond that marks a keyframe, in screen points.
 const KEYFRAME_MARK_SIZE: f32 = 4.5;
 /// How much one click on a zoom button zooms.
@@ -400,13 +408,27 @@ fn show_lanes(
                             scale.pixels_per_second,
                             color,
                         );
+                        // Beats drawn by hand are shown instead of the
+                        // found ones, in their own color.
+                        let manual = source.and_then(|source| source.manual_beats.as_ref());
+                        let beats: Vec<vizx_audio::Beat> = match manual {
+                            Some(manual) => manual
+                                .iter()
+                                .map(|seconds| vizx_audio::Beat {
+                                    seconds: *seconds,
+                                    strength: 1.0,
+                                })
+                                .collect(),
+                            None => loaded.beats.beats.clone(),
+                        };
                         draw_beat_marks(
                             &clip_painter,
                             clip_rect,
                             visible_left..=visible_right,
-                            &loaded.beats.beats,
+                            &beats,
                             clip.source_offset_milliseconds as f64 / 1000.0,
                             scale.pixels_per_second,
+                            manual.is_some(),
                         );
                         ""
                     }
@@ -638,6 +660,51 @@ fn show_lanes(
             }
         }
 
+        // Placing beats by hand: on the selected audio clip whose file uses
+        // hand-placed beats, the strip along its bottom takes clicks.
+        let mut beat_edit: Option<(MediaId, f64, bool)> = None;
+        if let Some(selected) = session.selected_clip_id()
+            && let Some((track, clip)) = session.project().clip(selected)
+            && let Some(source) = session.project().media_source(clip.media)
+            && let Some(manual) = &source.manual_beats
+            && let Some(index) = session
+                .project()
+                .tracks()
+                .iter()
+                .position(|other| other.id == track.id)
+        {
+            let row = &rows.rows[index];
+            let left = content_rect.left()
+                + clip.start_milliseconds as f32 / 1000.0 * scale.pixels_per_second;
+            let width = clip.duration_milliseconds as f32 / 1000.0 * scale.pixels_per_second;
+            let bottom = content_rect.top() + row.top + row.height - CLIP_VERTICAL_MARGIN;
+            let strip = Rect::from_min_max(
+                egui::pos2(left, bottom - BEAT_STRIP_HEIGHT),
+                egui::pos2(left + width, bottom),
+            );
+            painter.rect_filled(strip, 0.0, MANUAL_BEAT_COLOR.gamma_multiply(0.15));
+            let response = ui
+                .interact(
+                    strip,
+                    ui.id().with(("beat_strip", selected)),
+                    Sense::click(),
+                )
+                .on_hover_cursor(CursorIcon::PointingHand)
+                .on_hover_text("Click to add a beat; click a beat to remove it");
+            if response.clicked()
+                && let Some(pointer) = response.interact_pointer_pos()
+            {
+                let offset = clip.source_offset_milliseconds as f64 / 1000.0;
+                let seconds_in_file =
+                    offset + f64::from((pointer.x - left) / scale.pixels_per_second);
+                let reach = f64::from(BEAT_REMOVE_REACH / scale.pixels_per_second);
+                let is_on_a_beat = manual
+                    .iter()
+                    .any(|beat| (beat - seconds_in_file).abs() <= reach);
+                beat_edit = Some((source.id, seconds_in_file, is_on_a_beat));
+            }
+        }
+
         ui.data_mut(|data| match drag {
             Some(drag) => {
                 data.insert_temp(drag_id, drag);
@@ -656,6 +723,16 @@ fn show_lanes(
             session.select(clicked_track.map_or(Selection::Nothing, Selection::Track));
         }
         response.context_menu(|ui| add_menu_section(ui, requested_command));
+        if let Some((media_id, seconds, is_on_a_beat)) = beat_edit {
+            let reach = f64::from(BEAT_REMOVE_REACH / scale.pixels_per_second);
+            session.edit_project(|project| {
+                if is_on_a_beat {
+                    project.remove_manual_beat_near(media_id, seconds, reach)
+                } else {
+                    project.add_manual_beat(media_id, seconds)
+                }
+            });
+        }
         if let Some((clip_id, seconds)) = jump_to_keyframe {
             session.select(Selection::Clip(clip_id));
             session.set_playhead_seconds(seconds);
@@ -989,13 +1066,20 @@ fn draw_beat_marks(
     beats: &[vizx_audio::Beat],
     source_offset_seconds: f64,
     pixels_per_second: f32,
+    is_drawn_by_hand: bool,
 ) {
-    // Too crowded to be useful when zoomed far out.
+    // Too crowded to be useful when zoomed far out (hand-placed beats are
+    // usually fewer, and the user is working on them).
     let seconds_per_pixel = 1.0 / f64::from(pixels_per_second);
-    if seconds_per_pixel > 0.08 {
+    let limit = if is_drawn_by_hand { 0.25 } else { 0.08 };
+    if seconds_per_pixel > limit {
         return;
     }
-    let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 220, 120, 200));
+    let stroke = if is_drawn_by_hand {
+        Stroke::new(1.5, MANUAL_BEAT_COLOR)
+    } else {
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 220, 120, 200))
+    };
     for beat in beats {
         let seconds_in_clip = beat.seconds - source_offset_seconds;
         if seconds_in_clip < 0.0 {

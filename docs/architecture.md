@@ -328,7 +328,10 @@ rotation and opacity (`vizx-project/src/motion.rs`).
   playhead, and every change (also dragging in the preview) goes through
   `Project::edit_clip_transform_at`: without keyframes it changes the
   resting state, with keyframes it changes the keyframe at the playhead or
-  makes a new one there ("auto-key"). Add/Remove Keyframe, Previous/Next
+  makes a new one there ("auto-key"). In the preview the selected element can
+  also be turned with the round knob above it (Shift: steps of 15°); its
+  frame and handles turn with it, and a turned element is resized along its
+  own edges. Add/Remove Keyframe, Previous/Next
   and Clear are next to the values; keyframes show as diamonds on the clip
   in the timeline, and clicking one moves the playhead there.
 - **Trimming never changes the motion.** Keyframe times are relative to the

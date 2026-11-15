@@ -176,6 +176,34 @@ impl EditorSession {
         }
     }
 
+    /// Adds a hand-placed beat at the playhead to the selected audio clip's
+    /// file ("tapping along"). Returns why not if that is not possible.
+    pub fn tap_beat(&mut self) -> Result<(), &'static str> {
+        let (_, clip) = self
+            .selected_clip_id()
+            .and_then(|id| self.project.clip(id))
+            .ok_or("select an audio clip to tap its beats")?;
+        let source = self
+            .project
+            .media_source(clip.media)
+            .filter(|source| source.audio().is_some())
+            .ok_or("select an audio clip to tap its beats")?;
+        if source.manual_beats.is_none() {
+            return Err("switch the clip to beats drawn by hand first (Properties > Beats)");
+        }
+        let playhead = (self.playhead_seconds * 1000.0).round() as u64;
+        if playhead < clip.start_milliseconds || playhead > clip.end_milliseconds() {
+            return Err("the playhead is not inside the selected clip");
+        }
+        let seconds_in_file =
+            (playhead - clip.start_milliseconds + clip.source_offset_milliseconds) as f64 / 1000.0;
+        let media = source.id;
+        if self.project.add_manual_beat(media, seconds_in_file) {
+            self.has_unsaved_changes = true;
+        }
+        Ok(())
+    }
+
     /// Cuts the selected clip in two at the playhead. The first part stays
     /// selected. Returns `false` if no clip is selected or the playhead is
     /// not inside it.
@@ -554,6 +582,38 @@ mod tests {
         assert!(session.redo());
         assert_eq!(session.project().track(layer).unwrap().name, "Title");
         assert!(!session.redo());
+    }
+
+    #[test]
+    fn beats_are_tapped_in_at_the_playhead_once_drawn_by_hand() {
+        let mut session = EditorSession::new_untitled();
+        let (song, track) = session.project.import_audio(
+            "song.wav",
+            AudioProperties {
+                duration_milliseconds: 10_000,
+                sample_rate: 44_100,
+                channel_count: 2,
+            },
+        );
+        let clip = session.project().track(track).unwrap().clips[0].id;
+        // The clip plays the file from 2 s on, starting at 1 s.
+        session.edit_project(|project| project.trim_clip_start(clip, 2_000));
+        session.edit_project(|project| project.move_clip(clip, 1_000));
+        session.set_playhead_seconds(3.5);
+
+        assert!(session.tap_beat().is_err()); // nothing selected
+        session.select(Selection::Clip(clip));
+        assert!(session.tap_beat().unwrap_err().contains("by hand"));
+
+        session.edit_project(|project| project.use_manual_beats(song, Vec::new()));
+        session.tap_beat().unwrap();
+        // 3.5 s of the project is 2.5 s into the clip, 4.5 s into the file.
+        assert_eq!(
+            session.project().media_source(song).unwrap().manual_beats,
+            Some(vec![4.5])
+        );
+        session.set_playhead_seconds(0.5);
+        assert!(session.tap_beat().unwrap_err().contains("not inside"));
     }
 
     #[test]
