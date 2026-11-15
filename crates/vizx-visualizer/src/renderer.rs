@@ -832,6 +832,31 @@ mod tests {
         );
     }
 
+    /// The middle of Core stays empty, so a logo below it shows through.
+    #[test]
+    fn the_core_visualizer_has_a_transparent_middle() {
+        if open_device().is_err() {
+            return;
+        }
+        let folder =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/visualizers/core");
+        let plugin = VisualizerPlugin::load(&folder).unwrap();
+        let mut renderer = ShaderRenderer::new(&plugin, 160, 90).unwrap();
+        let mut frame = input(&[0.8; 512], &[0.0; 512]);
+        (frame.volume, frame.bass, frame.beat) = (0.8, 0.8, 1.0);
+        frame.parameters = plugin.pack_parameters(&crate::ParameterValues::new());
+        let mut pixels = Vec::new();
+        for _ in 0..10 {
+            renderer.render(&frame, &mut pixels).unwrap();
+        }
+
+        assert_eq!(pixel(&pixels, 160, 80, 45), [0, 0, 0, 0], "the middle");
+        assert!(
+            pixels.chunks(4).any(|pixel| pixel[3] > 200),
+            "the ring and rays are drawn"
+        );
+    }
+
     #[test]
     fn a_mistake_in_the_shader_is_reported_not_fatal() {
         let Some(renderer) = renderer(

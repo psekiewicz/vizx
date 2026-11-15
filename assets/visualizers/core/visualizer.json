@@ -1,15 +1,17 @@
 {
     "name": "Core",
     "author": "VizX",
-    "description": "A glowing core that pulses with the bass, surrounded by a ring of spectrum rays.",
+    "description": "A glowing ring that pulses with the bass and the beat, surrounded by spectrum rays. The middle is empty: put an album cover or a logo there.",
     "parameters": [
-        { "id": "size", "name": "Core size", "kind": "number", "min": 0.05, "max": 0.6, "default": 0.26 },
+        { "id": "size", "name": "Hole size", "kind": "number", "min": 0.05, "max": 0.6, "default": 0.26 },
+        { "id": "ring", "name": "Ring width", "kind": "number", "min": 0.0, "max": 0.1, "default": 0.012 },
         { "id": "pulse", "name": "Bass pulse", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.35 },
         { "id": "reach", "name": "Ray length", "kind": "number", "min": 0.0, "max": 1.2, "default": 0.5 },
         { "id": "rays", "name": "Rays", "kind": "number", "min": 12, "max": 240, "default": 96, "step": 1 },
         { "id": "spin", "name": "Spin", "kind": "number", "min": -1.0, "max": 1.0, "default": 0.08 },
         { "id": "echo", "name": "Echo", "kind": "number", "min": 0.0, "max": 0.97, "default": 0.82 },
-        { "id": "color_core", "name": "Core color", "kind": "color", "default": [1.0, 0.85, 0.6] },
+        { "id": "fill", "name": "Fill the middle", "kind": "toggle", "default": false },
+        { "id": "color_core", "name": "Ring color", "kind": "color", "default": [1.0, 0.85, 0.6] },
         { "id": "color_rays", "name": "Ray color", "kind": "color", "default": [0.0, 0.75, 1.0] }
     ]
 }
