@@ -69,6 +69,8 @@ pub enum AppCommand {
     DeleteSelection,
     Undo,
     Redo,
+    /// Select every clip of the project.
+    SelectAllClips,
     /// Put the selected clip on VizX's clipboard.
     CopyClip,
     /// Copy the selected clip, then delete it.
@@ -168,7 +170,7 @@ pub struct VizxApp {
     /// for recovery at startup.
     pub recoveries: Vec<vizx_core::Recovery>,
     /// The clip copied last.
-    clipboard: Option<vizx_core::CopiedClip>,
+    clipboard: Vec<vizx_core::CopiedClip>,
     pub is_shortcuts_open: bool,
     /// The welcome window shown at startup.
     pub is_welcome_open: bool,
@@ -226,7 +228,7 @@ impl VizxApp {
                 .map(vizx_core::find_recoveries)
                 .unwrap_or_default(),
             app_data,
-            clipboard: None,
+            clipboard: Vec::new(),
             is_shortcuts_open: false,
             graphics_summary: describe_graphics_adapter(creation_context),
             status_message: "Ready".to_owned(),
@@ -583,29 +585,33 @@ impl VizxApp {
                 }
             }
             AppCommand::CopyClip => {
-                self.clipboard = self.session.copy_selected_clip();
-                self.status_message = if self.clipboard.is_some() {
+                self.clipboard = self.session.copy_selected_clips();
+                self.status_message = if !self.clipboard.is_empty() {
                     "Clip copied; paste it with Ctrl+V at the playhead".to_owned()
                 } else {
                     "Select a clip to copy it".to_owned()
                 };
             }
-            AppCommand::CutClip => match self.session.copy_selected_clip() {
-                Some(copied) => {
-                    self.clipboard = Some(copied);
+            AppCommand::CutClip => {
+                let copied = self.session.copy_selected_clips();
+                if copied.is_empty() {
+                    self.status_message = "Select a clip to cut it".to_owned();
+                } else {
+                    self.clipboard = copied;
                     self.session.delete_selection();
-                    self.status_message =
-                        "Clip cut; paste it with Ctrl+V at the playhead".to_owned();
+                    self.status_message = "Cut; paste with Ctrl+V at the playhead".to_owned();
                 }
-                None => self.status_message = "Select a clip to cut it".to_owned(),
-            },
+            }
             AppCommand::PasteClip => {
-                self.status_message = match &self.clipboard {
-                    Some(copied) => match self.session.paste_clip(copied) {
-                        Some(_) => "Clip pasted at the playhead".to_owned(),
-                        None => "Could not paste the clip there".to_owned(),
-                    },
-                    None => "Nothing to paste; copy a clip first (Ctrl+C)".to_owned(),
+                self.status_message = if self.clipboard.is_empty() {
+                    "Nothing to paste; copy a clip first (Ctrl+C)".to_owned()
+                } else {
+                    let clipboard = self.clipboard.clone();
+                    match self.session.paste_clips(&clipboard).len() {
+                        0 => "Could not paste there".to_owned(),
+                        1 => "Clip pasted at the playhead".to_owned(),
+                        count => format!("{count} clips pasted at the playhead"),
+                    }
                 };
             }
             AppCommand::MovePlayheadFrames(frames) => self.session.step_playhead_frames(frames),
@@ -620,6 +626,11 @@ impl VizxApp {
                 self.session.jump_to_clip_edge(true);
             }
             AppCommand::ShowShortcuts => self.is_shortcuts_open = true,
+            AppCommand::SelectAllClips => {
+                self.session.select_all_clips();
+                let count = self.session.selected_clip_ids().len();
+                self.status_message = format!("{count} clips selected");
+            }
             AppCommand::ToggleLoop => {
                 self.status_message = if self.session.toggle_looping() {
                     "Looping on".to_owned()
@@ -1093,6 +1104,7 @@ impl VizxApp {
             for (key, command) in [
                 (Key::ArrowLeft, AppCommand::PreviousMarker),
                 (Key::ArrowRight, AppCommand::NextMarker),
+                (Key::A, AppCommand::SelectAllClips),
             ] {
                 if ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, key)) {
                     self.request(command);

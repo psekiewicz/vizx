@@ -102,6 +102,13 @@ fn edit_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
         app.session.can_redo(),
     );
     ui.separator();
+    command_item(
+        ui,
+        app,
+        "Select All Clips",
+        "Ctrl+A",
+        AppCommand::SelectAllClips,
+    );
     command_item(ui, app, "Cut Clip", "Ctrl+X", AppCommand::CutClip);
     command_item(ui, app, "Copy Clip", "Ctrl+C", AppCommand::CopyClip);
     command_item(ui, app, "Paste Clip", "Ctrl+V", AppCommand::PasteClip);

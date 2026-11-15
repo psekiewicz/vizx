@@ -21,6 +21,10 @@ pub const UNTITLED_PROJECT_NAME: &str = "Untitled";
 pub struct CopiedClip {
     pub clip: vizx_project::Clip,
     pub source: vizx_project::MediaSource,
+    /// How much later than the earliest copied clip it starts.
+    pub offset_milliseconds: u64,
+    /// The track it was on, used again when pasting into the same project.
+    pub track_id: TrackId,
 }
 
 /// The state of one open project while it is being edited.
@@ -43,6 +47,9 @@ pub struct EditorSession {
     /// marked; and whether playback loops it right now.
     loop_region: Option<(f64, f64)>,
     is_looping: bool,
+    /// More clips selected together with the one in `selection` (with
+    /// Ctrl+click or a rectangle). Only counts while a clip is selected.
+    extra_clips: Vec<ClipId>,
 }
 
 impl EditorSession {
@@ -61,6 +68,7 @@ impl EditorSession {
             playhead_seconds: 0.0,
             loop_region: None,
             is_looping: false,
+            extra_clips: Vec::new(),
         }
     }
 
@@ -303,7 +311,97 @@ impl EditorSession {
     /// Changes the selection. Selecting is not an edit, so it does not mark
     /// the project as changed.
     pub fn select(&mut self, selection: Selection) {
+        self.set_selection(selection);
+    }
+
+    fn set_selection(&mut self, selection: Selection) {
         self.selection = selection;
+        self.extra_clips.clear();
+    }
+
+    /// Every selected clip that still exists, the main one first.
+    pub fn selected_clip_ids(&self) -> Vec<ClipId> {
+        let Some(main) = self.selected_clip_id() else {
+            return Vec::new();
+        };
+        let mut ids = vec![main];
+        ids.extend(
+            self.extra_clips
+                .iter()
+                .copied()
+                .filter(|id| *id != main && self.project.clip(*id).is_some()),
+        );
+        ids
+    }
+
+    /// Adds a clip to the selection, or takes it out if it is in it
+    /// (Ctrl+click).
+    pub fn toggle_clip_selection(&mut self, clip_id: ClipId) {
+        let mut ids = self.selected_clip_ids();
+        match ids.iter().position(|id| *id == clip_id) {
+            Some(index) => {
+                ids.remove(index);
+            }
+            None => ids.push(clip_id),
+        }
+        self.select_clips(&ids);
+    }
+
+    /// Selects exactly these clips (the first is the main one, shown in the
+    /// Properties panel). None selects nothing.
+    pub fn select_clips(&mut self, ids: &[ClipId]) {
+        match ids.split_first() {
+            Some((main, rest)) => {
+                self.selection = Selection::Clip(*main);
+                self.extra_clips = rest.to_vec();
+            }
+            None => self.set_selection(Selection::Nothing),
+        }
+    }
+
+    /// Selects every clip of the project.
+    pub fn select_all_clips(&mut self) {
+        let ids: Vec<ClipId> = self
+            .project
+            .tracks()
+            .iter()
+            .flat_map(|track| &track.clips)
+            .map(|clip| clip.id)
+            .collect();
+        self.select_clips(&ids);
+    }
+
+    /// Moves all selected clips together, so that `anchor` (one of them,
+    /// the one being dragged) starts at `start_milliseconds`. None of them
+    /// goes before the start of the project. Returns `true` if anything
+    /// moved.
+    pub fn move_selected_clips(&mut self, anchor: ClipId, start_milliseconds: u64) -> bool {
+        let ids = self.selected_clip_ids();
+        let Some((_, anchor_clip)) = self.project.clip(anchor) else {
+            return false;
+        };
+        let mut delta = start_milliseconds as i64 - anchor_clip.start_milliseconds as i64;
+        // The earliest clip stops at 0, and the others keep their distance.
+        let earliest = ids
+            .iter()
+            .filter_map(|id| self.project.clip(*id))
+            .map(|(_, clip)| clip.start_milliseconds as i64)
+            .min()
+            .unwrap_or(0);
+        delta = delta.max(-earliest);
+        if delta == 0 {
+            return false;
+        }
+        let starts: Vec<(ClipId, u64)> = ids
+            .iter()
+            .filter_map(|id| self.project.clip(*id))
+            .map(|(_, clip)| (clip.id, (clip.start_milliseconds as i64 + delta) as u64))
+            .collect();
+        for (id, start) in starts {
+            self.project.move_clip(id, start);
+        }
+        self.has_unsaved_changes = true;
+        true
     }
 
     /// The selected track, or the track of the selected clip, if it still
@@ -328,7 +426,7 @@ impl EditorSession {
     /// or its whole track is.
     pub fn is_clip_selected(&self, track_id: TrackId, clip_id: ClipId) -> bool {
         match self.selection {
-            Selection::Clip(id) => id == clip_id,
+            Selection::Clip(id) => id == clip_id || self.extra_clips.contains(&clip_id),
             Selection::Track(id) => id == track_id,
             Selection::Nothing => false,
         }
@@ -337,6 +435,16 @@ impl EditorSession {
     /// Removes what is selected: the clip, or the whole track. Returns a
     /// short description of what was removed, or `None` if nothing was.
     pub fn delete_selection(&mut self) -> Option<&'static str> {
+        let clips = self.selected_clip_ids();
+        if clips.len() > 1 {
+            let track_id = self.project.clip(clips[0]).map(|(track, _)| track.id)?;
+            for id in clips {
+                self.project.remove_clip(id);
+            }
+            self.has_unsaved_changes = true;
+            self.set_selection(Selection::Track(track_id));
+            return Some("clips");
+        }
         match self.selection {
             Selection::Clip(id) => {
                 // Afterwards the clip's track is selected, so the user
@@ -344,7 +452,7 @@ impl EditorSession {
                 let track_id = self.project.clip(id).map(|(track, _)| track.id)?;
                 self.project.remove_clip(id);
                 self.has_unsaved_changes = true;
-                self.selection = Selection::Track(track_id);
+                self.set_selection(Selection::Track(track_id));
                 Some("clip")
             }
             Selection::Track(id) => {
@@ -407,55 +515,86 @@ impl EditorSession {
             return false;
         };
         self.has_unsaved_changes = true;
-        self.selection = Selection::Clip(copy);
+        self.set_selection(Selection::Clip(copy));
         true
     }
 
-    /// A copy of the selected clip with its media, for pasting later
-    /// (also into another project).
-    pub fn copy_selected_clip(&self) -> Option<CopiedClip> {
-        let (_, clip) = self.project.clip(self.selected_clip_id()?)?;
-        let source = self.project.media_source(clip.media)?;
-        Some(CopiedClip {
-            clip: clip.clone(),
-            source: source.clone(),
-        })
-    }
-
-    /// Pastes a copied clip at the playhead: on the selected track if it
-    /// is of the right kind, otherwise on the first track that is, otherwise
-    /// on a new one. The pasted clip becomes selected.
-    pub fn paste_clip(&mut self, copied: &CopiedClip) -> Option<ClipId> {
-        let kind = if copied.source.audio().is_some() {
-            TrackKind::Audio
-        } else {
-            TrackKind::Visual
-        };
-        let track_id = self
-            .selected_track()
-            .filter(|track| track.kind == kind)
-            .or_else(|| {
-                self.project
-                    .tracks()
-                    .iter()
-                    .find(|track| track.kind == kind)
+    /// Copies of the selected clips with their media, for pasting later
+    /// (also into another project). Empty if no clip is selected.
+    pub fn copy_selected_clips(&self) -> Vec<CopiedClip> {
+        let clips: Vec<(&Track, &vizx_project::Clip)> = self
+            .selected_clip_ids()
+            .into_iter()
+            .filter_map(|id| self.project.clip(id))
+            .collect();
+        let earliest = clips
+            .iter()
+            .map(|(_, clip)| clip.start_milliseconds)
+            .min()
+            .unwrap_or(0);
+        clips
+            .into_iter()
+            .filter_map(|(track, clip)| {
+                Some(CopiedClip {
+                    clip: clip.clone(),
+                    source: self.project.media_source(clip.media)?.clone(),
+                    offset_milliseconds: clip.start_milliseconds - earliest,
+                    track_id: track.id,
+                })
             })
-            .map(|track| track.id)
-            .unwrap_or_else(|| self.project.add_default_named_track(kind));
-        let at = (self.playhead_seconds * 1000.0).round() as u64;
-        let clip_id = self
-            .project
-            .paste_clip(&copied.clip, &copied.source, track_id, at)?;
-        self.has_unsaved_changes = true;
-        self.selection = Selection::Clip(clip_id);
-        Some(clip_id)
+            .collect()
     }
 
+    /// Pastes copied clips at the playhead, keeping their distances. Each
+    /// goes back onto its own track if this project has it (and it is of
+    /// the right kind); otherwise onto the selected track if that fits, the
+    /// first track that does, or a new one. The pasted clips become
+    /// selected.
+    pub fn paste_clips(&mut self, copied: &[CopiedClip]) -> Vec<ClipId> {
+        let at = (self.playhead_seconds * 1000.0).round() as u64;
+        let selected_track = self.selected_track().map(|track| (track.id, track.kind));
+        let mut pasted = Vec::new();
+        for copy in copied {
+            let kind = if copy.source.audio().is_some() {
+                TrackKind::Audio
+            } else {
+                TrackKind::Visual
+            };
+            let own_track = self
+                .project
+                .track(copy.track_id)
+                .filter(|track| track.kind == kind && copied.len() > 1)
+                .map(|track| track.id);
+            let track_id = own_track
+                .or_else(|| selected_track.filter(|(_, k)| *k == kind).map(|(id, _)| id))
+                .or_else(|| {
+                    self.project
+                        .tracks()
+                        .iter()
+                        .find(|track| track.kind == kind)
+                        .map(|track| track.id)
+                })
+                .unwrap_or_else(|| self.project.add_default_named_track(kind));
+            if let Some(id) = self.project.paste_clip(
+                &copy.clip,
+                &copy.source,
+                track_id,
+                at + copy.offset_milliseconds,
+            ) {
+                pasted.push(id);
+            }
+        }
+        if !pasted.is_empty() {
+            self.has_unsaved_changes = true;
+            self.select_clips(&pasted);
+        }
+        pasted
+    }
     /// Adds a track to the timeline and selects it.
     pub fn add_track(&mut self, kind: TrackKind) -> TrackId {
         let id = self.project.add_default_named_track(kind);
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(id);
+        self.set_selection(Selection::Track(id));
         id
     }
 
@@ -475,7 +614,7 @@ impl EditorSession {
             .project
             .import_audio(path.to_string_lossy(), properties);
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         Ok(track_id)
     }
 
@@ -527,7 +666,7 @@ impl EditorSession {
 
         let (_media_id, track_id) = self.project.add_milkdrop_preset(path.to_string_lossy());
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         Ok(track_id)
     }
 
@@ -541,7 +680,7 @@ impl EditorSession {
         let reference = PresetLibrary::project_reference(entry);
         let (_media_id, track_id) = self.project.add_milkdrop_preset(reference);
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         track_id
     }
 
@@ -559,7 +698,7 @@ impl EditorSession {
             .project
             .add_image(path.to_string_lossy(), ImageProperties { width, height });
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         Ok(track_id)
     }
 
@@ -575,7 +714,7 @@ impl EditorSession {
             .project
             .add_background_image(path.to_string_lossy(), ImageProperties { width, height });
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         Ok(track_id)
     }
 
@@ -599,7 +738,7 @@ impl EditorSession {
             self.project.add_video(path.to_string_lossy(), properties)
         };
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         Ok(track_id)
     }
 
@@ -611,7 +750,7 @@ impl EditorSession {
 
         let (_media_id, track_id) = self.project.add_text(properties, placement);
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         Ok(track_id)
     }
 
@@ -648,7 +787,7 @@ impl EditorSession {
     pub fn add_lyrics_track(&mut self) -> TrackId {
         let track_id = self.project.add_track("Lyrics", TrackKind::Visual);
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         track_id
     }
 
@@ -687,7 +826,7 @@ impl EditorSession {
                 .set_clip_keyframes(clip_id, crate::lyric_keyframes(placement, duration, style));
         }
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         Ok(track_id)
     }
 
@@ -812,7 +951,7 @@ impl EditorSession {
         let (first_file, animation) = crate::find_image_sequence(file, DEFAULT_ANIMATION_SPEED)?;
         let (_media_id, track_id) = self.project.add_animation(first_file, animation);
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         Ok(track_id)
     }
 
@@ -827,7 +966,7 @@ impl EditorSession {
             .project
             .add_animation(file.to_string_lossy(), animation);
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         Ok(track_id)
     }
 
@@ -837,7 +976,7 @@ impl EditorSession {
     pub fn add_visualizer_plugin(&mut self, stored_path: &str) -> TrackId {
         let (_media_id, track_id) = self.project.add_visualizer_plugin(stored_path);
         self.has_unsaved_changes = true;
-        self.selection = Selection::Track(track_id);
+        self.set_selection(Selection::Track(track_id));
         track_id
     }
 
@@ -846,7 +985,7 @@ impl EditorSession {
         if self.project.remove_track(id) {
             self.has_unsaved_changes = true;
             if self.selection == Selection::Track(id) {
-                self.selection = Selection::Nothing;
+                self.set_selection(Selection::Nothing);
             }
         }
     }
@@ -1002,23 +1141,23 @@ mod tests {
         session.add_text().unwrap();
         let text_clip = session.project().visual_clips().next().unwrap().0.id;
         session.select(Selection::Clip(text_clip));
-        let copied = session.copy_selected_clip().unwrap();
+        let copied = session.copy_selected_clips();
 
         session.set_playhead_seconds(0.0);
-        let pasted = session.paste_clip(&copied).unwrap();
+        let pasted = session.paste_clips(&copied)[0];
         let mut other = EditorSession::new_untitled();
         other.set_playhead_seconds(1.5);
-        let pasted_elsewhere = other.paste_clip(&copied).unwrap();
+        let pasted_elsewhere = other.paste_clips(&copied)[0];
 
         let (_, clip) = session.project().clip(pasted).unwrap();
         // A pasted text is a text of its own, so it can be edited alone.
-        assert_ne!(clip.media, copied.clip.media);
+        assert_ne!(clip.media, copied[0].clip.media);
         assert_eq!(session.selected_clip_id(), Some(pasted));
         let (track, clip) = other.project().clip(pasted_elsewhere).unwrap();
         assert_eq!(track.kind, TrackKind::Visual);
         assert_eq!(clip.start_milliseconds, 1500);
         let source = other.project().media_source(clip.media).unwrap();
-        assert_eq!(source.text(), copied.source.text());
+        assert_eq!(source.text(), copied[0].source.text());
     }
 
     #[test]
@@ -1078,6 +1217,62 @@ mod tests {
         // Without a region, the whole project loops.
         assert!(session.toggle_looping());
         assert_eq!(session.loop_region().unwrap().0, 0.0);
+    }
+
+    #[test]
+    fn several_clips_are_selected_moved_copied_and_deleted_together() {
+        let mut session = EditorSession::new_untitled();
+        session.add_text().unwrap();
+        session.add_text().unwrap();
+        let ids: Vec<ClipId> = session
+            .project()
+            .visual_clips()
+            .map(|(clip, _)| clip.id)
+            .collect();
+        session.edit_project(|project| {
+            project.trim_clip_end(ids[0], 2000);
+            project.trim_clip_end(ids[1], 2000);
+            project.move_clip(ids[1], 1000)
+        });
+
+        session.select(Selection::Clip(ids[0]));
+        session.toggle_clip_selection(ids[1]);
+        assert_eq!(session.selected_clip_ids(), ids);
+        let track_of_first = session.project().clip(ids[0]).unwrap().0.id;
+        assert!(session.is_clip_selected(track_of_first, ids[0]));
+
+        // Dragging one moves both; none goes before 0.
+        assert!(session.move_selected_clips(ids[1], 3000));
+        let start =
+            |session: &EditorSession, id| session.project().clip(id).unwrap().1.start_milliseconds;
+        assert_eq!(
+            (start(&session, ids[0]), start(&session, ids[1])),
+            (2000, 3000)
+        );
+        session.move_selected_clips(ids[1], 0);
+        assert_eq!(
+            (start(&session, ids[0]), start(&session, ids[1])),
+            (0, 1000)
+        );
+
+        // Copied and pasted, they keep their distance.
+        let copied = session.copy_selected_clips();
+        session.set_playhead_seconds(5.0);
+        let pasted = session.paste_clips(&copied);
+        assert_eq!(pasted.len(), 2);
+        assert_eq!(
+            (start(&session, pasted[0]), start(&session, pasted[1])),
+            (5000, 6000)
+        );
+        assert_eq!(session.selected_clip_ids(), pasted);
+
+        assert_eq!(session.delete_selection(), Some("clips"));
+        assert_eq!(session.project().visual_clips().count(), 2);
+        // A plain selection forgets the others.
+        session.select(Selection::Clip(ids[0]));
+        assert_eq!(session.selected_clip_ids(), [ids[0]]);
+        session.select_all_clips();
+        assert_eq!(session.selected_clip_ids().len(), 2);
     }
 
     #[test]

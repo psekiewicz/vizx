@@ -312,7 +312,8 @@ fn show_lanes(
     let output = scroll_area.show_viewport(&mut lanes_ui, |ui, visible| {
         let rows = TrackRows::new(session.project().tracks());
         let content_size = egui::vec2(scale.content_width(), rows.total_height);
-        let (content_rect, response) = ui.allocate_exact_size(content_size, Sense::click());
+        let (content_rect, response) =
+            ui.allocate_exact_size(content_size, Sense::click_and_drag());
         let painter = ui.painter();
         let separator = Stroke::new(1.0, theme::SEPARATOR);
         let selection = session.selection();
@@ -374,7 +375,10 @@ fn show_lanes(
         let mut drag: Option<ClipDrag> = ui.data(|data| data.get_temp(drag_id));
         // Collected in the loop (which borrows the project) and applied
         // after it.
-        let mut clicked_clip: Option<ClipId> = None;
+        let mut clicked_clip: Option<(ClipId, ClipClick)> = None;
+        // Where each clip is drawn, for selecting with a rectangle.
+        let mut clip_rects: Vec<(ClipId, Rect)> = Vec::new();
+        let is_group = session.selected_clip_ids().len() > 1;
         let mut edit: Option<(ClipId, ClipGrab, u64)> = None;
         // The track a moved clip was dragged onto, if it is another one.
         let mut new_track: Option<(ClipId, TrackId)> = None;
@@ -390,6 +394,7 @@ fn show_lanes(
                     egui::vec2(width, row.height - 2.0 * CLIP_VERTICAL_MARGIN),
                 );
                 let is_selected = session.is_clip_selected(track.id, clip.id);
+                clip_rects.push((clip.id, clip_rect));
                 let color = track_color(track.kind);
                 let fill_strength = if is_selected { 0.55 } else { 0.35 };
                 painter.rect_filled(clip_rect, 2.0, color.gamma_multiply(fill_strength));
@@ -532,9 +537,18 @@ fn show_lanes(
                     } else {
                         CursorIcon::ResizeHorizontal
                     });
-                    if response.clicked() || response.secondary_clicked() || response.drag_started()
-                    {
-                        clicked_clip = Some(clip.id);
+                    let with_ctrl = ui.input(|input| input.modifiers.command);
+                    if response.clicked() {
+                        clicked_clip = Some((
+                            clip.id,
+                            if with_ctrl {
+                                ClipClick::Toggle
+                            } else {
+                                ClipClick::Only
+                            },
+                        ));
+                    } else if response.secondary_clicked() || response.drag_started() {
+                        clicked_clip = Some((clip.id, ClipClick::Keep));
                     }
 
                     // The edge that follows the mouse: the right one when
@@ -579,6 +593,7 @@ fn show_lanes(
                             .index_at(pointer.y - content_rect.top())
                             .and_then(|index| session.project().tracks().get(index));
                         if grab == ClipGrab::Move
+                            && !(is_group && is_selected)
                             && let Some(target_track) = track_under_pointer
                             && target_track.id != track.id
                             && target_track.kind == track.kind
@@ -766,21 +781,80 @@ fn show_lanes(
             session.select(Selection::Clip(clip_id));
             session.set_playhead_seconds(seconds);
         }
-        if let Some(clip_id) = clicked_clip {
-            session.select(Selection::Clip(clip_id));
+        if let Some((clip_id, click)) = clicked_clip {
+            match click {
+                ClipClick::Only => session.select(Selection::Clip(clip_id)),
+                ClipClick::Toggle => session.toggle_clip_selection(clip_id),
+                // Grabbing a clip of the selection keeps the others with it.
+                ClipClick::Keep => {
+                    if !session.selected_clip_ids().contains(&clip_id) {
+                        session.select(Selection::Clip(clip_id));
+                    }
+                }
+            }
+        }
+
+        // Dragging over empty lanes draws a rectangle; the clips it touches
+        // become selected.
+        let marquee_id = ui.id().with("timeline_marquee");
+        if response.drag_started()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            ui.data_mut(|data| data.insert_temp(marquee_id, pointer));
+        }
+        let marquee_start: Option<egui::Pos2> = ui.data(|data| data.get_temp(marquee_id));
+        if let (Some(start), Some(pointer)) = (marquee_start, response.interact_pointer_pos())
+            && response.dragged()
+        {
+            let area = Rect::from_two_pos(start, pointer);
+            ui.painter().rect(
+                area,
+                0.0,
+                theme::ACCENT.gamma_multiply(0.12),
+                Stroke::new(1.0, theme::ACCENT),
+                egui::StrokeKind::Inside,
+            );
+            let touched: Vec<ClipId> = clip_rects
+                .iter()
+                .filter(|(_, rect)| rect.intersects(area))
+                .map(|(id, _)| *id)
+                .collect();
+            session.select_clips(&touched);
+        }
+        if response.drag_stopped() {
+            ui.data_mut(|data| data.remove::<egui::Pos2>(marquee_id));
         }
         if let Some((clip_id, track_id)) = new_track {
             session.edit_project(|project| project.move_clip_to_track(clip_id, track_id));
         }
         if let Some((clip_id, grab, target)) = edit {
-            session.edit_project(|project| match grab {
-                ClipGrab::Move => project.move_clip(clip_id, target),
-                ClipGrab::TrimStart => project.trim_clip_start(clip_id, target),
-                ClipGrab::TrimEnd => project.trim_clip_end(clip_id, target),
-            });
+            let moves_group = grab == ClipGrab::Move
+                && session.selected_clip_ids().len() > 1
+                && session.selected_clip_ids().contains(&clip_id);
+            if moves_group {
+                session.move_selected_clips(clip_id, target);
+            } else {
+                session.edit_project(|project| match grab {
+                    ClipGrab::Move => project.move_clip(clip_id, target),
+                    ClipGrab::TrimStart => project.trim_clip_start(clip_id, target),
+                    ClipGrab::TrimEnd => project.trim_clip_end(clip_id, target),
+                });
+            }
         }
     });
     output.state.offset
+}
+
+/// How a click on a clip changes the selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipClick {
+    /// A plain click: only this clip is selected.
+    Only,
+    /// Ctrl+click: this clip joins the selection or leaves it.
+    Toggle,
+    /// A right-click or the start of a drag: a clip of the selection keeps
+    /// the others selected, any other clip becomes the only one.
+    Keep,
 }
 
 /// What part of a clip the mouse took hold of.

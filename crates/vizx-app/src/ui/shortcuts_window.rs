@@ -40,8 +40,14 @@ const GROUPS: [(&str, &[(&str, &str)]); 5] = [
         &[
             ("Ctrl+Z", "Undo"),
             ("Ctrl+Shift+Z or Ctrl+Y", "Redo"),
-            ("Ctrl+C / Ctrl+X", "Copy / cut the selected clip"),
-            ("Ctrl+V", "Paste the clip at the playhead"),
+            (
+                "Ctrl+click a clip",
+                "Add it to the selection, or take it out",
+            ),
+            ("Drag over empty lanes", "Select the clips in the rectangle"),
+            ("Ctrl+A", "Select all clips"),
+            ("Ctrl+C / Ctrl+X", "Copy / cut the selected clips"),
+            ("Ctrl+V", "Paste at the playhead (distances kept)"),
             ("Ctrl+K", "Split the selected clip at the playhead"),
             ("Ctrl+D", "Duplicate the selected clip"),
             ("Delete", "Delete the selected clip or track"),
