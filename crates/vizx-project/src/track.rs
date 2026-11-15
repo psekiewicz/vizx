@@ -90,6 +90,12 @@ pub struct Clip {
     /// Where on the project timeline the clip begins.
     pub start_milliseconds: u64,
     pub duration_milliseconds: u64,
+    /// Where in its media the clip begins: 0 uses the media from its start,
+    /// more skips the beginning. It grows when the clip is trimmed at its
+    /// left edge. Only audio and video have a "where"; for everything else
+    /// it stays 0.
+    #[serde(default)]
+    pub source_offset_milliseconds: u64,
     /// Which audio a visual clip reacts to. Not used by audio clips.
     ///
     /// `#[serde(default)]` lets files written before this field existed
@@ -380,6 +386,9 @@ pub enum AudioInput {
 }
 
 impl Clip {
+    /// The shortest a clip can be made, in milliseconds.
+    pub const MIN_DURATION_MILLISECONDS: u64 = 100;
+
     pub fn end_milliseconds(&self) -> u64 {
         self.start_milliseconds + self.duration_milliseconds
     }

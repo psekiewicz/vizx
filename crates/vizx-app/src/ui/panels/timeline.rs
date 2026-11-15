@@ -9,10 +9,10 @@
 //!   scroll; the ruler and the track names stay in place and follow along.
 //! - Ruler marks get denser or sparser with the zoom level.
 
-use eframe::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke};
+use eframe::egui::{self, Align2, Color32, CursorIcon, FontId, Rect, Sense, Stroke};
 use vizx_audio::WaveformPeaks;
 use vizx_core::{AudioState, AudioStore, EditorSession, Selection};
-use vizx_project::{LayerMove, Track, TrackId, TrackKind};
+use vizx_project::{ClipId, LayerMove, Track, TrackId, TrackKind};
 
 use crate::app::AppCommand;
 use crate::theme;
@@ -23,6 +23,12 @@ const VISUAL_TRACK_HEIGHT: f32 = 28.0;
 /// Audio tracks are taller, to leave room for the waveform.
 const AUDIO_TRACK_HEIGHT: f32 = 64.0;
 const TRACK_HEADER_WIDTH: f32 = 150.0;
+/// Width of the zones at a clip's left and right edge that trim it when
+/// dragged, in screen points.
+const CLIP_EDGE_WIDTH: f32 = 7.0;
+/// A dragged clip edge closer than this to a snap point jumps onto it, in
+/// screen points.
+const CLIP_SNAP_DISTANCE: f32 = 7.0;
 /// Gap between a clip and the top and bottom edges of its lane.
 const CLIP_VERTICAL_MARGIN: f32 = 3.0;
 /// Upper zoom limit, in pixels per second of project time.
@@ -291,7 +297,10 @@ fn show_lanes(
                 egui::pos2(content_rect.left(), content_rect.top() + row.top),
                 egui::vec2(content_rect.width(), row.height),
             );
-            if selection == Selection::Track(track.id) {
+            if session
+                .selected_track()
+                .is_some_and(|selected| selected.id == track.id)
+            {
                 painter.rect_filled(lane_rect, 0.0, theme::ACCENT.gamma_multiply(0.12));
             }
             painter.hline(lane_rect.x_range(), lane_rect.bottom(), separator);
@@ -314,6 +323,35 @@ fn show_lanes(
         // Clips, drawn over the guide lines.
         let visible_left = content_rect.left() + visible.left();
         let visible_right = content_rect.left() + visible.right();
+        let playhead_milliseconds = (session.playhead_seconds() * 1000.0).round() as u64;
+        let milliseconds_at =
+            |x: f32| ((x - content_rect.left()) / scale.pixels_per_second * 1000.0).max(0.0) as u64;
+
+        // Moments a dragged clip edge jumps onto when it comes close: the
+        // start of the project, the playhead and the edges of other clips.
+        let snap_distance = (CLIP_SNAP_DISTANCE / scale.pixels_per_second * 1000.0).round() as u64;
+        let mut snap_points: Vec<(Option<ClipId>, u64)> =
+            vec![(None, 0), (None, playhead_milliseconds)];
+        for clip in session
+            .project()
+            .tracks()
+            .iter()
+            .flat_map(|track| &track.clips)
+        {
+            snap_points.push((Some(clip.id), clip.start_milliseconds));
+            snap_points.push((Some(clip.id), clip.end_milliseconds()));
+        }
+
+        // A clip drag in progress, remembered between frames. Unlike in the
+        // preview, the project is changed while dragging, so the waveform
+        // and everything else follow the mouse.
+        let drag_id = ui.id().with("timeline_clip_drag");
+        let mut drag: Option<ClipDrag> = ui.data(|data| data.get_temp(drag_id));
+        // Collected in the loop (which borrows the project) and applied
+        // after it.
+        let mut clicked_clip: Option<ClipId> = None;
+        let mut edit: Option<(ClipId, ClipGrab, u64)> = None;
+
         for (track, row) in session.project().tracks().iter().zip(&rows.rows) {
             let top = content_rect.top() + row.top;
             for clip in &track.clips {
@@ -324,12 +362,18 @@ fn show_lanes(
                     egui::pos2(left, top + CLIP_VERTICAL_MARGIN),
                     egui::vec2(width, row.height - 2.0 * CLIP_VERTICAL_MARGIN),
                 );
+                let is_selected = session.is_clip_selected(track.id, clip.id);
                 let color = track_color(track.kind);
-                painter.rect_filled(clip_rect, 2.0, color.gamma_multiply(0.35));
+                let fill_strength = if is_selected { 0.55 } else { 0.35 };
+                painter.rect_filled(clip_rect, 2.0, color.gamma_multiply(fill_strength));
                 painter.rect_stroke(
                     clip_rect,
                     2.0,
-                    Stroke::new(1.0, color),
+                    if selection == Selection::Clip(clip.id) {
+                        Stroke::new(1.5, Color32::WHITE)
+                    } else {
+                        Stroke::new(1.0, color)
+                    },
                     egui::StrokeKind::Inside,
                 );
 
@@ -345,6 +389,8 @@ fn show_lanes(
                             clip_rect,
                             visible_left..=visible_right,
                             &loaded.peaks,
+                            // A trimmed clip shows its own part of the file.
+                            clip.source_offset_milliseconds as f64 / 1000.0,
                             scale.pixels_per_second,
                             color,
                         );
@@ -365,10 +411,135 @@ fn show_lanes(
                     FontId::proportional(11.0),
                     Color32::WHITE,
                 );
+
+                // The clip itself: click to select, drag to move. Its two
+                // edges come afterwards, so they are "on top" of it: drag
+                // them to trim. Very narrow clips have no edge zones, or
+                // there would be no room left to grab the clip itself.
+                let edge_width = if width >= 4.0 * CLIP_EDGE_WIDTH {
+                    CLIP_EDGE_WIDTH
+                } else {
+                    0.0
+                };
+                let grab_zones = [
+                    (ClipGrab::Move, clip_rect),
+                    (
+                        ClipGrab::TrimStart,
+                        Rect::from_min_size(
+                            clip_rect.left_top(),
+                            egui::vec2(edge_width, clip_rect.height()),
+                        ),
+                    ),
+                    (
+                        ClipGrab::TrimEnd,
+                        Rect::from_min_size(
+                            egui::pos2(clip_rect.right() - edge_width, clip_rect.top()),
+                            egui::vec2(edge_width, clip_rect.height()),
+                        ),
+                    ),
+                ];
+                for (grab, zone) in grab_zones {
+                    if zone.width() <= 0.0 {
+                        continue;
+                    }
+                    let response = ui.interact(
+                        zone,
+                        ui.id().with(("timeline_clip", clip.id, grab)),
+                        if grab == ClipGrab::Move {
+                            Sense::click_and_drag()
+                        } else {
+                            Sense::drag()
+                        },
+                    );
+                    let response = response.on_hover_cursor(if grab == ClipGrab::Move {
+                        CursorIcon::Grab
+                    } else {
+                        CursorIcon::ResizeHorizontal
+                    });
+                    if response.clicked() || response.secondary_clicked() || response.drag_started()
+                    {
+                        clicked_clip = Some(clip.id);
+                    }
+
+                    // The edge that follows the mouse: the right one when
+                    // trimming the end, otherwise the left one.
+                    let edge = if grab == ClipGrab::TrimEnd {
+                        clip.end_milliseconds()
+                    } else {
+                        clip.start_milliseconds
+                    };
+                    if response.drag_started()
+                        && let Some(pointer) = response.interact_pointer_pos()
+                    {
+                        drag = Some(ClipDrag {
+                            clip: clip.id,
+                            grab,
+                            // Keeps the grabbed spot under the mouse.
+                            grab_offset: milliseconds_at(pointer.x) as i64 - edge as i64,
+                        });
+                    }
+                    let is_this_drag =
+                        drag.is_some_and(|drag| drag.clip == clip.id && drag.grab == grab);
+                    if response.dragged()
+                        && is_this_drag
+                        && let (Some(active), Some(pointer)) =
+                            (drag, response.interact_pointer_pos())
+                    {
+                        let wanted =
+                            (milliseconds_at(pointer.x) as i64 - active.grab_offset).max(0) as u64;
+                        let target = snapped_edge(
+                            wanted,
+                            // A moved clip can also snap with its far end.
+                            (grab == ClipGrab::Move).then_some(clip.duration_milliseconds),
+                            clip.id,
+                            &snap_points,
+                            snap_distance,
+                        );
+                        edit = Some((clip.id, grab, target));
+                    }
+                    if response.drag_stopped() && is_this_drag {
+                        drag = None;
+                    }
+
+                    if grab == ClipGrab::Move {
+                        let can_split = playhead_milliseconds
+                            >= clip.start_milliseconds
+                                + vizx_project::Clip::MIN_DURATION_MILLISECONDS
+                            && playhead_milliseconds
+                                + vizx_project::Clip::MIN_DURATION_MILLISECONDS
+                                <= clip.end_milliseconds();
+                        response.context_menu(|ui| {
+                            ui.label(egui::RichText::new(file_name).strong());
+                            ui.separator();
+                            let split =
+                                egui::Button::new("Split at Playhead").shortcut_text("Ctrl+K");
+                            if ui.add_enabled(can_split, split).clicked() {
+                                *requested_command = Some(AppCommand::SplitClip);
+                            }
+                            let duplicate = egui::Button::new("Duplicate").shortcut_text("Ctrl+D");
+                            if ui.add(duplicate).clicked() {
+                                *requested_command = Some(AppCommand::DuplicateClip);
+                            }
+                            let delete = egui::Button::new("Delete Clip").shortcut_text("Del");
+                            if ui.add(delete).clicked() {
+                                *requested_command = Some(AppCommand::DeleteSelection);
+                            }
+                            ui.separator();
+                            add_submenu(ui, requested_command);
+                        });
+                    }
+                }
             }
         }
 
-        // Clicking a lane selects its track.
+        ui.data_mut(|data| match drag {
+            Some(drag) => {
+                data.insert_temp(drag_id, drag);
+            }
+            None => data.remove::<ClipDrag>(drag_id),
+        });
+
+        // Clicking a lane selects its track; clicking a clip selects it.
         if response.clicked()
             && let Some(pointer) = response.interact_pointer_pos()
         {
@@ -379,9 +550,73 @@ fn show_lanes(
             session.select(clicked_track.map_or(Selection::Nothing, Selection::Track));
         }
         response.context_menu(|ui| add_menu_section(ui, requested_command));
+        if let Some(clip_id) = clicked_clip {
+            session.select(Selection::Clip(clip_id));
+        }
+        if let Some((clip_id, grab, target)) = edit {
+            session.edit_project(|project| match grab {
+                ClipGrab::Move => project.move_clip(clip_id, target),
+                ClipGrab::TrimStart => project.trim_clip_start(clip_id, target),
+                ClipGrab::TrimEnd => project.trim_clip_end(clip_id, target),
+            });
+        }
     });
-
     output.state.offset
+}
+
+/// What part of a clip the mouse took hold of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ClipGrab {
+    /// The clip itself: dragging moves it along the timeline.
+    Move,
+    /// Its left edge: dragging changes where it starts.
+    TrimStart,
+    /// Its right edge: dragging changes where it ends.
+    TrimEnd,
+}
+
+/// A clip being dragged on the timeline.
+#[derive(Debug, Clone, Copy)]
+struct ClipDrag {
+    clip: ClipId,
+    grab: ClipGrab,
+    /// Distance in milliseconds from the dragged edge to the spot the mouse
+    /// took hold of, so that spot stays under the mouse.
+    grab_offset: i64,
+}
+
+/// Where a dragged edge ends up: at `wanted`, or on a snap point if one is
+/// within `snap_distance`.
+///
+/// `far_end_distance` is given when a whole clip is moved (its length):
+/// then its far end may snap as well, and the result is still where the
+/// dragged (near) edge goes. Snap points that belong to the dragged clip
+/// itself are ignored.
+fn snapped_edge(
+    wanted: u64,
+    far_end_distance: Option<u64>,
+    dragged_clip: ClipId,
+    snap_points: &[(Option<ClipId>, u64)],
+    snap_distance: u64,
+) -> u64 {
+    let nearest = |edge: u64| {
+        snap_points
+            .iter()
+            .filter(|(owner, _)| *owner != Some(dragged_clip))
+            .map(|(_, point)| *point)
+            .filter(|point| point.abs_diff(edge) <= snap_distance)
+            .min_by_key(|point| point.abs_diff(edge))
+    };
+
+    if let Some(point) = nearest(wanted) {
+        return point;
+    }
+    if let Some(length) = far_end_distance
+        && let Some(point) = nearest(wanted + length)
+    {
+        return point.saturating_sub(length);
+    }
+    wanted
 }
 
 /// Draws the time ruler. Clicking or dragging on it moves the playhead
@@ -457,7 +692,7 @@ fn show_track_headers(
     let mut clicked_track: Option<TrackId> = None;
     let mut track_to_remove: Option<TrackId> = None;
     let mut layer_to_move: Option<(TrackId, LayerMove)> = None;
-    let selection = session.selection();
+    let selected_track = session.selected_track().map(|track| track.id);
     let rows = TrackRows::new(session.project().tracks());
 
     for (track, row) in session.project().tracks().iter().zip(&rows.rows) {
@@ -470,7 +705,7 @@ fn show_track_headers(
             continue; // scrolled out of view
         }
 
-        let is_selected = selection == Selection::Track(track.id);
+        let is_selected = selected_track == Some(track.id);
         if is_selected {
             painter.rect_filled(row_rect, 0.0, theme::ACCENT.gamma_multiply(0.25));
         }
@@ -604,6 +839,7 @@ fn draw_waveform(
     clip_rect: Rect,
     visible_x: std::ops::RangeInclusive<f32>,
     peaks: &WaveformPeaks,
+    source_offset_seconds: f64,
     pixels_per_second: f32,
     color: Color32,
 ) {
@@ -614,8 +850,12 @@ fn draw_waveform(
 
     let mut x = clip_rect.left().max(*visible_x.start()).floor();
     while x < last_x {
-        let start_seconds = f64::from((x - clip_rect.left()) / pixels_per_second);
-        let end_seconds = f64::from((x + 1.0 - clip_rect.left()) / pixels_per_second);
+        // Time within the file: the clip's own time plus what was trimmed
+        // off its start.
+        let start_seconds =
+            source_offset_seconds + f64::from((x - clip_rect.left()) / pixels_per_second);
+        let end_seconds =
+            source_offset_seconds + f64::from((x + 1.0 - clip_rect.left()) / pixels_per_second);
         if let Some((minimum, maximum)) = peaks.range(start_seconds, end_seconds) {
             // Positive sample values go up, which is towards smaller y.
             let top = center_y - maximum * half_height;
@@ -658,6 +898,37 @@ fn track_color(kind: TrackKind) -> Color32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_dragged_edge_snaps_to_nearby_points_but_not_to_its_own_clip() {
+        let mut project = vizx_project::Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 10_000;
+        let (_, layer) = project.add_milkdrop_preset("a.milk");
+        let dragged = project.track(layer).unwrap().clips[0].id;
+        let (_, other_layer) = project.add_milkdrop_preset("b.milk");
+        let other = project.track(other_layer).unwrap().clips[0].id;
+        // The start of the project, the playhead at 5 s, another clip from
+        // 2 s to 3 s, and the dragged clip's own edge at 7 s.
+        let points = [
+            (None, 0),
+            (None, 5_000),
+            (Some(other), 2_000),
+            (Some(other), 3_000),
+            (Some(dragged), 7_000),
+        ];
+        let snap = |wanted, length| snapped_edge(wanted, length, dragged, &points, 100);
+
+        assert_eq!(snap(4_950, None), 5_000);
+        assert_eq!(snap(4_800, None), 4_800); // too far away
+        assert_eq!(snap(2_060, None), 2_000);
+        assert_eq!(snap(7_010, None), 7_010); // its own edge does not count
+        // The nearest of two candidates wins.
+        assert_eq!(snapped_edge(2_480, None, dragged, &points, 600), 2_000);
+
+        // Moving a 1 s clip: its end reaches the playhead first.
+        assert_eq!(snap(4_040, Some(1_000)), 4_000);
+        // Its start snaps in preference to its end.
+        assert_eq!(snap(2_950, Some(2_000)), 3_000);
+    }
     fn scale(zoom: Zoom, duration_seconds: f32, lanes_width: f32) -> TimeScale {
         let view = TimelineView {
             zoom,

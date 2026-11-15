@@ -135,7 +135,8 @@ Version **9** added visualizer plugins as a kind of media and a clip's
 parameter values for them. Version **10** added images as a kind of media
 and a clip's `opacity` and `reaction`. Version **11** extended reactions
 (move, rotate, sensitivity, release). Version **12** added video files as a
-kind of media, version **13** text elements.
+kind of media, version **13** text elements. Version **14** added a clip's
+`source_offset_milliseconds`.
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -282,6 +283,35 @@ build) apart from VizX.
   written to a temporary WAV file for FFmpeg. A cancelled or failed export
   removes its unfinished file.
 
+### Editing clips on the timeline
+
+A clip is a piece of media at a place in time: `start`, `duration` and, for
+audio and video, `source_offset` (where in the file the clip begins).
+
+- **On the timeline:** click a clip to select it, drag it to move it, drag
+  its left or right edge to trim it. A dragged edge snaps to the start of
+  the project, the playhead and the edges of other clips. The context menu
+  and the Edit menu offer Split at Playhead (Ctrl+K), Duplicate (Ctrl+D)
+  and Delete (Del). The Properties panel shows Start and Length as numbers.
+- **In the model** (`Project::move_clip`, `trim_clip_start`, `trim_clip_end`,
+  `split_clip`, `duplicate_clip`, `remove_clip`): trimming the left edge of
+  audio or video raises `source_offset` by the same amount, so what stays
+  of the clip does not move in time. Audio cannot be trimmed beyond its
+  file; a visualizer, image or text has no file time and can be made any
+  length. The project grows when a clip reaches beyond its end and never
+  shrinks by itself. Media that no clip uses any more leaves the library.
+- **Texts are copied, files are shared.** Splitting or duplicating a text
+  clip gives the new clip a text of its own, so a line of lyrics can be
+  duplicated and then changed. Clips of a file share the file.
+- **Selection** can be a track or a clip (`Selection::Clip`); a selected
+  clip's track counts as selected wherever only tracks matter.
+- **Everything downstream follows the clip:** playback and export mix only
+  the trimmed part of an audio clip (`PlaybackSource::offset_seconds` and
+  `duration_seconds`), the waveform shows that part, and a trimmed video
+  starts inside its file. A visualizer always starts fresh at the start of
+  its clip, so splitting one restarts it at the cut.
+- Clips on one track may overlap; nothing prevents it yet, and clips cannot
+  be dragged to another track.
 ### Text
 
 A text element (Add > Text, Ctrl+T) is a kind of media that is not a file
@@ -298,9 +328,8 @@ both.
   or OpenType file on the computer can be chosen instead.
 - When the text changes, its placement is resized around the same middle to
   fit the new text exactly (`EditorSession::set_text`).
-- A text lasts for the whole project for now. Texts that appear and
-  disappear at set times (lyrics) need clips that can be moved and trimmed
-  on the timeline, which do not exist yet.
+- A new text lasts for the whole project; trim, split and duplicate its
+  clip on the timeline to make texts that appear at set times (lyrics).
 
 ### Visualizer plugins
 

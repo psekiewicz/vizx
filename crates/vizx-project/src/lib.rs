@@ -60,4 +60,6 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 ///   sensitivity and a release time. Older reactions keep working.
 /// - 12: video files as a kind of media.
 /// - 13: text elements as a kind of media.
-pub const CURRENT_FORMAT_VERSION: u32 = 13;
+/// - 14: a clip records where in its media it begins
+///   (`source_offset_milliseconds`), so clips can be trimmed and split.
+pub const CURRENT_FORMAT_VERSION: u32 = 14;

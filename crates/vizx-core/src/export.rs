@@ -443,14 +443,14 @@ mod tests {
         let samples = (0..(seconds * rate) as usize)
             .map(|index| 0.5 * (std::f32::consts::TAU * 440.0 * index as f32 / rate as f32).sin())
             .collect();
-        vec![PlaybackSource {
-            audio: Arc::new(DecodedAudio {
+        vec![PlaybackSource::whole(
+            Arc::new(DecodedAudio {
                 sample_rate: rate as u32,
                 channel_count: 1,
                 samples,
             }),
-            start_seconds: 0.0,
-        }]
+            0.0,
+        )]
     }
 
     fn image_layer(path: &Path, placement: Placement) -> ExportLayer {
@@ -542,7 +542,7 @@ mod tests {
         assert!(progress_receiver.try_recv().is_ok());
 
         let size = probe_video(&ffmpeg, &output);
-        let mut reader = VideoReader::open(&ffmpeg, &output, (64, 48), 10).unwrap();
+        let mut reader = VideoReader::open(&ffmpeg, &output, (64, 48), 10, 0.0).unwrap();
         let mut pixels = Vec::new();
         reader.read_frame(&mut pixels).unwrap();
         drop(reader);

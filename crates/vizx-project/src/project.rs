@@ -166,6 +166,226 @@ impl Project {
         true
     }
 
+    /// A clip and the track it is on.
+    pub fn clip(&self, id: ClipId) -> Option<(&Track, &Clip)> {
+        self.tracks.iter().find_map(|track| {
+            let clip = track.clips.iter().find(|clip| clip.id == id)?;
+            Some((track, clip))
+        })
+    }
+
+    /// How long the media of a clip is, in milliseconds, if it has a length
+    /// of its own. Only audio has: a visualizer, an image or a text lasts as
+    /// long as its clip, and a video starts over when it ends.
+    fn media_length_milliseconds(&self, clip: &Clip) -> Option<u64> {
+        let audio = self.media_source(clip.media)?.audio()?;
+        Some(audio.duration_milliseconds)
+    }
+
+    /// Whether trimming a clip at its left edge skips the beginning of its
+    /// media (audio, video) rather than just starting the clip later.
+    fn has_source_time(&self, clip: &Clip) -> bool {
+        self.media_source(clip.media)
+            .is_some_and(|media| media.audio().is_some() || media.video().is_some())
+    }
+
+    /// Moves a clip along the timeline so that it starts at
+    /// `start_milliseconds`. Returns `true` only if the clip moved.
+    pub fn move_clip(&mut self, id: ClipId, start_milliseconds: u64) -> bool {
+        let has_moved = match self.clip_mut(id) {
+            Some(clip) if clip.start_milliseconds != start_milliseconds => {
+                clip.start_milliseconds = start_milliseconds;
+                true
+            }
+            _ => false,
+        };
+        self.grow_to_fit_clips();
+        has_moved
+    }
+
+    /// Moves the left edge of a clip to `start_milliseconds`, keeping its
+    /// right edge where it is. For audio and video this also changes where
+    /// in the file the clip begins, so the rest of it stays in place.
+    ///
+    /// The edge stops where the clip would become too short, and where
+    /// there is no more media before it. Returns `true` only if this
+    /// changed something.
+    pub fn trim_clip_start(&mut self, id: ClipId, start_milliseconds: u64) -> bool {
+        let Some((_, clip)) = self.clip(id) else {
+            return false;
+        };
+        let has_source_time = self.has_source_time(clip);
+        let end = clip.end_milliseconds();
+        // With media before the clip's start, the edge can go left by as
+        // much as was skipped so far; otherwise it is free.
+        let earliest = if has_source_time {
+            clip.start_milliseconds
+                .saturating_sub(clip.source_offset_milliseconds)
+        } else {
+            0
+        };
+        let latest = end.saturating_sub(Clip::MIN_DURATION_MILLISECONDS);
+        let new_start = start_milliseconds.clamp(earliest.min(latest), latest);
+
+        let Some(clip) = self.clip_mut(id) else {
+            return false;
+        };
+        if new_start == clip.start_milliseconds {
+            return false;
+        }
+        if has_source_time {
+            // Later start: more is skipped. Earlier start: less.
+            clip.source_offset_milliseconds = (clip.source_offset_milliseconds + new_start)
+                .saturating_sub(clip.start_milliseconds);
+        }
+        clip.start_milliseconds = new_start;
+        clip.duration_milliseconds = end - new_start;
+        true
+    }
+
+    /// Moves the right edge of a clip to `end_milliseconds`, keeping its
+    /// left edge where it is. The edge stops where the clip would become
+    /// too short, and (for audio) at the end of the file. Returns `true`
+    /// only if this changed something.
+    pub fn trim_clip_end(&mut self, id: ClipId, end_milliseconds: u64) -> bool {
+        let Some((_, clip)) = self.clip(id) else {
+            return false;
+        };
+        let start = clip.start_milliseconds;
+        let shortest = Clip::MIN_DURATION_MILLISECONDS;
+        let longest = self
+            .media_length_milliseconds(clip)
+            .map_or(u64::MAX, |length| {
+                length.saturating_sub(clip.source_offset_milliseconds)
+            })
+            .max(shortest);
+        let new_duration = end_milliseconds
+            .saturating_sub(start)
+            .clamp(shortest, longest);
+
+        let has_changed = match self.clip_mut(id) {
+            Some(clip) if clip.duration_milliseconds != new_duration => {
+                clip.duration_milliseconds = new_duration;
+                true
+            }
+            _ => false,
+        };
+        self.grow_to_fit_clips();
+        has_changed
+    }
+
+    /// Cuts a clip in two at `at_milliseconds` of project time. The first
+    /// part keeps the clip's id; the id of the new second part is returned.
+    /// `None` if the moment is not inside the clip, or too close to one of
+    /// its edges.
+    ///
+    /// Both parts keep the clip's settings. A text gets a copy of its own,
+    /// so the two parts can say different things afterwards.
+    pub fn split_clip(&mut self, id: ClipId, at_milliseconds: u64) -> Option<ClipId> {
+        let (track, clip) = self.clip(id)?;
+        let track_id = track.id;
+        let shortest = Clip::MIN_DURATION_MILLISECONDS;
+        if at_milliseconds < clip.start_milliseconds + shortest
+            || at_milliseconds + shortest > clip.end_milliseconds()
+        {
+            return None;
+        }
+        let first_duration = at_milliseconds - clip.start_milliseconds;
+        let has_source_time = self.has_source_time(clip);
+
+        let mut second = clip.clone();
+        second.id = ClipId(self.next_clip_id);
+        self.next_clip_id += 1;
+        second.start_milliseconds = at_milliseconds;
+        second.duration_milliseconds -= first_duration;
+        if has_source_time {
+            second.source_offset_milliseconds += first_duration;
+        }
+        second.media = self.own_media_for_copy(second.media);
+        let second_id = second.id;
+
+        self.clip_mut(id)?.duration_milliseconds = first_duration;
+        self.tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)?
+            .clips
+            .push(second);
+        Some(second_id)
+    }
+
+    /// Adds a copy of a clip right after it on the same track and returns
+    /// the copy's id. A text gets a copy of its own to edit.
+    pub fn duplicate_clip(&mut self, id: ClipId) -> Option<ClipId> {
+        let (track, clip) = self.clip(id)?;
+        let track_id = track.id;
+
+        let mut copy = clip.clone();
+        copy.start_milliseconds = clip.end_milliseconds();
+        copy.id = ClipId(self.next_clip_id);
+        self.next_clip_id += 1;
+        copy.media = self.own_media_for_copy(copy.media);
+        let copy_id = copy.id;
+
+        self.tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)?
+            .clips
+            .push(copy);
+        self.grow_to_fit_clips();
+        Some(copy_id)
+    }
+
+    /// Removes a clip. Media that no clip uses any more leaves the media
+    /// library too. Returns `false` if no clip has this id.
+    pub fn remove_clip(&mut self, id: ClipId) -> bool {
+        let Some((_, clip)) = self.clip(id) else {
+            return false;
+        };
+        let media_id = clip.media;
+        for track in &mut self.tracks {
+            track.clips.retain(|clip| clip.id != id);
+        }
+
+        let is_still_used = self
+            .tracks
+            .iter()
+            .flat_map(|track| &track.clips)
+            .any(|clip| clip.media == media_id);
+        if !is_still_used {
+            self.media.retain(|source| source.id != media_id);
+        }
+        true
+    }
+
+    /// The media a copied clip should use: files are shared between clips,
+    /// but a text is duplicated, because each copy is edited on its own.
+    fn own_media_for_copy(&mut self, media_id: MediaId) -> MediaId {
+        let Some(source) = self
+            .media_source(media_id)
+            .filter(|source| source.text().is_some())
+        else {
+            return media_id;
+        };
+        let mut copy = source.clone();
+        copy.id = MediaId(self.next_media_id);
+        self.next_media_id += 1;
+        let copy_id = copy.id;
+        self.media.push(copy);
+        copy_id
+    }
+
+    /// Makes the project long enough to contain every clip. It never gets
+    /// shorter this way.
+    fn grow_to_fit_clips(&mut self) {
+        let last_end = self
+            .tracks
+            .iter()
+            .map(Track::end_milliseconds)
+            .max()
+            .unwrap_or(0);
+        self.settings.duration_milliseconds = self.settings.duration_milliseconds.max(last_end);
+    }
+
     /// The audio tracks, from top to bottom.
     pub fn audio_tracks(&self) -> impl Iterator<Item = &Track> {
         self.tracks
@@ -241,6 +461,7 @@ impl Project {
             media: media_id,
             start_milliseconds: 0,
             duration_milliseconds: properties.duration_milliseconds,
+            source_offset_milliseconds: 0,
             audio_input: AudioInput::Mix,
             placement: Placement::FULL,
             parameters: BTreeMap::new(),
@@ -369,6 +590,7 @@ impl Project {
             media: media_id,
             start_milliseconds: 0,
             duration_milliseconds: self.settings.duration_milliseconds,
+            source_offset_milliseconds: 0,
             audio_input: AudioInput::Mix,
             placement: covering_placement(
                 (properties.width, properties.height),
@@ -407,6 +629,7 @@ impl Project {
             media: media_id,
             start_milliseconds: 0,
             duration_milliseconds: self.settings.duration_milliseconds,
+            source_offset_milliseconds: 0,
             audio_input: AudioInput::Mix,
             placement: Placement::FULL,
             parameters: BTreeMap::new(),
@@ -1242,6 +1465,144 @@ mod tests {
             project.media_source(audio_id).unwrap().display_name(),
             "song.mp3"
         );
+    }
+
+    /// Start, length and source offset of a clip.
+    fn timing(project: &Project, id: ClipId) -> (u64, u64, u64) {
+        let (_, clip) = project.clip(id).unwrap();
+        (
+            clip.start_milliseconds,
+            clip.duration_milliseconds,
+            clip.source_offset_milliseconds,
+        )
+    }
+
+    #[test]
+    fn an_audio_clip_is_trimmed_within_its_file_and_keeps_its_content_in_place() {
+        let mut project = Project::with_starter_tracks();
+        let (_, track) = project.import_audio("song.wav", audio(10_000));
+        let id = project.track(track).unwrap().clips[0].id;
+
+        // Cut off the first 2 s: what was at 2 s of the file stays at 2 s
+        // of the project.
+        assert!(project.trim_clip_start(id, 2_000));
+        assert_eq!(timing(&project, id), (2_000, 8_000, 2_000));
+        // Bring 1 s of it back.
+        assert!(project.trim_clip_start(id, 1_000));
+        assert_eq!(timing(&project, id), (1_000, 9_000, 1_000));
+        // There is nothing before the start of the file.
+        project.trim_clip_start(id, 0);
+        project.move_clip(id, 5_000);
+        assert!(!project.trim_clip_start(id, 0));
+        assert_eq!(timing(&project, id), (5_000, 10_000, 0));
+
+        // The right edge: shorter, and never beyond the end of the file.
+        assert!(project.trim_clip_end(id, 9_000));
+        assert_eq!(timing(&project, id), (5_000, 4_000, 0));
+        project.trim_clip_end(id, 99_000);
+        assert_eq!(timing(&project, id), (5_000, 10_000, 0));
+        // A clip cannot be trimmed away completely.
+        project.trim_clip_end(id, 0);
+        assert_eq!(timing(&project, id).1, Clip::MIN_DURATION_MILLISECONDS);
+        project.trim_clip_end(id, 15_000);
+        project.trim_clip_start(id, 99_000);
+        assert_eq!(timing(&project, id).1, Clip::MIN_DURATION_MILLISECONDS);
+    }
+
+    #[test]
+    fn a_visual_clip_is_trimmed_freely_and_the_project_grows_with_its_clips() {
+        let mut project = Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 10_000;
+        let (_, layer) = project.add_milkdrop_preset("a.milk");
+        let id = project.track(layer).unwrap().clips[0].id;
+
+        // A visualizer has no "beginning of the file" to skip.
+        assert!(project.trim_clip_start(id, 4_000));
+        assert_eq!(timing(&project, id), (4_000, 6_000, 0));
+        assert!(project.trim_clip_start(id, 1_000));
+        assert_eq!(timing(&project, id), (1_000, 9_000, 0));
+
+        // It can be made longer than the project, which then grows.
+        assert!(project.trim_clip_end(id, 12_000));
+        assert_eq!(project.settings.duration_milliseconds, 12_000);
+        assert!(project.move_clip(id, 5_000));
+        assert!(!project.move_clip(id, 5_000));
+        assert_eq!(project.settings.duration_milliseconds, 16_000);
+        // Moving back does not shorten the project again.
+        project.move_clip(id, 0);
+        assert_eq!(project.settings.duration_milliseconds, 16_000);
+    }
+
+    #[test]
+    fn splitting_gives_two_clips_that_together_are_the_original() {
+        let mut project = Project::with_starter_tracks();
+        let (_, track) = project.import_audio("song.wav", audio(10_000));
+        let first = project.track(track).unwrap().clips[0].id;
+        project.trim_clip_start(first, 1_000); // offset 1 s
+
+        let second = project.split_clip(first, 4_000).unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(timing(&project, first), (1_000, 3_000, 1_000));
+        // The second part continues in the file where the first one stops.
+        assert_eq!(timing(&project, second), (4_000, 6_000, 4_000));
+        assert_eq!(project.track(track).unwrap().clips.len(), 2);
+        // Both use the same file; it is in the library once.
+        assert_eq!(project.media().len(), 1);
+
+        // Not outside the clip, and not so close to an edge that a part
+        // would be too short.
+        assert!(project.split_clip(first, 500).is_none());
+        assert!(project.split_clip(first, 4_000).is_none());
+        assert!(project.split_clip(first, 1_050).is_none());
+    }
+
+    #[test]
+    fn copies_of_a_text_can_be_edited_separately_and_unused_media_is_removed() {
+        let mut project = Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 10_000;
+        let (_, layer) = project.add_text(TextProperties::default(), Placement::FULL);
+        let first = project.track(layer).unwrap().clips[0].id;
+        project.trim_clip_end(first, 2_000);
+
+        // A second line right after the first one.
+        let second = project.duplicate_clip(first).unwrap();
+        assert_eq!(timing(&project, second), (2_000, 2_000, 0));
+        let second_media = project.clip(second).unwrap().1.media;
+        assert_ne!(project.clip(first).unwrap().1.media, second_media);
+        let new_line = TextProperties {
+            text: "Second line".to_owned(),
+            ..TextProperties::default()
+        };
+        project.set_text(second_media, new_line, Placement::FULL);
+        let names: Vec<&str> = project
+            .media()
+            .iter()
+            .map(MediaSource::display_name)
+            .collect();
+        assert_eq!(names, ["Text", "Second line"]);
+
+        // Splitting a text also gives the second part its own text.
+        let third = project.split_clip(second, 3_000).unwrap();
+        assert_eq!(project.media().len(), 3);
+
+        assert!(project.remove_clip(second));
+        assert!(!project.remove_clip(second));
+        assert_eq!(project.media().len(), 2);
+        assert!(project.clip(first).is_some() && project.clip(third).is_some());
+    }
+
+    #[test]
+    fn removing_one_of_two_clips_of_a_file_keeps_the_file_in_the_library() {
+        let mut project = Project::with_starter_tracks();
+        let (_, track) = project.import_audio("song.wav", audio(10_000));
+        let first = project.track(track).unwrap().clips[0].id;
+        let second = project.split_clip(first, 5_000).unwrap();
+
+        project.remove_clip(first);
+        assert_eq!(project.media().len(), 1);
+        project.remove_clip(second);
+        assert!(project.media().is_empty());
     }
 
     #[test]

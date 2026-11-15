@@ -53,6 +53,9 @@ pub fn audio_sources(
                 Some(loaded) => sources.push(PlaybackSource {
                     audio: loaded.audio.clone(),
                     start_seconds: clip.start_milliseconds as f64 / 1000.0,
+                    // A trimmed clip plays only its part of the file.
+                    offset_seconds: clip.source_offset_milliseconds as f64 / 1000.0,
+                    duration_seconds: Some(clip.duration_milliseconds as f64 / 1000.0),
                 }),
                 None => clips_still_loading += 1,
             }
@@ -77,6 +80,7 @@ pub fn frame_source(
         return Ok(FrameSource::Video {
             file: media.path.clone().into(),
             ffmpeg: ffmpeg.to_owned(),
+            start_offset_seconds: clip.source_offset_milliseconds as f64 / 1000.0,
         });
     }
     if media.is_visualizer_plugin() {
@@ -256,14 +260,14 @@ mod tests {
                 }
             })
             .collect();
-        vec![PlaybackSource {
-            audio: Arc::new(DecodedAudio {
+        vec![PlaybackSource::whole(
+            Arc::new(DecodedAudio {
                 sample_rate: rate as u32,
                 channel_count: 1,
                 samples,
             }),
-            start_seconds: 0.0,
-        }]
+            0.0,
+        )]
     }
 
     #[test]

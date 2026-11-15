@@ -7,7 +7,7 @@ use crate::ui::workspace::PanelKind;
 pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| file_menu(ui, app));
-        ui.menu_button("Edit", edit_menu);
+        ui.menu_button("Edit", |ui| edit_menu(ui, app));
         ui.menu_button("View", |ui| view_menu(ui, app));
         ui.menu_button("Playback", |ui| playback_menu(ui, app));
         ui.menu_button("Help", |ui| help_menu(ui, app));
@@ -67,14 +67,29 @@ fn command_item(
     }
 }
 
-fn edit_menu(ui: &mut egui::Ui) {
+fn edit_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
     unavailable_item(ui, "Undo", "Ctrl+Z");
     unavailable_item(ui, "Redo", "Ctrl+Shift+Z");
     ui.separator();
     unavailable_item(ui, "Cut", "Ctrl+X");
     unavailable_item(ui, "Copy", "Ctrl+C");
     unavailable_item(ui, "Paste", "Ctrl+V");
-    unavailable_item(ui, "Delete", "Del");
+    command_item(ui, app, "Delete", "Del", AppCommand::DeleteSelection);
+    ui.separator();
+    command_item(
+        ui,
+        app,
+        "Split Clip at Playhead",
+        "Ctrl+K",
+        AppCommand::SplitClip,
+    );
+    command_item(
+        ui,
+        app,
+        "Duplicate Clip",
+        "Ctrl+D",
+        AppCommand::DuplicateClip,
+    );
 }
 
 fn view_menu(ui: &mut egui::Ui, app: &mut VizxApp) {

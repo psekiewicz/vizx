@@ -16,12 +16,33 @@ use cpal::{FromSample, SampleFormat, SizedSample};
 
 use crate::DecodedAudio;
 
+/// Far below the length of one sample; see its use in `mix_sources`.
+const END_TOLERANCE_SECONDS: f64 = 1e-9;
+
 /// One piece of audio placed on the project timeline.
 #[derive(Debug, Clone)]
 pub struct PlaybackSource {
     pub audio: Arc<DecodedAudio>,
     /// Project time at which this audio begins.
     pub start_seconds: f64,
+    /// Where in the audio it begins, in seconds: 0 plays it from its start,
+    /// more skips the beginning (a clip trimmed at its left edge).
+    pub offset_seconds: f64,
+    /// How long it plays, in seconds. `None` plays to the end of the audio
+    /// (a clip trimmed at its right edge stops earlier).
+    pub duration_seconds: Option<f64>,
+}
+
+impl PlaybackSource {
+    /// The whole of `audio`, beginning at `start_seconds` of project time.
+    pub fn whole(audio: Arc<DecodedAudio>, start_seconds: f64) -> Self {
+        Self {
+            audio,
+            start_seconds,
+            offset_seconds: 0.0,
+            duration_seconds: None,
+        }
+    }
 }
 
 /// Why audio could not be played.
@@ -281,12 +302,19 @@ fn mix_sources(
         let mut right = 0.0f32;
         for source in sources {
             let seconds_into_source = project_seconds - source.start_seconds;
-            if seconds_into_source < 0.0 {
-                continue; // this source has not started yet
+            // Times like 0.3 - 0.1 are not exactly 0.2 in floating point;
+            // the tiny tolerance keeps a clip from playing one sample past
+            // its end because of that.
+            let has_ended = source
+                .duration_seconds
+                .is_some_and(|duration| seconds_into_source + END_TOLERANCE_SECONDS >= duration);
+            if seconds_into_source < 0.0 || has_ended {
+                continue; // not started yet, or already over
             }
+            let seconds_into_audio = seconds_into_source + source.offset_seconds;
             let [source_left, source_right] = source
                 .audio
-                .stereo_at(seconds_into_source * f64::from(source.audio.sample_rate));
+                .stereo_at(seconds_into_audio * f64::from(source.audio.sample_rate));
             left += source_left;
             right += source_right;
         }
@@ -312,14 +340,14 @@ mod tests {
     use super::*;
 
     fn source(sample_rate: u32, samples: &[f32], start_seconds: f64) -> PlaybackSource {
-        PlaybackSource {
-            audio: Arc::new(DecodedAudio {
+        PlaybackSource::whole(
+            Arc::new(DecodedAudio {
                 sample_rate,
                 channel_count: 1,
                 samples: samples.to_vec(),
             }),
             start_seconds,
-        }
+        )
     }
 
     fn shared(sources: Vec<PlaybackSource>, position: u64, end: u64) -> SharedState {
@@ -360,6 +388,22 @@ mod tests {
         mix_sources(&mut output, 1, 10, 0, &sources);
 
         assert_eq!(output, [0.0, 0.0, 0.5, 0.5, 0.0]);
+    }
+
+    #[test]
+    fn a_trimmed_source_plays_only_its_middle_part() {
+        // Skip the first 0.2 s of the audio and play 0.2 s of it, starting
+        // 0.1 s into the project.
+        let sources = [PlaybackSource {
+            offset_seconds: 0.2,
+            duration_seconds: Some(0.2),
+            ..source(10, &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], 0.1)
+        }];
+        let mut output = [0.0; 5];
+
+        mix_sources(&mut output, 1, 10, 0, &sources);
+
+        assert_eq!(output, [0.0, 0.3, 0.4, 0.0, 0.0]);
     }
 
     #[test]

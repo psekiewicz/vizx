@@ -115,7 +115,7 @@ pub fn show(
             egui::Sense::click_and_drag(),
         );
         if response.clicked() || response.drag_started() {
-            session.select(Selection::Track(layer.track_id));
+            session.select(Selection::Clip(layer.clip_id));
         }
         let response = response.on_hover_cursor(CursorIcon::Move);
         follow_drag(
@@ -130,9 +130,8 @@ pub fn show(
     }
 
     // Frame and handles of the selected layer, above every picture.
-    let selection = session.selection();
     for layer in layers {
-        if selection != Selection::Track(layer.track_id) {
+        if !session.is_clip_selected(layer.track_id, layer.clip_id) {
             continue;
         }
         let placement = shown_placement(layer, drag);

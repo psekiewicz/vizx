@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use vizx_audio::AudioFileError;
 use vizx_project::{
-    AudioProperties, ImageProperties, MediaId, Placement, Project, ProjectFileError,
+    AudioProperties, ClipId, ImageProperties, MediaId, Placement, Project, ProjectFileError,
     TextProperties, Track, TrackId, TrackKind,
 };
 
@@ -79,12 +79,81 @@ impl EditorSession {
         self.selection = selection;
     }
 
-    /// The selected track, if a track is selected and still exists.
+    /// The selected track, or the track of the selected clip, if it still
+    /// exists.
     pub fn selected_track(&self) -> Option<&Track> {
         match self.selection {
             Selection::Track(id) => self.project.track(id),
+            Selection::Clip(id) => self.project.clip(id).map(|(track, _)| track),
             Selection::Nothing => None,
         }
+    }
+
+    /// The selected clip, if a clip is selected and still exists.
+    pub fn selected_clip_id(&self) -> Option<ClipId> {
+        match self.selection {
+            Selection::Clip(id) if self.project.clip(id).is_some() => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Whether a clip should be shown as selected: it is selected itself,
+    /// or its whole track is.
+    pub fn is_clip_selected(&self, track_id: TrackId, clip_id: ClipId) -> bool {
+        match self.selection {
+            Selection::Clip(id) => id == clip_id,
+            Selection::Track(id) => id == track_id,
+            Selection::Nothing => false,
+        }
+    }
+
+    /// Removes what is selected: the clip, or the whole track. Returns a
+    /// short description of what was removed, or `None` if nothing was.
+    pub fn delete_selection(&mut self) -> Option<&'static str> {
+        match self.selection {
+            Selection::Clip(id) => {
+                // Afterwards the clip's track is selected, so the user
+                // stays where they were working.
+                let track_id = self.project.clip(id).map(|(track, _)| track.id)?;
+                self.project.remove_clip(id);
+                self.has_unsaved_changes = true;
+                self.selection = Selection::Track(track_id);
+                Some("clip")
+            }
+            Selection::Track(id) => {
+                self.project.track(id)?;
+                self.remove_track(id);
+                Some("track")
+            }
+            Selection::Nothing => None,
+        }
+    }
+
+    /// Cuts the selected clip in two at the playhead. The first part stays
+    /// selected. Returns `false` if no clip is selected or the playhead is
+    /// not inside it.
+    pub fn split_selected_clip(&mut self) -> bool {
+        let Some(id) = self.selected_clip_id() else {
+            return false;
+        };
+        let at_milliseconds = (self.playhead_seconds * 1000.0).round() as u64;
+        let was_split = self.project.split_clip(id, at_milliseconds).is_some();
+        self.has_unsaved_changes |= was_split;
+        was_split
+    }
+
+    /// Puts a copy of the selected clip right after it and selects the
+    /// copy. Returns `false` if no clip is selected.
+    pub fn duplicate_selected_clip(&mut self) -> bool {
+        let Some(copy) = self
+            .selected_clip_id()
+            .and_then(|id| self.project.duplicate_clip(id))
+        else {
+            return false;
+        };
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Clip(copy);
+        true
     }
 
     /// Adds a track to the timeline and selects it.
@@ -380,6 +449,42 @@ mod tests {
             crate::resolve_preset_path(&preset.path, Some(&root)),
             Some(root.join("pack/Fractal/Swirl.milk"))
         );
+    }
+
+    #[test]
+    fn a_selected_clip_can_be_split_duplicated_and_deleted() {
+        let mut session = EditorSession::new_untitled();
+        let layer = session.add_text().unwrap();
+        let clip = session.project().track(layer).unwrap().clips[0].id;
+        session.edit_project(|project| project.trim_clip_end(clip, 4_000));
+
+        // Nothing happens while only the track is selected.
+        assert!(!session.split_selected_clip());
+        assert!(!session.duplicate_selected_clip());
+
+        session.select(Selection::Clip(clip));
+        assert_eq!(session.selected_track().unwrap().id, layer);
+        assert!(session.is_clip_selected(layer, clip));
+        // The playhead is at 0, which is the clip's edge, not inside it.
+        assert!(!session.split_selected_clip());
+        session.set_playhead_seconds(1.0);
+        assert!(session.split_selected_clip());
+        assert_eq!(session.project().track(layer).unwrap().clips.len(), 2);
+        assert_eq!(session.selected_clip_id(), Some(clip));
+
+        assert!(session.duplicate_selected_clip());
+        let copy = session.selected_clip_id().unwrap();
+        assert_ne!(copy, clip);
+        assert_eq!(session.project().track(layer).unwrap().clips.len(), 3);
+
+        // Deleting the clip leaves its track selected; deleting again
+        // removes the track.
+        assert_eq!(session.delete_selection(), Some("clip"));
+        assert_eq!(session.selection(), Selection::Track(layer));
+        assert_eq!(session.project().track(layer).unwrap().clips.len(), 2);
+        assert_eq!(session.delete_selection(), Some("track"));
+        assert!(session.project().track(layer).is_none());
+        assert_eq!(session.delete_selection(), None);
     }
 
     #[test]

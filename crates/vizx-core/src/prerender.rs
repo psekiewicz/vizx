@@ -46,6 +46,8 @@ pub enum FrameSource {
         file: PathBuf,
         /// The `ffmpeg` program to decode it with.
         ffmpeg: PathBuf,
+        /// Where in the video the clip begins, in seconds.
+        start_offset_seconds: f64,
     },
 }
 
@@ -80,7 +82,11 @@ impl FrameSource {
                 parameters,
                 version,
             } => format!("{} v{version} {parameters:?}", folder.display()),
-            Self::Video { file, .. } => format!("video {}", file.display()),
+            Self::Video {
+                file,
+                start_offset_seconds,
+                ..
+            } => format!("video {} from {start_offset_seconds:.3}s", file.display()),
         }
     }
 }
@@ -118,9 +124,11 @@ impl PrerenderJob {
             // The address of the shared samples identifies the audio file
             // for as long as it stays loaded.
             key.push_str(&format!(
-                "|audio {:p} at {:.3}s",
+                "|audio {:p} at {:.3}s from {:.3}s for {:?}",
                 Arc::as_ptr(&source.audio),
-                source.start_seconds
+                source.start_seconds,
+                source.offset_seconds,
+                source.duration_seconds
             ));
         }
         key
@@ -459,11 +467,16 @@ impl FrameRenderer {
                     analyzer: AudioAnalyzer::new(ANALYSIS_SAMPLE_RATE),
                 }
             }
-            FrameSource::Video { file, ffmpeg } => Drawing::Video(VideoReader::open(
+            FrameSource::Video {
+                file,
+                ffmpeg,
+                start_offset_seconds,
+            } => Drawing::Video(VideoReader::open(
                 ffmpeg,
                 file,
                 (job.width, job.height),
                 job.frames_per_second.max(1),
+                *start_offset_seconds,
             )?),
         };
         Ok(Self {
@@ -676,14 +689,14 @@ mod tests {
     }
 
     fn silent_source(start_seconds: f64) -> PlaybackSource {
-        PlaybackSource {
-            audio: Arc::new(DecodedAudio {
+        PlaybackSource::whole(
+            Arc::new(DecodedAudio {
                 sample_rate: 44_100,
                 channel_count: 2,
                 samples: vec![0.0; 16],
             }),
             start_seconds,
-        }
+        )
     }
 
     #[test]

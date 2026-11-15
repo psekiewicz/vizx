@@ -117,16 +117,20 @@ pub struct VideoReader {
 }
 
 impl VideoReader {
-    /// Starts decoding `file`, converted to the given size and frame rate.
-    /// The video starts over when it ends, so it never runs out of frames.
+    /// Starts decoding `file`, converted to the given size and frame rate,
+    /// beginning `start_seconds` into the video. The video starts over when
+    /// it ends, so it never runs out of frames.
     pub fn open(
         ffmpeg: &Path,
         file: &Path,
         (width, height): (u32, u32),
         frames_per_second: u32,
+        start_seconds: f64,
     ) -> Result<Self, String> {
         let mut child = quiet_command(ffmpeg)
-            .args(["-v", "error", "-stream_loop", "-1", "-i"])
+            .args(["-v", "error", "-stream_loop", "-1"])
+            .args(["-ss", &format!("{:.3}", start_seconds.max(0.0))])
+            .arg("-i")
             .arg(file)
             .args(["-an", "-vf"])
             .arg(format!("scale={width}:{height},fps={frames_per_second}"))
@@ -342,7 +346,7 @@ mod tests {
 
         let size = probe_video(&ffmpeg, &file);
         // Read at half the size and the same frame rate.
-        let mut reader = VideoReader::open(&ffmpeg, &file, (32, 24), 12).unwrap();
+        let mut reader = VideoReader::open(&ffmpeg, &file, (32, 24), 12, 0.0).unwrap();
         let mut frames = Vec::new();
         let mut pixels = Vec::new();
         // 14 frames from a 12 frame video: it starts over.
@@ -351,7 +355,6 @@ mod tests {
             frames.push([pixels[0], pixels[1], pixels[2], pixels[3]]);
         }
         drop(reader);
-        let _ = std::fs::remove_file(&file);
 
         assert_eq!(size, Ok((64, 48)));
         assert_eq!(pixels.len(), 32 * 24 * 4);
@@ -361,6 +364,13 @@ mod tests {
         assert!(is_red(frames[1]), "{:?}", frames[1]);
         assert!(is_blue(frames[10]), "{:?}", frames[10]);
         assert!(is_red(frames[13]), "after looping: {:?}", frames[13]);
+
+        // Starting 0.75 s in (frame 9 of 12) skips the red half.
+        let mut late = VideoReader::open(&ffmpeg, &file, (32, 24), 12, 0.75).unwrap();
+        late.read_frame(&mut pixels).unwrap();
+        assert!(is_blue([pixels[0], pixels[1], pixels[2], pixels[3]]));
+        drop(late);
+        let _ = std::fs::remove_file(&file);
     }
 
     #[test]

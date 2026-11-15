@@ -13,7 +13,8 @@ single project and share one timeline.
 > playback, pre-rendered MilkDrop presets with a bundled preset collection, and
 > visualizer plugins (WGSL shaders) and images, all with transparency, that can
 > be moved and resized in the preview and react to the sound, video files as
-> layers or background, text, and export to MP4 exist. There is no export yet.
+> layers or background, text, clip editing on the timeline (move, trim,
+> split) and export to MP4 exist. There is no export yet.
 
 ## Technology
 

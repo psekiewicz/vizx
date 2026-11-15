@@ -1,4 +1,4 @@
-use vizx_project::TrackId;
+use vizx_project::{ClipId, TrackId};
 
 /// What the user currently has selected in the editor.
 ///
@@ -9,5 +9,9 @@ use vizx_project::TrackId;
 pub enum Selection {
     #[default]
     Nothing,
+    /// A whole track (a visual layer or an audio track).
     Track(TrackId),
+    /// One clip on a track. Its track counts as selected too wherever only
+    /// tracks matter.
+    Clip(ClipId),
 }

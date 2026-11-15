@@ -60,7 +60,14 @@ fn track_properties(
         ui.add_space(8.0);
         ui.label(egui::RichText::new("Content").strong());
         ui.separator();
-        for clip in &track.clips {
+        // With one clip selected, only that clip is shown; with the whole
+        // track selected, all of its clips.
+        let selected_clip = session.selected_clip_id();
+        let shown_clips = track
+            .clips
+            .iter()
+            .filter(|clip| selected_clip.is_none_or(|id| id == clip.id));
+        for clip in shown_clips {
             let Some(source) = session.project().media_source(clip.media) else {
                 continue;
             };
@@ -96,6 +103,7 @@ fn track_properties(
                     .small()
                     .color(theme::TEXT_MUTED),
             );
+            timing_editor(ui, session, clip);
             // What the text says comes first; where and how it is shown
             // follows, as for every other element.
             if let Some((media_id, text)) = text {
@@ -202,6 +210,42 @@ fn placement_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
     .any(|(new, old)| (new - old).abs() > 1e-9);
     if has_changed {
         session.edit_project(|project| project.set_clip_placement(clip.id, edited));
+    }
+}
+
+/// When a clip starts and how long it lasts, as numbers. The same values
+/// change when the clip is dragged or trimmed on the timeline.
+fn timing_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {
+    let mut start_seconds = clip.start_milliseconds as f64 / 1000.0;
+    let mut length_seconds = clip.duration_milliseconds as f64 / 1000.0;
+    ui.horizontal(|ui| {
+        ui.label("Start");
+        ui.add(
+            egui::DragValue::new(&mut start_seconds)
+                .range(0.0..=36_000.0)
+                .speed(0.05)
+                .max_decimals(2)
+                .suffix(" s"),
+        );
+        ui.label("Length");
+        ui.add(
+            egui::DragValue::new(&mut length_seconds)
+                .range(0.1..=36_000.0)
+                .speed(0.05)
+                .max_decimals(2)
+                .suffix(" s"),
+        );
+    });
+
+    let new_start = (start_seconds * 1000.0).round() as u64;
+    let new_length = (length_seconds * 1000.0).round() as u64;
+    if new_start != clip.start_milliseconds {
+        session.edit_project(|project| project.move_clip(clip.id, new_start));
+    } else if new_length != clip.duration_milliseconds {
+        // The length changes at the clip's right edge.
+        session.edit_project(|project| {
+            project.trim_clip_end(clip.id, clip.start_milliseconds + new_length)
+        });
     }
 }
 

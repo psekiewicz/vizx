@@ -42,6 +42,12 @@ pub enum AppCommand {
     AddText,
     /// Pick a font file for the text on the selected layer.
     ChooseTextFont,
+    /// Cut the selected clip in two at the playhead.
+    SplitClip,
+    /// Put a copy of the selected clip right after it.
+    DuplicateClip,
+    /// Remove the selected clip, or the selected track.
+    DeleteSelection,
     /// Open the browser for the presets that ship with VizX.
     BrowseMilkdropPresets,
     /// Pick a preset file of the user's own.
@@ -195,7 +201,12 @@ impl VizxApp {
     fn choose_text_font(&mut self, frame: &eframe::Frame) {
         // The text on the selected layer, with its media id.
         let selected_text = self.session.selected_track().and_then(|track| {
-            track.clips.iter().find_map(|clip| {
+            let selected_clip = self.session.selected_clip_id();
+            let clips = track
+                .clips
+                .iter()
+                .filter(|clip| selected_clip.is_none_or(|id| id == clip.id));
+            clips.into_iter().find_map(|clip| {
                 let source = self.session.project().media_source(clip.media)?;
                 Some((source.id, source.text()?.clone()))
             })
@@ -352,6 +363,26 @@ impl VizxApp {
                 };
             }
             AppCommand::ChooseTextFont => self.choose_text_font(frame),
+            AppCommand::SplitClip => {
+                self.status_message = if self.session.split_selected_clip() {
+                    "Clip split at the playhead".to_owned()
+                } else {
+                    "To split, select a clip and put the playhead inside it".to_owned()
+                };
+            }
+            AppCommand::DuplicateClip => {
+                self.status_message = if self.session.duplicate_selected_clip() {
+                    "Clip duplicated".to_owned()
+                } else {
+                    "Select a clip to duplicate it".to_owned()
+                };
+            }
+            AppCommand::DeleteSelection => {
+                self.status_message = match self.session.delete_selection() {
+                    Some(what) => format!("Deleted the {what}"),
+                    None => "Nothing is selected".to_owned(),
+                };
+            }
             AppCommand::BrowseMilkdropPresets => self.preset_browser.open(ctx),
             AppCommand::AddMilkdropPreset => self.add_milkdrop_preset(frame),
             AppCommand::BrowseVisualizers => self.visualizer_browser.is_open = true,
@@ -557,6 +588,14 @@ impl VizxApp {
         // Ctrl+Shift+M and Ctrl+M.
         let shortcuts = [
             (
+                KeyboardShortcut::new(Modifiers::COMMAND, Key::K),
+                AppCommand::SplitClip,
+            ),
+            (
+                KeyboardShortcut::new(Modifiers::COMMAND, Key::D),
+                AppCommand::DuplicateClip,
+            ),
+            (
                 KeyboardShortcut::new(Modifiers::COMMAND, Key::T),
                 AppCommand::AddText,
             ),
@@ -608,6 +647,7 @@ impl VizxApp {
         if !ctx.egui_wants_keyboard_input() {
             for (key, command) in [
                 (Key::Space, AppCommand::TogglePlayback),
+                (Key::Delete, AppCommand::DeleteSelection),
                 (Key::Home, AppCommand::GoToStart),
                 (Key::End, AppCommand::GoToEnd),
             ] {
