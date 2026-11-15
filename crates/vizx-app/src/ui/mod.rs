@@ -49,6 +49,7 @@ pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
         "",
         AppCommand::ImportBackgroundVideo,
     );
+    item(ui, "Text", "Ctrl+T", AppCommand::AddText);
     item(
         ui,
         "MilkDrop Preset...",

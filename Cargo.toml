@@ -68,6 +68,11 @@ symphonia = { version = "0.6", default-features = false, features = [
     "vorbis",
     "wav",
 ] }
+# Reads font files and draws letters as pixels, for text elements.
+ab_glyph = "0.2"
+# The fonts built into egui (data only), so text elements have a default
+# font without VizX shipping one of its own. Must match eframe's version.
+epaint_default_fonts = "0.36"
 # Fast Fourier transform: splits sound into its frequencies (the spectrum).
 rustfft = "6"
 serde = { version = "1", features = ["derive"] }

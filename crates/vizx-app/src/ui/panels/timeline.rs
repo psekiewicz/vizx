@@ -357,7 +357,7 @@ fn show_lanes(
 
                 // The label stays readable at the left edge of the view when
                 // the clip starts off-screen.
-                let file_name = source.map_or("Missing media", |source| source.file_name());
+                let file_name = source.map_or("Missing media", |source| source.display_name());
                 clip_painter.text(
                     egui::pos2(left.max(visible_left) + 6.0, clip_rect.top() + 3.0),
                     Align2::LEFT_TOP,

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AudioInput, AudioProperties, AudioReaction, CURRENT_FORMAT_VERSION, Clip, ClipId,
     ImageProperties, MediaContent, MediaId, MediaSource, Placement, ProjectMetadata,
-    ProjectSettings, Track, TrackId, TrackKind,
+    ProjectSettings, TextProperties, Track, TrackId, TrackKind,
 };
 
 /// Root of all data that belongs to one VizX project.
@@ -479,6 +479,58 @@ impl Project {
             }
             _ => false,
         }
+    }
+
+    /// Adds a text element on a visual layer for the whole project, at the
+    /// given place in the picture.
+    pub fn add_text(
+        &mut self,
+        properties: TextProperties,
+        placement: Placement,
+    ) -> (MediaId, TrackId) {
+        let (media_id, track_id) =
+            self.add_visual(String::new(), MediaContent::Text(properties.sanitized()));
+        if let Some(clip) = self.clip_of_media_mut(media_id) {
+            clip.placement = placement.sanitized();
+        }
+        (media_id, track_id)
+    }
+
+    /// Changes what a text element says or how it looks, and the place it
+    /// takes up in the picture (its size follows from the text). Returns
+    /// `true` only if this changed something.
+    pub fn set_text(
+        &mut self,
+        media_id: MediaId,
+        properties: TextProperties,
+        placement: Placement,
+    ) -> bool {
+        let properties = properties.sanitized();
+        let placement = placement.sanitized();
+        let Some(source) = self.media.iter_mut().find(|source| source.id == media_id) else {
+            return false;
+        };
+        let MediaContent::Text(current) = &mut source.content else {
+            return false;
+        };
+        let has_text_changed = *current != properties;
+        *current = properties;
+
+        let mut has_placement_changed = false;
+        if let Some(clip) = self.clip_of_media_mut(media_id)
+            && clip.placement != placement
+        {
+            clip.placement = placement;
+            has_placement_changed = true;
+        }
+        has_text_changed || has_placement_changed
+    }
+
+    fn clip_of_media_mut(&mut self, media_id: MediaId) -> Option<&mut Clip> {
+        self.tracks
+            .iter_mut()
+            .flat_map(|track| &mut track.clips)
+            .find(|clip| clip.media == media_id)
     }
 
     /// Sets how opaque a clip is as a whole (0 to 1). Returns `true` only
@@ -1149,6 +1201,47 @@ mod tests {
         let (_, background) = project.add_background_video("loop.mp4", size);
         assert_eq!(layer_names(&project), ["Layer 1", "Background", "Audio"]);
         assert_eq!(project.visual_layers_at(0).last().unwrap().0.id, background);
+    }
+
+    #[test]
+    fn a_text_is_an_element_of_the_picture_named_after_its_first_line() {
+        let mut project = Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 10_000;
+        let place = Placement {
+            x: 0.25,
+            y: 0.4,
+            width: 0.5,
+            height: 0.2,
+        };
+
+        let (media_id, layer) = project.add_text(TextProperties::default(), place);
+
+        let source = project.media_source(media_id).unwrap();
+        assert!(source.is_visual() && source.is_still() && !source.is_visualizer());
+        assert_eq!(source.display_name(), "Text");
+        assert_eq!(project.track(layer).unwrap().clips[0].placement, place);
+        assert_eq!(project.visual_layers_at(0).len(), 1);
+
+        let edited = TextProperties {
+            text: "\n  My Song  \nby me".to_owned(),
+            size: 99.0,
+            ..TextProperties::default()
+        };
+        assert!(project.set_text(media_id, edited.clone(), place));
+        assert!(!project.set_text(media_id, edited, place));
+        let source = project.media_source(media_id).unwrap();
+        assert_eq!(source.display_name(), "My Song");
+        assert_eq!(source.text().unwrap().size, TextProperties::SIZE_RANGE.1);
+
+        // Texts are saved with the project.
+        let saved = project.to_vzx_string().unwrap();
+        assert_eq!(Project::from_vzx_str(&saved).unwrap(), project);
+        // A file keeps its file name as its name.
+        let (audio_id, _) = project.import_audio("C:/Music/song.mp3", audio(1000));
+        assert_eq!(
+            project.media_source(audio_id).unwrap().display_name(),
+            "song.mp3"
+        );
     }
 
     #[test]

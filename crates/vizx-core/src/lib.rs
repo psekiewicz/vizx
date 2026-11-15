@@ -14,6 +14,7 @@ mod prerender;
 mod preset_library;
 mod selection;
 mod session;
+mod text;
 mod visualizer_catalog;
 
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
@@ -32,6 +33,7 @@ pub use preset_library::{
 };
 pub use selection::Selection;
 pub use session::{EditorSession, UNTITLED_PROJECT_NAME};
+pub use text::render_text;
 pub use visualizer_catalog::{
     BUNDLED_VISUALIZER_PREFIX, BundledVisualizer, PluginState, VisualizerCatalog,
 };

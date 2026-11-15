@@ -38,6 +38,10 @@ pub enum AppCommand {
     ImportBackgroundVideo,
     /// Write the project as a video file.
     ExportVideo,
+    /// Add a text element in the middle of the picture.
+    AddText,
+    /// Pick a font file for the text on the selected layer.
+    ChooseTextFont,
     /// Open the browser for the presets that ship with VizX.
     BrowseMilkdropPresets,
     /// Pick a preset file of the user's own.
@@ -187,6 +191,34 @@ impl VizxApp {
         };
     }
 
+    /// Lets the user pick a font file for the text on the selected layer.
+    fn choose_text_font(&mut self, frame: &eframe::Frame) {
+        // The text on the selected layer, with its media id.
+        let selected_text = self.session.selected_track().and_then(|track| {
+            track.clips.iter().find_map(|clip| {
+                let source = self.session.project().media_source(clip.media)?;
+                Some((source.id, source.text()?.clone()))
+            })
+        });
+        let Some((media_id, mut text)) = selected_text else {
+            self.status_message = "Select a layer with a text first".to_owned();
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Font", &["ttf", "otf", "ttc"])
+            .set_parent(frame)
+            .pick_file()
+        else {
+            return; // dialog cancelled
+        };
+
+        text.font_path = path.to_string_lossy().into_owned();
+        self.status_message = match self.session.set_text(media_id, text) {
+            Ok(()) => format!("Using font {}", path.display()),
+            Err(problem) => format!("Could not use that font: {problem}"),
+        };
+    }
+
     /// Asks where to save the video and starts exporting in the background.
     fn export_video(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         if self
@@ -313,6 +345,13 @@ impl VizxApp {
             AppCommand::ImportVideo => self.import_video(frame, false),
             AppCommand::ImportBackgroundVideo => self.import_video(frame, true),
             AppCommand::ExportVideo => self.export_video(ctx, frame),
+            AppCommand::AddText => {
+                self.status_message = match self.session.add_text() {
+                    Ok(_) => "Added text; edit it in Properties".to_owned(),
+                    Err(problem) => format!("Could not add text: {problem}"),
+                };
+            }
+            AppCommand::ChooseTextFont => self.choose_text_font(frame),
             AppCommand::BrowseMilkdropPresets => self.preset_browser.open(ctx),
             AppCommand::AddMilkdropPreset => self.add_milkdrop_preset(frame),
             AppCommand::BrowseVisualizers => self.visualizer_browser.is_open = true,
@@ -517,6 +556,10 @@ impl VizxApp {
         // otherwise also match while Shift is held. The same goes for
         // Ctrl+Shift+M and Ctrl+M.
         let shortcuts = [
+            (
+                KeyboardShortcut::new(Modifiers::COMMAND, Key::T),
+                AppCommand::AddText,
+            ),
             (
                 KeyboardShortcut::new(Modifiers::COMMAND, Key::E),
                 AppCommand::ExportVideo,

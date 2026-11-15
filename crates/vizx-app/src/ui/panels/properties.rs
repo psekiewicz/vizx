@@ -1,6 +1,11 @@
 use eframe::egui;
 use vizx_core::{EditorSession, ParameterKind, VisualizerCatalog};
-use vizx_project::{AudioInput, AudioReaction, Clip, Placement, ReactionBand, Track};
+use vizx_project::{
+    AudioInput, AudioReaction, Clip, MediaId, Placement, ReactionBand, TextAlignment,
+    TextProperties, Track,
+};
+
+use crate::app::AppCommand;
 
 use crate::theme;
 use crate::ui::format_duration;
@@ -9,14 +14,19 @@ use crate::ui::format_duration;
 ///
 /// This panel is only about the current selection. Settings of the project
 /// as a whole live in the Project Settings window instead.
-pub fn show(ui: &mut egui::Ui, session: &mut EditorSession, catalog: &mut VisualizerCatalog) {
+pub fn show(
+    ui: &mut egui::Ui,
+    session: &mut EditorSession,
+    catalog: &mut VisualizerCatalog,
+    requested_command: &mut Option<AppCommand>,
+) {
     // A clip with many settings can be taller than the panel.
     egui::ScrollArea::vertical()
         .auto_shrink(false)
         .show(ui, |ui| {
             // The track is cloned so the session is free to be modified below.
             match session.selected_track().cloned() {
-                Some(track) => track_properties(ui, session, catalog, &track),
+                Some(track) => track_properties(ui, session, catalog, requested_command, &track),
                 None => nothing_selected(ui),
             }
         });
@@ -26,6 +36,7 @@ fn track_properties(
     ui: &mut egui::Ui,
     session: &mut EditorSession,
     catalog: &mut VisualizerCatalog,
+    requested_command: &mut Option<AppCommand>,
     track: &Track,
 ) {
     ui.label(egui::RichText::new("Track").strong());
@@ -65,6 +76,7 @@ fn track_properties(
                         Some(image) => format!("Image {} x {}", image.width, image.height),
                         None if source.is_milkdrop_preset() => "MilkDrop preset".to_owned(),
                         None if source.video().is_some() => "Video".to_owned(),
+                        None if source.text().is_some() => "Text".to_owned(),
                         None => "Visualizer plugin".to_owned(),
                     };
                     format!(
@@ -76,12 +88,19 @@ fn track_properties(
             let is_visualizer = source.is_visualizer();
             let plugin_path = source.is_visualizer_plugin().then(|| source.path.clone());
             let is_visual = source.is_visual();
-            ui.label(source.file_name()).on_hover_text(&source.path);
+            // Cloned, so the session is free to be modified by the editor.
+            let text = source.text().cloned().map(|text| (source.id, text));
+            ui.label(source.display_name()).on_hover_text(&source.path);
             ui.label(
                 egui::RichText::new(details)
                     .small()
                     .color(theme::TEXT_MUTED),
             );
+            // What the text says comes first; where and how it is shown
+            // follows, as for every other element.
+            if let Some((media_id, text)) = text {
+                text_editor(ui, session, requested_command, media_id, &text);
+            }
             if is_visualizer {
                 audio_input_selector(ui, session, clip);
             }
@@ -183,6 +202,100 @@ fn placement_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
     .any(|(new, old)| (new - old).abs() > 1e-9);
     if has_changed {
         session.edit_project(|project| project.set_clip_placement(clip.id, edited));
+    }
+}
+
+/// What a text element says and how it looks.
+fn text_editor(
+    ui: &mut egui::Ui,
+    session: &mut EditorSession,
+    requested_command: &mut Option<AppCommand>,
+    media_id: MediaId,
+    text: &TextProperties,
+) {
+    let mut edited = text.clone();
+
+    ui.add(
+        egui::TextEdit::multiline(&mut edited.text)
+            .desired_rows(3)
+            .desired_width(f32::INFINITY)
+            .hint_text("Text"),
+    );
+    egui::Grid::new(("text", media_id))
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.label("Size")
+                .on_hover_text("Height of the letters, in percent of the picture's height");
+            let (smallest, _) = TextProperties::SIZE_RANGE;
+            let mut percent = edited.size * 100.0;
+            ui.add(egui::Slider::new(&mut percent, smallest * 100.0..=50.0).suffix(" %"));
+            edited.size = percent / 100.0;
+            ui.end_row();
+
+            ui.label("Color");
+            let mut color = edited.color.map(|part| part as f32);
+            ui.color_edit_button_rgb(&mut color);
+            // Only take over the color if it was really changed: converting to
+            // the color button's smaller numbers and back alters the last
+            // digits.
+            if color != text.color.map(|part| part as f32) {
+                edited.color = color.map(f64::from);
+            }
+            ui.end_row();
+
+            ui.label("Align")
+                .on_hover_text("How lines of different length are lined up");
+            egui::ComboBox::from_id_salt(("text_alignment", media_id))
+                .selected_text(edited.alignment.label())
+                .show_ui(ui, |ui| {
+                    for choice in TextAlignment::ALL {
+                        ui.selectable_value(&mut edited.alignment, choice, choice.label());
+                    }
+                });
+            ui.end_row();
+
+            ui.label("Font");
+            ui.horizontal(|ui| {
+                let font_name = if edited.font_path.is_empty() {
+                    "Built-in"
+                } else {
+                    edited
+                        .font_path
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or(&edited.font_path)
+                };
+                ui.label(font_name).on_hover_text(&edited.font_path);
+                if ui
+                    .button("Choose...")
+                    .on_hover_text("Use a font file (TrueType or OpenType) from this computer")
+                    .clicked()
+                {
+                    // Opening a file dialog is an application command.
+                    *requested_command = Some(AppCommand::ChooseTextFont);
+                }
+                if !edited.font_path.is_empty() && ui.button("Built-in").clicked() {
+                    edited.font_path.clear();
+                }
+            });
+            ui.end_row();
+        });
+
+    let size_changed = (edited.size - text.size).abs() > 1e-9;
+    let has_changed = size_changed
+        || edited.text != text.text
+        || edited.color != text.color
+        || edited.alignment != text.alignment
+        || edited.font_path != text.font_path;
+    if has_changed {
+        // The size is compared with a tolerance; keep the stored one if the
+        // slider only changed its last digits.
+        if !size_changed {
+            edited.size = text.size;
+        }
+        if let Err(problem) = session.set_text(media_id, edited) {
+            ui.colored_label(ui.visuals().error_fg_color, problem);
+        }
     }
 }
 

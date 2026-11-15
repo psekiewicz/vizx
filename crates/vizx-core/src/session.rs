@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use vizx_audio::AudioFileError;
 use vizx_project::{
-    AudioProperties, ImageProperties, Project, ProjectFileError, Track, TrackId, TrackKind,
+    AudioProperties, ImageProperties, MediaId, Placement, Project, ProjectFileError,
+    TextProperties, Track, TrackId, TrackKind,
 };
 
 use crate::{PresetEntry, PresetLibrary, Selection};
@@ -206,6 +207,66 @@ impl EditorSession {
         self.has_unsaved_changes = true;
         self.selection = Selection::Track(track_id);
         Ok(track_id)
+    }
+
+    /// Adds a text element in the middle of the picture, on a visual layer,
+    /// which becomes selected.
+    pub fn add_text(&mut self) -> Result<TrackId, String> {
+        let properties = TextProperties::default();
+        let placement = self.text_placement(&properties, (0.5, 0.5))?;
+
+        let (_media_id, track_id) = self.project.add_text(properties, placement);
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        Ok(track_id)
+    }
+
+    /// Changes what a text element says or how it looks.
+    ///
+    /// The element's place in the picture is made to fit the new text,
+    /// around the same middle as before. Nothing changes if the text cannot
+    /// be drawn (for example because its font file is missing).
+    pub fn set_text(
+        &mut self,
+        media_id: MediaId,
+        properties: TextProperties,
+    ) -> Result<(), String> {
+        let current = self
+            .project
+            .visual_clips()
+            .find(|(_, media)| media.id == media_id)
+            .map(|(clip, _)| clip.placement)
+            .ok_or("the text no longer exists")?;
+        let middle = (
+            current.x + current.width / 2.0,
+            current.y + current.height / 2.0,
+        );
+        let placement = self.text_placement(&properties, middle)?;
+
+        if self.project.set_text(media_id, properties, placement) {
+            self.has_unsaved_changes = true;
+        }
+        Ok(())
+    }
+
+    /// The part of the picture a text takes up when its middle is at
+    /// `middle` (fractions of the frame): exactly as large as the text is
+    /// drawn, so it is neither stretched nor squeezed.
+    fn text_placement(
+        &self,
+        properties: &TextProperties,
+        middle: (f64, f64),
+    ) -> Result<Placement, String> {
+        let settings = &self.project.settings;
+        let image = crate::render_text(properties, settings.height)?;
+        let width = f64::from(image.width) / f64::from(settings.width.max(1));
+        let height = f64::from(image.height) / f64::from(settings.height.max(1));
+        Ok(Placement {
+            x: middle.0 - width / 2.0,
+            y: middle.1 - height / 2.0,
+            width,
+            height,
+        })
     }
 
     /// Adds a visualizer plugin and places it on a visual layer, which

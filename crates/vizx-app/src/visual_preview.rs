@@ -18,7 +18,7 @@ use vizx_core::{
     LayerGeometry, Prerender, PrerenderJob, ReactionMeter, VisualizerCatalog, audio_sources,
     frame_source, layer_geometry,
 };
-use vizx_project::{AudioInput, ClipId, Placement, ReactionEffect, TrackId};
+use vizx_project::{AudioInput, ClipId, Placement, ReactionEffect, TextProperties, TrackId};
 
 /// Width in pixels at which a clip that fills the whole frame is
 /// pre-rendered. The height follows from the project's aspect ratio, and a
@@ -187,8 +187,9 @@ impl VisualPreview {
             // What should be rendered: one job per visualizer or video clip.
             let mut wanted: Vec<(ClipId, PrerenderJob)> = Vec::new();
             for (clip, media) in project.visual_clips() {
-                // An image is shown as it is; nothing is rendered for it.
-                if media.image().is_some() {
+                // An image or a text is one picture; nothing is rendered
+                // frame by frame for it.
+                if media.is_still() {
                     continue;
                 }
                 // A clip that cannot be rendered at all (for example a
@@ -247,6 +248,8 @@ impl VisualPreview {
         {
             let state = if media.image().is_some() {
                 self.show_image(clip.id, &media.path, image_store)
+            } else if let Some(text) = media.text() {
+                self.show_text(clip.id, text, settings.height)
             } else {
                 let problem = frame_source(
                     media,
@@ -489,6 +492,45 @@ impl VisualPreview {
                 width: image.width,
                 height: image.height,
                 pixels: Pixels::Image(image),
+                frame_index: 0,
+                render_key: key,
+                version: self.last_picture_version,
+            },
+        );
+        LayerState::Shown
+    }
+
+    /// Makes sure the picture of a text clip shows its current text, and
+    /// says whether the clip can be shown.
+    fn show_text(
+        &mut self,
+        clip_id: ClipId,
+        text: &TextProperties,
+        frame_height: u32,
+    ) -> LayerState {
+        // Everything that decides how the text looks.
+        let key = format!("text:{text:?}@{frame_height}");
+        if self
+            .pictures
+            .get(&clip_id)
+            .is_some_and(|picture| picture.render_key == key)
+        {
+            return LayerState::Shown;
+        }
+        // Drawing a text takes milliseconds, so it is done right here
+        // whenever the text changes.
+        let image = match vizx_core::render_text(text, frame_height) {
+            Ok(image) => image,
+            Err(problem) => return LayerState::Failed(problem),
+        };
+
+        self.last_picture_version += 1;
+        self.pictures.insert(
+            clip_id,
+            LayerPicture {
+                width: image.width,
+                height: image.height,
+                pixels: Pixels::Image(Arc::new(image)),
                 frame_index: 0,
                 render_key: key,
                 version: self.last_picture_version,

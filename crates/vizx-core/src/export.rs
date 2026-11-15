@@ -15,13 +15,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use vizx_audio::PlaybackSource;
-use vizx_project::{AudioReaction, Placement, Project};
+use vizx_project::{AudioReaction, Placement, Project, TextProperties};
 use vizx_render::{Compositor, LayerDraw};
 
 use crate::composition::{ReactionMeter, audio_sources, frame_source, layer_geometry};
 use crate::ffmpeg::VideoWriter;
 use crate::image_store::{DecodedImage, decode_image_file};
 use crate::prerender::{FrameRenderer, apply_opacity_from_brightness};
+use crate::text::render_text;
 use crate::{AudioStore, FrameSource, PrerenderJob, VisualizerCatalog};
 
 /// Sample rate of the exported sound.
@@ -70,6 +71,8 @@ pub struct ExportLayer {
 pub enum ExportContent {
     /// A still image file.
     Image(PathBuf),
+    /// A text element, drawn once.
+    Text(TextProperties),
     /// Something drawn frame by frame: a visualizer or a video.
     Frames(FrameSource),
 }
@@ -104,6 +107,8 @@ impl ExportJob {
                 }
                 let content = if media.image().is_some() {
                     ExportContent::Image(PathBuf::from(&media.path))
+                } else if let Some(text) = media.text() {
+                    ExportContent::Text(text.clone())
                 } else {
                     let source = frame_source(media, clip, bundled_presets, catalog, Some(ffmpeg))
                         .map_err(|problem| format!("{}: {problem}", media.file_name()))?;
@@ -348,6 +353,8 @@ fn advance(
                     .map_err(|problem| format!("{}: {problem}", path.display()))?;
                 LayerPicture::Image(image)
             }
+            // The same drawing as in the preview, for the video's height.
+            ExportContent::Text(text) => LayerPicture::Image(render_text(text, job.height)?),
             ExportContent::Frames(source) => {
                 // Rendered at the size the clip has in the video.
                 let width = render_edge(layer.placement.width * f64::from(job.width));

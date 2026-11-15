@@ -135,7 +135,7 @@ Version **9** added visualizer plugins as a kind of media and a clip's
 parameter values for them. Version **10** added images as a kind of media
 and a clip's `opacity` and `reaction`. Version **11** extended reactions
 (move, rotate, sensitivity, release). Version **12** added video files as a
-kind of media.
+kind of media, version **13** text elements.
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -282,7 +282,29 @@ build) apart from VizX.
   written to a temporary WAV file for FFmpeg. A cancelled or failed export
   removes its unfinished file.
 
-### Visualizer pluginsVisualizers other than MilkDrop presets are **plugins**: a folder with a
+### Text
+
+A text element (Add > Text, Ctrl+T) is a kind of media that is not a file
+(`MediaContent::Text` with `TextProperties`: the text, font, size, color and
+alignment). `vizx_core::render_text` draws it once into a transparent
+picture with the `ab_glyph` library; from then on it is an ordinary layer
+that can be placed, faded and animated to the sound like an image. The
+preview and the export call the same function, so a title looks the same in
+both.
+
+- The size is a fraction of the frame's height, so the text keeps its
+  proportion at any output size.
+- The default font is the one built into egui (Ubuntu Light); any TrueType
+  or OpenType file on the computer can be chosen instead.
+- When the text changes, its placement is resized around the same middle to
+  fit the new text exactly (`EditorSession::set_text`).
+- A text lasts for the whole project for now. Texts that appear and
+  disappear at set times (lyrics) need clips that can be moved and trimmed
+  on the timeline, which do not exist yet.
+
+### Visualizer plugins
+
+Visualizers other than MilkDrop presets are **plugins**: a folder with a
 `visualizer.json` (name and adjustable parameters) and a `shader.wgsl` (a
 function that returns the color of a pixel). The visualizers that ship with
 VizX are plugins too, in `assets/visualizers`. See
@@ -315,7 +337,7 @@ VizX are plugins too, in `assets/visualizers`. See
 
 ### One "Add" menu
 
-Everything that can be added to a project (audio file, image, video, MilkDrop preset,
+Everything that can be added to a project (audio file, image, video, text, MilkDrop preset,
 visualizer plugin, visual layer, audio track) is listed in one function, `ui::add_menu_items`.
 It is shown in exactly one place, the context menu of the timeline
 (right-click a track, a lane or the empty area), plus keyboard shortcuts

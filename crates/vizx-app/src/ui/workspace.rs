@@ -171,7 +171,12 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
                 );
             }
             PanelKind::Properties => {
-                panels::properties::show(ui, self.session, self.visualizer_catalog)
+                panels::properties::show(
+                    ui,
+                    self.session,
+                    self.visualizer_catalog,
+                    self.requested_command,
+                );
             }
             PanelKind::Timeline => {
                 panels::timeline::show(

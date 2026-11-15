@@ -17,7 +17,10 @@ mod settings;
 mod track;
 
 pub use file::{ProjectFileError, with_project_extension};
-pub use media::{AudioProperties, ImageProperties, MediaContent, MediaId, MediaSource};
+pub use media::{
+    AudioProperties, ImageProperties, MediaContent, MediaId, MediaSource, TextAlignment,
+    TextProperties,
+};
 pub use metadata::ProjectMetadata;
 pub use project::{LayerMove, Project};
 pub use settings::{FrameRate, ProjectSettings};
@@ -56,4 +59,5 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 /// - 11: a reaction can also move and turn its element and has a
 ///   sensitivity and a release time. Older reactions keep working.
 /// - 12: video files as a kind of media.
-pub const CURRENT_FORMAT_VERSION: u32 = 12;
+/// - 13: text elements as a kind of media.
+pub const CURRENT_FORMAT_VERSION: u32 = 13;
