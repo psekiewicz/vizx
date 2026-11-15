@@ -12,7 +12,8 @@ single project and share one timeline.
 > adaptive timeline with tracks, audio import, waveform display, audio
 > playback, pre-rendered MilkDrop presets with a bundled preset collection, and
 > visualizer plugins (WGSL shaders) and images, all with transparency, that can
-> be moved and resized in the preview and react to the sound, exist. There is no export yet.
+> be moved and resized in the preview and react to the sound, video files as
+> layers or background, and export to MP4 exist. There is no export yet.
 
 ## Technology
 
@@ -38,6 +39,7 @@ vizx/
 │   ├── vizx-audio/        Audio files, mixing and playback (no GUI)
 │   ├── vizx-milkdrop/     MilkDrop presets through projectM (no GUI)
 │   ├── vizx-visualizer/   Visualizer plugins: WGSL shaders via wgpu (no GUI)
+│   ├── vizx-render/       Off-screen wgpu device and layer compositor (no GUI)
 │   ├── vizx-core/         Shared application logic (no GUI)
 │   └── vizx-app/          Desktop application: window and interface
 ├── assets/                Bundled visualizer plugins and MilkDrop presets (git submodule)
@@ -61,6 +63,12 @@ No dedicated GPU is required.
 
 Optional: the [projectM](docs/milkdrop.md) library, for MilkDrop presets.
 VizX builds and runs without it.
+
+Optional: [FFmpeg](https://ffmpeg.org), for video files and for exporting.
+VizX starts the `ffmpeg` program; it finds it next to its own executable,
+in `%VIZX_FFMPEG_DIR%/bin` or on the `PATH`. For development, set
+`VIZX_FFMPEG_DIR` in your personal Cargo configuration, next to
+`VIZX_PROJECTM_DIR` (see [docs/milkdrop.md](docs/milkdrop.md)).
 
 The bundled MilkDrop presets are a git submodule. Clone with
 `git clone --recurse-submodules`, or run `git submodule update --init` in an

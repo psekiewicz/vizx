@@ -1,0 +1,338 @@
+//! What the picture consists of at a moment of the project.
+//!
+//! The preview and the export both ask the same questions: which audio does
+//! this clip listen to, how strongly does it react right now, where exactly
+//! is it drawn, and what draws its frames. The answers live here, so the
+//! two can never disagree.
+
+use std::path::Path;
+
+use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer, PlaybackSource};
+use vizx_project::{
+    AudioInput, AudioReaction, Clip, MediaSource, Placement, Project, ReactionBand, ReactionEffect,
+    TrackKind,
+};
+
+use crate::{AudioStore, FrameSource, VisualizerCatalog, resolve_preset_path};
+
+/// Sample rate at which audio is analysed for clips that react to it.
+const REACTION_SAMPLE_RATE: u32 = 44_100;
+/// For a reaction's release, the sound is measured at earlier moments this
+/// far apart, and at most this many of them.
+const RELEASE_STEP_SECONDS: f64 = 1.0 / 30.0;
+const MAX_RELEASE_STEPS: u32 = 15;
+
+/// The loaded audio clips that `input` selects: all audio tracks for the
+/// mix, or the clips of one audio track, each placed at its position on the
+/// timeline. Also returns how many of the selected clips are not loaded
+/// yet.
+///
+/// An input naming a track that no longer exists selects the mix, so a
+/// visualizer never goes silent because of a stale reference.
+pub fn audio_sources(
+    project: &Project,
+    audio_store: &AudioStore,
+    input: AudioInput,
+) -> (Vec<PlaybackSource>, usize) {
+    let only_track = match input {
+        AudioInput::Track(id) if project.track(id).is_some() => Some(id),
+        _ => None,
+    };
+
+    let mut sources = Vec::new();
+    let mut clips_still_loading = 0;
+    for track in project.tracks() {
+        if track.kind != TrackKind::Audio || only_track.is_some_and(|id| id != track.id) {
+            continue;
+        }
+        for clip in &track.clips {
+            let loaded = project
+                .media_source(clip.media)
+                .and_then(|source| audio_store.loaded(&source.path));
+            match loaded {
+                Some(loaded) => sources.push(PlaybackSource {
+                    audio: loaded.audio.clone(),
+                    start_seconds: clip.start_milliseconds as f64 / 1000.0,
+                }),
+                None => clips_still_loading += 1,
+            }
+        }
+    }
+    (sources, clips_still_loading)
+}
+
+/// What draws the frames of a visualizer or video clip, or why it cannot be
+/// drawn. Not for images, which are not drawn frame by frame.
+pub fn frame_source(
+    media: &MediaSource,
+    clip: &Clip,
+    bundled_presets: Option<&Path>,
+    catalog: &mut VisualizerCatalog,
+    ffmpeg: Option<&Path>,
+) -> Result<FrameSource, String> {
+    if media.video().is_some() {
+        let ffmpeg = ffmpeg.ok_or(
+            "Video files need FFmpeg, which was not found. Put ffmpeg next to VizX or install it.",
+        )?;
+        return Ok(FrameSource::Video {
+            file: media.path.clone().into(),
+            ffmpeg: ffmpeg.to_owned(),
+        });
+    }
+    if media.is_visualizer_plugin() {
+        let plugin = catalog.plugin(&media.path);
+        // A broken `visualizer.json` is reported here; a broken shader is
+        // reported by the render itself.
+        plugin.manifest.as_ref().map_err(Clone::clone)?;
+        let folder = plugin
+            .folder
+            .clone()
+            .ok_or("The visualizer's folder was not found.")?;
+        return Ok(FrameSource::Plugin {
+            folder,
+            parameters: clip.parameters.clone(),
+            version: plugin.version,
+        });
+    }
+
+    let preset_file = resolve_preset_path(&media.path, bundled_presets).ok_or_else(|| {
+        format!(
+            "{} ships with VizX, but the bundled presets were not found on this computer.",
+            media.file_name()
+        )
+    })?;
+    Ok(FrameSource::Milkdrop {
+        preset_path: preset_file.to_string_lossy().into_owned(),
+    })
+}
+
+/// Where and how a layer is drawn into the frame at one moment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerGeometry {
+    /// Middle of the layer, as fractions of the frame's width and height.
+    pub center: [f32; 2],
+    /// Width and height, as fractions of the frame's.
+    pub size: [f32; 2],
+    /// Turn around the middle, in degrees clockwise.
+    pub rotation_degrees: f32,
+    /// 0 to 1.
+    pub opacity: f32,
+}
+
+/// Combines a clip's placement and opacity with what its reaction to the
+/// sound does right now.
+pub fn layer_geometry(placement: Placement, opacity: f64, effect: ReactionEffect) -> LayerGeometry {
+    LayerGeometry {
+        center: [
+            (placement.x + placement.width / 2.0 + effect.offset_x) as f32,
+            (placement.y + placement.height / 2.0 + effect.offset_y) as f32,
+        ],
+        // Growing happens around the layer's own middle.
+        size: [
+            (placement.width * effect.scale) as f32,
+            (placement.height * effect.scale) as f32,
+        ],
+        rotation_degrees: effect.rotation_degrees as f32,
+        opacity: (opacity * effect.opacity).clamp(0.0, 1.0) as f32,
+    }
+}
+
+/// Measures how loud the sound is for clips that react to it.
+pub struct ReactionMeter {
+    analyzer: AudioAnalyzer,
+}
+
+impl Default for ReactionMeter {
+    fn default() -> Self {
+        Self {
+            analyzer: AudioAnalyzer::new(REACTION_SAMPLE_RATE),
+        }
+    }
+}
+
+impl ReactionMeter {
+    /// What a reaction does to its element at a moment of the project.
+    pub fn effect(
+        &mut self,
+        sources: &[PlaybackSource],
+        reaction: &AudioReaction,
+        seconds: f64,
+    ) -> ReactionEffect {
+        if reaction.is_active() {
+            reaction.at_level(self.level(sources, reaction, seconds))
+        } else {
+            ReactionEffect::NONE
+        }
+    }
+
+    /// How loud the part of the sound is that a reaction follows, at a
+    /// moment of the project, from 0 to 1, with the reaction's release time
+    /// applied: the value jumps up with the sound and then falls back
+    /// gradually.
+    ///
+    /// It is worked out from the audio leading up to that moment and from
+    /// nothing else, so the same moment of the song always gives the same
+    /// value, whether it is reached by playing, by jumping there, or during
+    /// export. For the release that means looking at a few earlier moments
+    /// too: a loud moment shortly before still counts, the less the longer
+    /// ago it was.
+    pub fn level(
+        &mut self,
+        sources: &[PlaybackSource],
+        reaction: &AudioReaction,
+        seconds: f64,
+    ) -> f64 {
+        let release = reaction.release_seconds;
+        let steps_back = if release > 0.0 {
+            ((release / RELEASE_STEP_SECONDS).ceil() as u32).min(MAX_RELEASE_STEPS)
+        } else {
+            0
+        };
+
+        let mut level: f64 = 0.0;
+        for step in 0..=steps_back {
+            let seconds_ago = f64::from(step) * RELEASE_STEP_SECONDS;
+            let moment = seconds - seconds_ago;
+            if moment < 0.0 {
+                break;
+            }
+            // How much of a level from that moment is left by now.
+            let remaining = if step == 0 {
+                1.0
+            } else {
+                (1.0 - seconds_ago / release).max(0.0)
+            };
+            level = level.max(self.level_at(sources, reaction.band, moment) * remaining);
+        }
+        level
+    }
+
+    /// How loud one part of the sound is at one moment, from 0 to 1.
+    fn level_at(&mut self, sources: &[PlaybackSource], band: ReactionBand, seconds: f64) -> f64 {
+        let window_end = (seconds.max(0.0) * f64::from(REACTION_SAMPLE_RATE)) as u64;
+        let window_start = window_end.saturating_sub(ANALYSIS_WINDOW as u64);
+        let stereo = vizx_audio::mix_to_stereo(
+            sources,
+            REACTION_SAMPLE_RATE,
+            window_start,
+            (window_end - window_start) as usize,
+        );
+        let mono: Vec<f32> = stereo
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[left, right]| (left + right) * 0.5)
+            .collect();
+
+        // "Infinitely long ago": the analyzer's memory of earlier calls has
+        // faded completely, so only this moment counts.
+        let sound = self.analyzer.analyze(&mono, f32::MAX);
+        f64::from(match band {
+            ReactionBand::Volume => sound.volume,
+            ReactionBand::Bass => sound.bass,
+            ReactionBand::Mid => sound.mid,
+            ReactionBand::Treble => sound.treble,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use vizx_audio::DecodedAudio;
+
+    use super::*;
+
+    /// One second of a loud 440 Hz tone followed by one second of silence.
+    fn tone_then_silence() -> Vec<PlaybackSource> {
+        let rate = 44_100;
+        let samples = (0..rate * 2)
+            .map(|index| {
+                if index < rate {
+                    0.8 * (std::f32::consts::TAU * 440.0 * index as f32 / rate as f32).sin()
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        vec![PlaybackSource {
+            audio: Arc::new(DecodedAudio {
+                sample_rate: rate as u32,
+                channel_count: 1,
+                samples,
+            }),
+            start_seconds: 0.0,
+        }]
+    }
+
+    #[test]
+    fn geometry_combines_placement_with_the_reaction() {
+        let placement = Placement {
+            x: 0.2,
+            y: 0.1,
+            width: 0.4,
+            height: 0.6,
+        };
+
+        let still = layer_geometry(placement, 0.5, ReactionEffect::NONE);
+        assert_eq!(still.center, [0.4, 0.4]);
+        assert_eq!(still.size, [0.4, 0.6]);
+        assert_eq!((still.rotation_degrees, still.opacity), (0.0, 0.5));
+
+        let moved = layer_geometry(
+            placement,
+            0.5,
+            ReactionEffect {
+                scale: 2.0,
+                opacity: 0.5,
+                offset_x: 0.1,
+                offset_y: -0.1,
+                rotation_degrees: 45.0,
+            },
+        );
+        assert_eq!(moved.center, [0.5, 0.3]);
+        assert_eq!(moved.size, [0.8, 1.2]);
+        assert_eq!((moved.rotation_degrees, moved.opacity), (45.0, 0.25));
+    }
+
+    #[test]
+    fn level_follows_the_sound_and_falls_back_over_the_release_time() {
+        let sources = tone_then_silence();
+        let mut meter = ReactionMeter::default();
+        let immediate = AudioReaction {
+            release_seconds: 0.0,
+            ..AudioReaction::default()
+        };
+        let releasing = AudioReaction {
+            release_seconds: 0.4,
+            ..AudioReaction::default()
+        };
+
+        let during_tone = meter.level(&sources, &immediate, 0.5);
+        assert!(during_tone > 0.7, "{during_tone}");
+        // 0.2 s after the tone ended.
+        assert_eq!(meter.level(&sources, &immediate, 1.2), 0.0);
+
+        // With a release the level is on its way down: about half is left
+        // after half of the release time.
+        let falling = meter.level(&sources, &releasing, 1.2);
+        assert!(
+            falling > during_tone * 0.3 && falling < during_tone * 0.7,
+            "{falling}"
+        );
+        assert_eq!(meter.level(&sources, &releasing, 1.8), 0.0);
+
+        // The same moment gives the same value, whatever was asked before.
+        assert_eq!(meter.level(&sources, &releasing, 1.2), falling);
+    }
+
+    #[test]
+    fn an_inactive_reaction_has_no_effect() {
+        let mut meter = ReactionMeter::default();
+
+        let effect = meter.effect(&tone_then_silence(), &AudioReaction::default(), 0.5);
+
+        assert_eq!(effect, ReactionEffect::NONE);
+    }
+}

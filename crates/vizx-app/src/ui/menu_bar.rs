@@ -40,7 +40,13 @@ fn file_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
         "",
         AppCommand::OpenProjectSettings,
     );
-    unavailable_item(ui, "Export Video...", "");
+    command_item(
+        ui,
+        app,
+        "Export Video...",
+        "Ctrl+E",
+        AppCommand::ExportVideo,
+    );
     ui.separator();
     command_item(ui, app, "Exit", "", AppCommand::Exit);
 }

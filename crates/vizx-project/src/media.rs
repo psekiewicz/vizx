@@ -38,7 +38,16 @@ impl MediaSource {
             MediaContent::Audio(audio) => Some(audio),
             MediaContent::MilkdropPreset
             | MediaContent::VisualizerPlugin
-            | MediaContent::Image(_) => None,
+            | MediaContent::Image(_)
+            | MediaContent::Video(_) => None,
+        }
+    }
+
+    /// The picture properties, if this is a video file.
+    pub fn video(&self) -> Option<&ImageProperties> {
+        match &self.content {
+            MediaContent::Video(video) => Some(video),
+            _ => None,
         }
     }
 
@@ -65,7 +74,7 @@ impl MediaSource {
 
     /// Whether this source produces a picture (as opposed to sound).
     pub fn is_visual(&self) -> bool {
-        self.is_visualizer() || self.image().is_some()
+        self.is_visualizer() || self.image().is_some() || self.video().is_some()
     }
 }
 
@@ -84,9 +93,14 @@ pub enum MediaContent {
     /// A still image (PNG or JPEG). It is shown for as long as its clip
     /// lasts.
     Image(ImageProperties),
+    /// A video file, used for its picture only. It is played from its
+    /// start when its clip starts and begins again when it ends. The
+    /// properties are the size of its picture.
+    Video(ImageProperties),
 }
 
-/// Properties of an image file, read once when it is imported.
+/// Size of the picture of an image or video file, read once when it is
+/// imported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageProperties {
     /// Size in pixels.

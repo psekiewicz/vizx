@@ -1,0 +1,10 @@
+[package]
+name = "vizx-render"
+description = "VizX rendering engine: off-screen wgpu device and the layer compositor. No GUI code."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+wgpu.workspace = true
+pollster.workspace = true

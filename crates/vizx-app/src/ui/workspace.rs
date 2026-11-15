@@ -8,7 +8,7 @@ use crate::app::AppCommand;
 use crate::theme;
 use crate::ui::panels;
 use crate::ui::panels::timeline::TimelineView;
-use crate::visual_preview::LayerView;
+use crate::visual_preview::VisualPreview;
 
 /// Identifies one dockable panel.
 ///
@@ -84,7 +84,7 @@ impl Workspace {
         ui: &mut egui::Ui,
         session: &mut EditorSession,
         audio_store: &AudioStore,
-        visualizer_layers: &[LayerView<'_>],
+        visual_preview: &VisualPreview,
         visualizer_catalog: &mut VisualizerCatalog,
         requested_command: &mut Option<AppCommand>,
     ) {
@@ -93,7 +93,7 @@ impl Workspace {
             session,
             timeline_view: &mut self.timeline_view,
             audio_store,
-            visualizer_layers,
+            visual_preview,
             visualizer_catalog,
             requested_command,
         };
@@ -140,8 +140,8 @@ struct PanelViewer<'session> {
     session: &'session mut EditorSession,
     timeline_view: &'session mut TimelineView,
     audio_store: &'session AudioStore,
-    /// The visualizers at the playhead, bottom layer first.
-    visualizer_layers: &'session [LayerView<'session>],
+    /// The composed picture and the clips in it.
+    visual_preview: &'session VisualPreview,
     visualizer_catalog: &'session mut VisualizerCatalog,
     requested_command: &'session mut Option<AppCommand>,
 }
@@ -167,7 +167,7 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
                     ui,
                     self.session,
                     self.requested_command,
-                    self.visualizer_layers,
+                    self.visual_preview,
                 );
             }
             PanelKind::Properties => {

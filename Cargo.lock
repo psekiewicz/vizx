@@ -2924,6 +2924,7 @@ dependencies = [
  "vizx-audio",
  "vizx-milkdrop",
  "vizx-project",
+ "vizx-render",
  "vizx-visualizer",
 ]
 
@@ -2941,6 +2942,14 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "vizx-render"
+version = "0.1.0"
+dependencies = [
+ "pollster",
+ "wgpu",
 ]
 
 [[package]]

@@ -184,6 +184,30 @@ impl EditorSession {
         Ok(track_id)
     }
 
+    /// Imports a video file for its picture: on a visual layer of its own,
+    /// or, with `as_background`, behind all layers and covering the frame.
+    /// The new layer becomes selected. `ffmpeg` is the FFmpeg program,
+    /// which reads the size of the video's picture.
+    pub fn import_video(
+        &mut self,
+        path: &Path,
+        ffmpeg: &Path,
+        as_background: bool,
+    ) -> Result<TrackId, String> {
+        let (width, height) = crate::probe_video(ffmpeg, path)?;
+        let properties = ImageProperties { width, height };
+
+        let (_media_id, track_id) = if as_background {
+            self.project
+                .add_background_video(path.to_string_lossy(), properties)
+        } else {
+            self.project.add_video(path.to_string_lossy(), properties)
+        };
+        self.has_unsaved_changes = true;
+        self.selection = Selection::Track(track_id);
+        Ok(track_id)
+    }
+
     /// Adds a visualizer plugin and places it on a visual layer, which
     /// becomes selected. `stored_path` is the plugin's folder, or the
     /// reference of a bundled plugin (see `VisualizerCatalog`).

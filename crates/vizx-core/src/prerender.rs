@@ -13,6 +13,8 @@ use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer, PlaybackSource};
 use vizx_milkdrop::MilkdropRenderer;
 use vizx_visualizer::{FrameInput, ParameterValues, ShaderRenderer, VisualizerPlugin};
 
+use crate::ffmpeg::VideoReader;
+
 /// Sample rate of the audio handed to the visualizer.
 const ANALYSIS_SAMPLE_RATE: u32 = 44_100;
 /// JPEG quality of stored frames (1-100). High enough that the preview
@@ -39,6 +41,12 @@ pub enum FrameSource {
         /// `VisualizerCatalog`), so that an edited plugin is rendered again.
         version: u64,
     },
+    /// A video file, decoded by FFmpeg. It starts over when it ends.
+    Video {
+        file: PathBuf,
+        /// The `ffmpeg` program to decode it with.
+        ffmpeg: PathBuf,
+    },
 }
 
 /// Where the opacity of a stored frame comes from.
@@ -58,7 +66,9 @@ impl FrameSource {
     fn opacity(&self) -> Opacity {
         match self {
             Self::Milkdrop { .. } => Opacity::FromBrightness,
-            Self::Plugin { .. } => Opacity::Stored,
+            // A video is fully opaque, and for such frames nothing extra is
+            // stored either.
+            Self::Plugin { .. } | Self::Video { .. } => Opacity::Stored,
         }
     }
     /// A text that is equal exactly when two sources draw the same frames.
@@ -70,6 +80,7 @@ impl FrameSource {
                 parameters,
                 version,
             } => format!("{} v{version} {parameters:?}", folder.display()),
+            Self::Video { file, .. } => format!("video {}", file.display()),
         }
     }
 }
@@ -146,7 +157,8 @@ struct State {
     error: Option<String>,
 }
 
-/// The frames of one visual clip (a MilkDrop preset or a visualizer plugin),
+/// The frames of one visual clip (a MilkDrop preset, a visualizer plugin or
+/// a video),
 /// rendered ahead of time in the background.
 ///
 /// A MilkDrop picture builds on the previous one, so a frame is only
@@ -373,119 +385,13 @@ fn draw_frames(
     pixel_sender: &SyncSender<Vec<u8>>,
     is_cancelled: &AtomicBool,
 ) -> Result<(), String> {
-    match &job.source {
-        FrameSource::Milkdrop { preset_path } => {
-            draw_milkdrop_frames(job, preset_path, pixel_sender, is_cancelled)
-        }
-        FrameSource::Plugin {
-            folder, parameters, ..
-        } => draw_plugin_frames(job, folder, parameters, pixel_sender, is_cancelled),
-    }
-}
-
-/// Draws the frames of a visualizer plugin.
-fn draw_plugin_frames(
-    job: &PrerenderJob,
-    folder: &Path,
-    parameters: &ParameterValues,
-    pixel_sender: &SyncSender<Vec<u8>>,
-    is_cancelled: &AtomicBool,
-) -> Result<(), String> {
-    let frames_per_second = f64::from(job.frames_per_second.max(1));
-    let plugin = VisualizerPlugin::load(folder)?;
-    let mut renderer = ShaderRenderer::new(&plugin, job.width, job.height)?;
-    let packed_parameters = plugin.pack_parameters(parameters);
-    let mut analyzer = AudioAnalyzer::new(ANALYSIS_SAMPLE_RATE);
-
+    let mut renderer = FrameRenderer::new(job)?;
     let mut pixels = Vec::new();
-    for frame in 0..job.frame_count {
+    for _frame in 0..job.frame_count {
         if is_cancelled.load(Ordering::Relaxed) {
             return Ok(());
         }
-        // As for MilkDrop: time comes from the frame number.
-        let seconds_into_clip = f64::from(frame) / frames_per_second;
-
-        // Analyse the audio that leads up to this frame.
-        let window_end = seconds_to_audio_frames(job.start_seconds + seconds_into_clip);
-        let window_start = window_end.saturating_sub(ANALYSIS_WINDOW as u64);
-        let stereo = vizx_audio::mix_to_stereo(
-            &job.audio_sources,
-            ANALYSIS_SAMPLE_RATE,
-            window_start,
-            (window_end - window_start) as usize,
-        );
-        let mono: Vec<f32> = stereo
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|[left, right]| (left + right) * 0.5)
-            .collect();
-        let audio = analyzer.analyze(&mono, (1.0 / frames_per_second) as f32);
-
-        renderer.render(
-            &FrameInput {
-                time_seconds: seconds_into_clip as f32,
-                spectrum: &audio.spectrum,
-                waveform: &audio.waveform,
-                volume: audio.volume,
-                bass: audio.bass,
-                mid: audio.mid,
-                treble: audio.treble,
-                parameters: packed_parameters,
-            },
-            &mut pixels,
-        )?;
-        if pixel_sender.send(pixels.clone()).is_err() {
-            return Ok(());
-        }
-    }
-    Ok(())
-}
-
-/// Draws the frames of a MilkDrop preset with projectM.
-fn draw_milkdrop_frames(
-    job: &PrerenderJob,
-    preset_path: &str,
-    pixel_sender: &SyncSender<Vec<u8>>,
-    is_cancelled: &AtomicBool,
-) -> Result<(), String> {
-    let frames_per_second = f64::from(job.frames_per_second.max(1));
-    let mut renderer = MilkdropRenderer::new(job.width, job.height, job.frames_per_second)
-        .map_err(|error| error.to_string())?;
-    renderer
-        .load_preset(Path::new(preset_path))
-        .map_err(|error| error.to_string())?;
-
-    let mut pixels = Vec::new();
-    // Position, in audio frames, up to which audio was already handed over.
-    let mut audio_position = seconds_to_audio_frames(job.start_seconds);
-
-    for frame in 0..job.frame_count {
-        if is_cancelled.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-
-        // The frame's time comes from its number, never from the clock, so
-        // the result does not depend on how fast this computer renders.
-        let seconds_into_clip = f64::from(frame) / frames_per_second;
-        renderer
-            .set_frame_time(seconds_into_clip)
-            .map_err(|error| error.to_string())?;
-
-        // Hand over the audio between the previous frame and this one.
-        let frame_audio_position = seconds_to_audio_frames(job.start_seconds + seconds_into_clip);
-        if frame_audio_position > audio_position {
-            let audio = vizx_audio::mix_to_stereo(
-                &job.audio_sources,
-                ANALYSIS_SAMPLE_RATE,
-                audio_position,
-                (frame_audio_position - audio_position) as usize,
-            );
-            renderer.add_stereo_audio(&audio);
-            audio_position = frame_audio_position;
-        }
-
-        renderer.render_frame(&mut pixels);
+        renderer.next_frame(&mut pixels)?;
         // Sending fails only if the storing thread has stopped (its error
         // is already recorded), so there is nothing left to do.
         if pixel_sender.send(pixels.clone()).is_err() {
@@ -495,6 +401,156 @@ fn draw_milkdrop_frames(
     Ok(())
 }
 
+/// Draws the frames of one visual clip, one after another.
+///
+/// The preview's pre-render and the video export both get their frames
+/// from this, at different sizes, so a clip looks the same in both.
+///
+/// A frame's time comes from its number, never from the clock, so the
+/// result does not depend on how fast this computer renders. Frames must be
+/// asked for in order: MilkDrop pictures and plugins with trails build on
+/// the previous frame.
+pub(crate) struct FrameRenderer {
+    job: PrerenderJob,
+    /// Number of the frame `next_frame` draws next.
+    frame: u32,
+    drawing: Drawing,
+}
+
+/// What actually draws, with the state it keeps between frames.
+enum Drawing {
+    Milkdrop {
+        renderer: MilkdropRenderer,
+        /// Position, in audio frames, up to which audio was handed over.
+        audio_position: u64,
+    },
+    Plugin {
+        // Boxed (kept behind a pointer) because it is much larger than
+        // the other variants.
+        renderer: Box<ShaderRenderer>,
+        parameters: [f32; vizx_visualizer::PARAMETER_SLOTS],
+        analyzer: AudioAnalyzer,
+    },
+    Video(VideoReader),
+}
+
+impl FrameRenderer {
+    pub(crate) fn new(job: &PrerenderJob) -> Result<Self, String> {
+        let drawing = match &job.source {
+            FrameSource::Milkdrop { preset_path } => {
+                let mut renderer =
+                    MilkdropRenderer::new(job.width, job.height, job.frames_per_second)
+                        .map_err(|error| error.to_string())?;
+                renderer
+                    .load_preset(Path::new(preset_path))
+                    .map_err(|error| error.to_string())?;
+                Drawing::Milkdrop {
+                    renderer,
+                    audio_position: seconds_to_audio_frames(job.start_seconds),
+                }
+            }
+            FrameSource::Plugin {
+                folder, parameters, ..
+            } => {
+                let plugin = VisualizerPlugin::load(folder)?;
+                Drawing::Plugin {
+                    renderer: Box::new(ShaderRenderer::new(&plugin, job.width, job.height)?),
+                    parameters: plugin.pack_parameters(parameters),
+                    analyzer: AudioAnalyzer::new(ANALYSIS_SAMPLE_RATE),
+                }
+            }
+            FrameSource::Video { file, ffmpeg } => Drawing::Video(VideoReader::open(
+                ffmpeg,
+                file,
+                (job.width, job.height),
+                job.frames_per_second.max(1),
+            )?),
+        };
+        Ok(Self {
+            job: job.clone(),
+            frame: 0,
+            drawing,
+        })
+    }
+
+    /// Whether the frames have no opacity of their own and get it from
+    /// their brightness (see `Opacity::FromBrightness`).
+    pub(crate) fn opacity_from_brightness(&self) -> bool {
+        self.job.source.opacity() == Opacity::FromBrightness
+    }
+
+    /// Draws the next frame into `pixels` as RGBA bytes, top row first.
+    pub(crate) fn next_frame(&mut self, pixels: &mut Vec<u8>) -> Result<(), String> {
+        let frames_per_second = f64::from(self.job.frames_per_second.max(1));
+        let seconds_into_clip = f64::from(self.frame) / frames_per_second;
+        let project_seconds = self.job.start_seconds + seconds_into_clip;
+        self.frame += 1;
+
+        match &mut self.drawing {
+            Drawing::Milkdrop {
+                renderer,
+                audio_position,
+            } => {
+                renderer
+                    .set_frame_time(seconds_into_clip)
+                    .map_err(|error| error.to_string())?;
+
+                // Hand over the audio between the previous frame and this
+                // one.
+                let frame_audio_position = seconds_to_audio_frames(project_seconds);
+                if frame_audio_position > *audio_position {
+                    let audio = vizx_audio::mix_to_stereo(
+                        &self.job.audio_sources,
+                        ANALYSIS_SAMPLE_RATE,
+                        *audio_position,
+                        (frame_audio_position - *audio_position) as usize,
+                    );
+                    renderer.add_stereo_audio(&audio);
+                    *audio_position = frame_audio_position;
+                }
+                renderer.render_frame(pixels);
+                Ok(())
+            }
+            Drawing::Plugin {
+                renderer,
+                parameters,
+                analyzer,
+            } => {
+                // Analyse the audio that leads up to this frame.
+                let window_end = seconds_to_audio_frames(project_seconds);
+                let window_start = window_end.saturating_sub(ANALYSIS_WINDOW as u64);
+                let stereo = vizx_audio::mix_to_stereo(
+                    &self.job.audio_sources,
+                    ANALYSIS_SAMPLE_RATE,
+                    window_start,
+                    (window_end - window_start) as usize,
+                );
+                let mono: Vec<f32> = stereo
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|[left, right]| (left + right) * 0.5)
+                    .collect();
+                let audio = analyzer.analyze(&mono, (1.0 / frames_per_second) as f32);
+
+                renderer.render(
+                    &FrameInput {
+                        time_seconds: seconds_into_clip as f32,
+                        spectrum: &audio.spectrum,
+                        waveform: &audio.waveform,
+                        volume: audio.volume,
+                        bass: audio.bass,
+                        mid: audio.mid,
+                        treble: audio.treble,
+                        parameters: *parameters,
+                    },
+                    pixels,
+                )
+            }
+            Drawing::Video(reader) => reader.read_frame(pixels),
+        }
+    }
+}
 /// The storing thread: compresses each frame and appends it to the file.
 fn store_frames(
     pixel_receiver: &Receiver<Vec<u8>>,
@@ -573,7 +629,7 @@ fn apply_stored_opacity(rgba: &mut [u8], opacity: &[u8]) {
 
 /// Makes each pixel as opaque as its brightest color part: black becomes
 /// transparent, and the picture adds its light to what lies below.
-fn apply_opacity_from_brightness(rgba: &mut [u8]) {
+pub(crate) fn apply_opacity_from_brightness(rgba: &mut [u8]) {
     for pixel in rgba.as_chunks_mut::<4>().0 {
         pixel[3] = pixel[0].max(pixel[1]).max(pixel[2]);
     }

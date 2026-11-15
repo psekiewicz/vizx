@@ -1,7 +1,7 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
-use vizx_core::{AudioStore, EditorSession, ImageStore, VisualizerCatalog};
+use vizx_core::{AudioStore, EditorSession, Export, ExportJob, ImageStore, VisualizerCatalog};
 use vizx_project::{PROJECT_FILE_EXTENSION, TrackKind, with_project_extension};
 
 use crate::theme;
@@ -10,8 +10,8 @@ use crate::ui::preset_browser::PresetBrowser;
 use crate::ui::visualizer_browser::VisualizerBrowser;
 use crate::ui::workspace::Workspace;
 use crate::ui::{
-    about_window, menu_bar, preset_browser, project_settings_window, status_bar, toolbar,
-    unsaved_changes_dialog, visualizer_browser,
+    about_window, export_window, menu_bar, preset_browser, project_settings_window, status_bar,
+    toolbar, unsaved_changes_dialog, visualizer_browser,
 };
 use crate::visual_preview::VisualPreview;
 
@@ -32,6 +32,12 @@ pub enum AppCommand {
     ImportImage,
     /// Pick an image and put it behind everything else, covering the frame.
     ImportBackgroundImage,
+    /// Pick a video file and put its picture on a layer of its own.
+    ImportVideo,
+    /// Pick a video file and put it behind everything else.
+    ImportBackgroundVideo,
+    /// Write the project as a video file.
+    ExportVideo,
     /// Open the browser for the presets that ship with VizX.
     BrowseMilkdropPresets,
     /// Pick a preset file of the user's own.
@@ -73,6 +79,13 @@ pub struct VizxApp {
     image_store: ImageStore,
     transport: Transport,
     visual_preview: VisualPreview,
+    /// Folder of the presets that ship with VizX, if there is one.
+    bundled_presets: Option<PathBuf>,
+    /// The FFmpeg program, if it was found: needed for video files and for
+    /// export.
+    ffmpeg: Option<PathBuf>,
+    /// The video export that is running or has just ended.
+    export: Option<Export>,
     pub preset_browser: PresetBrowser,
     pub visualizer_browser: VisualizerBrowser,
     /// The visualizer plugins that ship with VizX and the ones in use.
@@ -101,6 +114,7 @@ impl VizxApp {
         theme::apply(&creation_context.egui_ctx);
         // Looked up once: both the preset browser and the preview need it.
         let bundled_presets = vizx_core::find_bundled_presets();
+        let ffmpeg = vizx_core::find_ffmpeg();
 
         Self {
             session: EditorSession::new_untitled(),
@@ -108,7 +122,10 @@ impl VizxApp {
             audio_store: AudioStore::default(),
             image_store: ImageStore::default(),
             transport: Transport::default(),
-            visual_preview: VisualPreview::new(bundled_presets.clone()),
+            visual_preview: VisualPreview::new(bundled_presets.clone(), ffmpeg.clone()),
+            bundled_presets: bundled_presets.clone(),
+            ffmpeg,
+            export: None,
             preset_browser: PresetBrowser::new(bundled_presets),
             visualizer_browser: VisualizerBrowser::default(),
             visualizer_catalog: VisualizerCatalog::new(),
@@ -127,6 +144,91 @@ impl VizxApp {
     /// Pre-render progress of the MilkDrop clips, for the status bar.
     pub fn prerender_progress(&self) -> Option<crate::visual_preview::PrerenderProgress> {
         self.visual_preview.progress()
+    }
+
+    /// The video export that is running or has just ended, if any.
+    pub fn export(&self) -> Option<&Export> {
+        self.export.as_ref()
+    }
+
+    /// Forgets a finished export (or stops a running one).
+    pub fn close_export(&mut self) {
+        self.export = None;
+    }
+
+    /// The FFmpeg program, or a status message explaining that it is
+    /// missing.
+    fn require_ffmpeg(&mut self, purpose: &str) -> Option<PathBuf> {
+        if self.ffmpeg.is_none() {
+            self.status_message = format!(
+                "{purpose} needs FFmpeg, which was not found. Put ffmpeg next to VizX or \
+                 install it."
+            );
+        }
+        self.ffmpeg.clone()
+    }
+
+    /// Lets the user pick a video file and adds its picture to the project.
+    fn import_video(&mut self, frame: &eframe::Frame, as_background: bool) {
+        let Some(ffmpeg) = self.require_ffmpeg("A video file") else {
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Video", &vizx_core::SUPPORTED_VIDEO_EXTENSIONS)
+            .set_parent(frame)
+            .pick_file()
+        else {
+            return; // dialog cancelled
+        };
+
+        self.status_message = match self.session.import_video(&path, &ffmpeg, as_background) {
+            Ok(_) => format!("Added video {}", path.display()),
+            Err(problem) => format!("Could not import {}: {problem}", path.display()),
+        };
+    }
+
+    /// Asks where to save the video and starts exporting in the background.
+    fn export_video(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        if self
+            .export
+            .as_ref()
+            .is_some_and(|export| export.result().is_none())
+        {
+            self.status_message = "An export is already running".to_owned();
+            return;
+        }
+        let Some(ffmpeg) = self.require_ffmpeg("Export") else {
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("MP4 video", &["mp4"])
+            .set_file_name(format!("{}.mp4", self.session.project_name()))
+            .set_parent(frame)
+            .save_file()
+        else {
+            return; // dialog cancelled
+        };
+        self.start_export(ctx, &ffmpeg, &with_mp4_extension(path));
+    }
+
+    fn start_export(&mut self, ctx: &egui::Context, ffmpeg: &Path, output: &Path) {
+        let job = ExportJob::from_project(
+            self.session.project(),
+            &self.audio_store,
+            &mut self.visualizer_catalog,
+            self.bundled_presets.as_deref(),
+            ffmpeg,
+            output,
+        );
+        match job {
+            Ok(job) => {
+                let ctx = ctx.clone();
+                // Called on the export thread, so the progress bar moves.
+                self.export = Some(Export::start(job, move || ctx.request_repaint()));
+                self.status_message = format!("Exporting {}", output.display());
+            }
+            Err(problem) => self.status_message = format!("Cannot export: {problem}"),
+        }
     }
 
     pub fn is_playing(&self) -> bool {
@@ -208,6 +310,9 @@ impl VizxApp {
             AppCommand::ImportAudio => self.import_audio(frame),
             AppCommand::ImportImage => self.import_images(frame),
             AppCommand::ImportBackgroundImage => self.import_background_image(frame),
+            AppCommand::ImportVideo => self.import_video(frame, false),
+            AppCommand::ImportBackgroundVideo => self.import_video(frame, true),
+            AppCommand::ExportVideo => self.export_video(ctx, frame),
             AppCommand::BrowseMilkdropPresets => self.preset_browser.open(ctx),
             AppCommand::AddMilkdropPreset => self.add_milkdrop_preset(frame),
             AppCommand::BrowseVisualizers => self.visualizer_browser.is_open = true,
@@ -413,6 +518,10 @@ impl VizxApp {
         // Ctrl+Shift+M and Ctrl+M.
         let shortcuts = [
             (
+                KeyboardShortcut::new(Modifiers::COMMAND, Key::E),
+                AppCommand::ExportVideo,
+            ),
+            (
                 KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::I),
                 AppCommand::ImportImage,
             ),
@@ -599,7 +708,7 @@ impl eframe::App for VizxApp {
                     ui,
                     &mut self.session,
                     &self.audio_store,
-                    &self.visual_preview.layers(),
+                    &self.visual_preview,
                     &mut self.visualizer_catalog,
                     &mut self.requested_command,
                 );
@@ -609,6 +718,7 @@ impl eframe::App for VizxApp {
         project_settings_window::show(&ctx, self);
         preset_browser::show(&ctx, self);
         visualizer_browser::show(&ctx, self);
+        export_window::show(&ctx, self);
         if let Some(decision) = unsaved_changes_dialog::show(&ctx, self) {
             self.resolve_unsaved_changes(decision, &ctx, frame);
         }
@@ -619,6 +729,19 @@ impl eframe::App for VizxApp {
         self.transport.end_frame(&self.session);
         self.sync_window_title(&ctx);
     }
+}
+
+/// Returns `path` with the `.mp4` extension, appending it if it is missing.
+fn with_mp4_extension(path: PathBuf) -> PathBuf {
+    let has_extension = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"));
+    if has_extension {
+        return path;
+    }
+    let mut file_name = path.into_os_string();
+    file_name.push(".mp4");
+    PathBuf::from(file_name)
 }
 
 /// A native file dialog limited to VizX project files, attached to the main

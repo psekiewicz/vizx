@@ -55,4 +55,5 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 ///   `reaction`. Older files load fully opaque and without a reaction.
 /// - 11: a reaction can also move and turn its element and has a
 ///   sensitivity and a release time. Older reactions keep working.
-pub const CURRENT_FORMAT_VERSION: u32 = 11;
+/// - 12: video files as a kind of media.
+pub const CURRENT_FORMAT_VERSION: u32 = 12;

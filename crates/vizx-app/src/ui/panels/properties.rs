@@ -64,6 +64,7 @@ fn track_properties(
                     let kind = match source.image() {
                         Some(image) => format!("Image {} x {}", image.width, image.height),
                         None if source.is_milkdrop_preset() => "MilkDrop preset".to_owned(),
+                        None if source.video().is_some() => "Video".to_owned(),
                         None => "Visualizer plugin".to_owned(),
                     };
                     format!(

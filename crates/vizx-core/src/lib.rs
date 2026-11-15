@@ -6,6 +6,9 @@
 //! rendering) will be coordinated. It must never depend on a GUI library.
 
 mod audio_store;
+mod composition;
+mod export;
+mod ffmpeg;
 mod image_store;
 mod prerender;
 mod preset_library;
@@ -14,6 +17,12 @@ mod session;
 mod visualizer_catalog;
 
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
+pub use composition::{LayerGeometry, ReactionMeter, audio_sources, frame_source, layer_geometry};
+pub use export::{Export, ExportContent, ExportJob, ExportLayer};
+pub use ffmpeg::{
+    FFMPEG_DIR_VARIABLE, SUPPORTED_VIDEO_EXTENSIONS, VideoReader, VideoWriter, find_ffmpeg,
+    has_supported_video_extension, probe_video,
+};
 pub use image_store::{
     DecodedImage, ImageState, ImageStore, SUPPORTED_IMAGE_EXTENSIONS, has_supported_image_extension,
 };
@@ -29,6 +38,9 @@ pub use visualizer_catalog::{
 // The plugin description types, so the user interface can show a plugin's
 // parameters without depending on the rendering crate itself.
 pub use vizx_visualizer::{Manifest, ParameterKind, ParameterSpec, ParameterValues};
+// The compositor, so the preview can use it without depending on the
+// rendering crate itself.
+pub use vizx_render::{Compositor, LayerDraw};
 
 /// Name of the application as shown to the user.
 pub const APP_NAME: &str = "VizX (Prototype)";

@@ -4,7 +4,7 @@ use vizx_project::{ClipId, Placement};
 
 use crate::app::AppCommand;
 use crate::theme;
-use crate::visual_preview::{LayerContent, LayerView};
+use crate::visual_preview::{self, LayerState, LayerView, VisualPreview};
 
 /// Empty space kept between the composition frame and the panel edges.
 const FRAME_MARGIN: f32 = 24.0;
@@ -17,16 +17,17 @@ const SNAP_DISTANCE: f32 = 6.0;
 /// Draws the composition at the playhead and lets visualizers be moved and
 /// resized directly in the picture.
 ///
-/// The frame has the shape of the project's composition size. Every
-/// visualizer at the playhead is drawn into its placement, lower layers
-/// first. Clicking one selects its layer; the selected one gets a frame
+/// The frame has the shape of the project's composition size. The picture
+/// in it is composed by `VisualPreview`; this panel shows it and lays the
+/// editing controls over it. Clicking a clip selects its layer; the selected one gets a frame
 /// with handles: drag inside to move, drag a handle to resize.
 pub fn show(
     ui: &mut egui::Ui,
     session: &mut EditorSession,
     requested_command: &mut Option<AppCommand>,
-    layers: &[LayerView<'_>],
+    preview: &VisualPreview,
 ) {
+    let layers = preview.layers();
     let settings = session.project().settings.clone();
     let panel_rect = ui.available_rect_before_wrap();
     let painter = ui.painter_at(panel_rect);
@@ -44,6 +45,22 @@ pub fn show(
         StrokeKind::Outside,
     );
 
+    // Tell the compositor how large the picture is shown, in real screen
+    // pixels, and draw what it composed.
+    visual_preview::set_shown_width(
+        ui.ctx(),
+        composition_rect.width() * ui.ctx().pixels_per_point(),
+    );
+    if let Some(texture) = preview.composition() {
+        let whole_texture = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        painter.image(
+            texture.id(),
+            composition_rect,
+            whole_texture,
+            Color32::WHITE,
+        );
+    }
+
     // The empty area comes first, so the visualizers added after it are
     // "on top" and receive clicks before it does.
     let background = ui.interact(
@@ -60,7 +77,13 @@ pub fn show(
         }
     });
 
-    if layers.is_empty() {
+    if let Some(problem) = preview.composition_error() {
+        draw_message(
+            &painter,
+            composition_rect,
+            format!("The picture could not be drawn: {problem}"),
+        );
+    } else if layers.is_empty() {
         draw_message(
             &painter,
             composition_rect,
@@ -81,22 +104,10 @@ pub fn show(
     for layer in layers {
         let placement = shown_placement(layer, drag);
         let layer_rect = to_screen(placement, composition_rect);
-        // A clip that reacts to the sound is drawn larger around its own
-        // middle. Its frame and handles stay where the placement is, so
-        // they do not jump around while the music plays.
-        let shift = egui::vec2(
-            layer.offset[0] * composition_rect.width(),
-            layer.offset[1] * composition_rect.height(),
-        );
-        let drawn_rect =
-            Rect::from_center_size(layer_rect.center() + shift, layer_rect.size() * layer.scale);
-        draw_layer(
-            &layer_painter,
-            drawn_rect,
-            &layer.content,
-            layer.opacity,
-            layer.rotation_degrees,
-        );
+        // The clip's frame and handles stay where its placement is, even
+        // while its animation moves the picture, so they do not jump
+        // around while the music plays.
+        draw_layer_state(&layer_painter, layer_rect, &layer.state);
 
         let response = ui.interact(
             layer_rect.intersect(panel_rect),
@@ -162,6 +173,8 @@ pub fn show(
         }
     }
 
+    // While dragging, the picture itself follows the mouse too.
+    visual_preview::set_dragged_placement(ui.ctx(), drag.map(|drag| (drag.clip, drag.current)));
     ui.data_mut(|data| match drag {
         Some(drag) => {
             data.insert_temp(drag_id, drag);
@@ -220,7 +233,7 @@ struct Drag {
 
 /// The placement to draw a layer with: the one being dragged, if it is
 /// being dragged, otherwise the one stored in the project.
-fn shown_placement(layer: &LayerView<'_>, drag: Option<Drag>) -> Placement {
+fn shown_placement(layer: &LayerView, drag: Option<Drag>) -> Placement {
     match drag {
         Some(drag) if drag.clip == layer.clip_id => drag.current,
         _ => layer.placement,
@@ -406,44 +419,20 @@ fn to_screen(placement: Placement, composition_rect: Rect) -> Rect {
     )
 }
 
-fn draw_layer(
-    painter: &egui::Painter,
-    layer_rect: Rect,
-    content: &LayerContent<'_>,
-    opacity: f32,
-    rotation_degrees: f32,
-) {
-    let message = match content {
-        LayerContent::Picture(texture) => {
-            // The whole texture (0,0 to 1,1) drawn over the whole placement.
-            let whole_texture = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-            // Multiplying by a white of the wanted opacity fades the
-            // picture, its own transparency included.
-            let tint = Color32::from_white_alpha((opacity.clamp(0.0, 1.0) * 255.0).round() as u8);
-            // A "mesh" is the picture as two triangles; unlike a plain
-            // image it can be turned around its middle.
-            let mut mesh = egui::Mesh::with_texture(texture.id());
-            mesh.add_rect_with_uv(layer_rect, whole_texture, tint);
-            if rotation_degrees != 0.0 {
-                mesh.rotate(
-                    egui::emath::Rot2::from_angle(rotation_degrees.to_radians()),
-                    layer_rect.center(),
-                );
-            }
-            painter.add(egui::Shape::mesh(mesh));
-            return;
-        }
-        LayerContent::Rendering { finished, total } if *total > 0 => format!(
+/// For a clip that is not in the picture yet, draws a dark box with the
+/// reason, so the clip's place in the frame is still visible.
+fn draw_layer_state(painter: &egui::Painter, layer_rect: Rect, state: &LayerState) {
+    let message = match state {
+        LayerState::Shown => return,
+        LayerState::Rendering { finished, total } if *total > 0 => format!(
             "Pre-rendering: {}%\n({finished} of {total} frames)",
             u64::from(*finished) * 100 / u64::from(*total)
         ),
-        LayerContent::Rendering { .. } => "Waiting to pre-render...".to_owned(),
-        LayerContent::WaitingForAudio => "Loading audio before pre-rendering...".to_owned(),
-        LayerContent::LoadingImage => "Loading image...".to_owned(),
-        LayerContent::Failed(reason) => reason.clone(),
+        LayerState::Rendering { .. } => "Waiting to pre-render...".to_owned(),
+        LayerState::WaitingForAudio => "Loading audio before pre-rendering...".to_owned(),
+        LayerState::LoadingImage => "Loading image...".to_owned(),
+        LayerState::Failed(reason) => reason.clone(),
     };
-    // No picture yet: a dark box with the reason, so the clip's place in
-    // the frame is still visible.
     painter.rect_filled(layer_rect, 0.0, Color32::from_gray(10));
     painter.rect_stroke(
         layer_rect,

@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 vizx-audio.workspace = true
 vizx-milkdrop.workspace = true
+vizx-render.workspace = true
 vizx-visualizer.workspace = true
 image.workspace = true
 jpeg-encoder.workspace = true

@@ -6,6 +6,7 @@ members = [
     "crates/vizx-core",
     "crates/vizx-milkdrop",
     "crates/vizx-project",
+    "crates/vizx-render",
     "crates/vizx-visualizer",
 ]
 
@@ -23,6 +24,7 @@ vizx-audio = { path = "crates/vizx-audio" }
 vizx-core = { path = "crates/vizx-core" }
 vizx-milkdrop = { path = "crates/vizx-milkdrop" }
 vizx-project = { path = "crates/vizx-project" }
+vizx-render = { path = "crates/vizx-render" }
 vizx-visualizer = { path = "crates/vizx-visualizer" }
 
 # egui_dock 0.21 is built against egui 0.36, so eframe/egui must stay on 0.36
@@ -95,4 +97,7 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.vizx-visualizer]
+opt-level = 2
+
+[profile.dev.package.vizx-render]
 opt-level = 2

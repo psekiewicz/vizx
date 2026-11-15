@@ -12,7 +12,7 @@ its own copy of anything.
 
 ## Crates
 
-The workspace has six crates. Dependencies point in one direction only:
+The workspace has seven crates. Dependencies point in one direction only:
 
 ```text
 vizx-app  ──►  vizx-core  ──►  vizx-project
@@ -21,8 +21,10 @@ vizx-app  ──►  vizx-core  ──►  vizx-project
                           │     (audio files, playback)
                           ├──►  vizx-milkdrop
                           │     (MilkDrop presets via projectM)
-                          └──►  vizx-visualizer
-                                (visualizer plugins: shaders via wgpu)
+                          ├──►  vizx-visualizer
+                          │     (visualizer plugins: shaders via wgpu)
+                          └──►  vizx-render
+                                (off-screen wgpu device, layer compositor)
 ```
 
 `vizx-project` and `vizx-audio` do not know about each other. `vizx-core`
@@ -35,6 +37,7 @@ in the project.
 | `vizx-audio` | Audio files and the sound card: reading file properties, decoding, waveform peaks, mixing, playback and analysis (spectrum, waveform, levels). Later: beats. | GUI, project data |
 | `vizx-milkdrop` | Rendering MilkDrop presets to pixels with the projectM library. The only crate with `unsafe` code, C declarations and OpenGL. | GUI, project data |
 | `vizx-visualizer` | Visualizer plugins: reading a plugin folder and rendering its WGSL shader off-screen with wgpu. | GUI, project data, the timeline |
+| `vizx-render` | The rendering engine: an off-screen wgpu device and the compositor that lays pictures over each other into one frame. | GUI, project data, the timeline |
 | `vizx-core` | Editing state and logic operating on a project. Future home of subsystem coordination. | GUI code |
 | `vizx-app` | The window, panels, menus and visual style. | Project rules or logic that other front ends would need |
 
@@ -131,7 +134,8 @@ Version **8** added a clip's `placement`; older files load filling the frame.
 Version **9** added visualizer plugins as a kind of media and a clip's
 parameter values for them. Version **10** added images as a kind of media
 and a clip's `opacity` and `reaction`. Version **11** extended reactions
-(move, rotate, sensitivity, release).
+(move, rotate, sensitivity, release). Version **12** added video files as a
+kind of media.
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -235,8 +239,50 @@ This is the first part of the animation and behavior engine.
   handles stay at its placement. A fixed rotation of a clip and keyframes
   are not implemented yet.
 
-### Visualizer plugins
-Visualizers other than MilkDrop presets are **plugins**: a folder with a
+### One compositor for preview and export
+
+Every VizX picture is put together in one place, `vizx_render::Compositor`.
+It is given layers (premultiplied RGBA pixels plus where to draw them: the
+middle, size, rotation and opacity) and draws them over a black frame on
+the graphics card, the first layer at the bottom, then reads the frame back.
+
+- The **preview** (`vizx-app/src/visual_preview.rs`) composes at the size
+  the panel shows and hands the result to egui as one texture. The panel
+  only lays the editing frame and handles over it.
+- The **export** (`vizx_core::Export`) composes at the project's size.
+
+What goes into a frame is decided by shared code in
+`vizx-core/src/composition.rs`: which audio a clip listens to
+(`audio_sources`), what draws it (`frame_source`), how strongly it reacts
+right now (`ReactionMeter`) and where exactly it is drawn (`layer_geometry`).
+The frames of visualizers and videos come from one `FrameRenderer`, used by
+the preview's pre-render at a small size and by the export at full size.
+Preview and export therefore cannot drift apart.
+
+### Video files and export (FFmpeg)
+
+VizX contains no video codec. It starts the separate `ffmpeg` program and
+exchanges raw pictures with it through pipes (`vizx-core/src/ffmpeg.rs`).
+FFmpeg is optional: without it, video files cannot be added and nothing can
+be exported; everything else works. It is looked for next to the VizX
+executable, in `%VIZX_FFMPEG_DIR%/bin`, and on the system `PATH`. Running it
+as a separate program also keeps its licence (LGPL/GPL, depending on the
+build) apart from VizX.
+
+- **Video as a layer or background.** A video is a kind of media
+  (`MediaContent::Video`) used for its picture only; its sound is ignored.
+  It plays from its start when its clip starts and begins again when it
+  ends. For the preview it is pre-rendered like a visualizer: FFmpeg decodes
+  it at preview size into the frame store.
+- **Export** (File > Export Video, Ctrl+E) writes an MP4 with H.264 picture
+  and AAC sound. It runs on its own thread from a snapshot of the project
+  (`ExportJob`), so editing can continue. For each frame, time is
+  `frame number / frame rate`, never the clock, so the result does not
+  depend on the computer's speed. The sound is the same mix playback plays,
+  written to a temporary WAV file for FFmpeg. A cancelled or failed export
+  removes its unfinished file.
+
+### Visualizer pluginsVisualizers other than MilkDrop presets are **plugins**: a folder with a
 `visualizer.json` (name and adjustable parameters) and a `shader.wgsl` (a
 function that returns the color of a pixel). The visualizers that ship with
 VizX are plugins too, in `assets/visualizers`. See
@@ -269,7 +315,7 @@ VizX are plugins too, in `assets/visualizers`. See
 
 ### One "Add" menu
 
-Everything that can be added to a project (audio file, image, MilkDrop preset,
+Everything that can be added to a project (audio file, image, video, MilkDrop preset,
 visualizer plugin, visual layer, audio track) is listed in one function, `ui::add_menu_items`.
 It is shown in exactly one place, the context menu of the timeline
 (right-click a track, a lane or the empty area), plus keyboard shortcuts

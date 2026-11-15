@@ -72,7 +72,7 @@ impl ImageStore {
         let path = path.to_owned();
         let result_sender = self.result_sender.clone();
         thread::spawn(move || {
-            let state = match decode_image_file(Path::new(&path)) {
+            let state = match decode_image_file(Path::new(&path), PREVIEW_EDGE_LIMIT) {
                 Ok(image) => ImageState::Ready(Arc::new(image)),
                 Err(problem) => ImageState::Failed(problem),
             };
@@ -107,12 +107,13 @@ pub fn image_file_size(path: &Path) -> Result<(u32, u32), String> {
     image::image_dimensions(path).map_err(|error| error.to_string())
 }
 
-/// Decodes an image file for the preview.
-pub fn decode_image_file(path: &Path) -> Result<DecodedImage, String> {
+/// Decodes an image file. An image whose longer edge exceeds `edge_limit`
+/// pixels is scaled down to it.
+pub fn decode_image_file(path: &Path, edge_limit: u32) -> Result<DecodedImage, String> {
     let image = image::open(path).map_err(|error| error.to_string())?;
-    let image = if image.width().max(image.height()) > PREVIEW_EDGE_LIMIT {
+    let image = if image.width().max(image.height()) > edge_limit {
         // Keeps the shape; the longer edge becomes the limit.
-        image.thumbnail(PREVIEW_EDGE_LIMIT, PREVIEW_EDGE_LIMIT)
+        image.thumbnail(edge_limit, edge_limit)
     } else {
         image
     };
@@ -170,7 +171,7 @@ mod tests {
         write_test_png(&path, 8, 4);
 
         let size = image_file_size(&path);
-        let image = decode_image_file(&path);
+        let image = decode_image_file(&path, PREVIEW_EDGE_LIMIT);
         let _ = std::fs::remove_file(&path);
 
         assert_eq!(size, Ok((8, 4)));
@@ -186,7 +187,7 @@ mod tests {
         let path = temporary_path("large.png");
         write_test_png(&path, 3840, 960);
 
-        let image = decode_image_file(&path);
+        let image = decode_image_file(&path, PREVIEW_EDGE_LIMIT);
         let _ = std::fs::remove_file(&path);
 
         let image = image.unwrap();

@@ -7,6 +7,7 @@
 use crate::app::AppCommand;
 
 pub mod about_window;
+pub mod export_window;
 pub mod menu_bar;
 pub mod panels;
 pub mod preset_browser;
@@ -40,6 +41,13 @@ pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
         "Background Image...",
         "",
         AppCommand::ImportBackgroundImage,
+    );
+    item(ui, "Video File...", "", AppCommand::ImportVideo);
+    item(
+        ui,
+        "Background Video...",
+        "",
+        AppCommand::ImportBackgroundVideo,
     );
     item(
         ui,

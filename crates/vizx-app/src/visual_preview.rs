@@ -1,72 +1,79 @@
-//! Shows the visual clips in the preview: visualizers (MilkDrop presets and
-//! visualizer plugins) from pre-rendered frames, and images.
+//! Builds the picture shown in the preview.
 //!
-//! Each visual clip on the timeline is rendered ahead of time in the
-//! background (see `Prerender`). The preview then only looks up the
-//! frames that belong to the playhead, so scrubbing and seeking show the
-//! right picture and playback is cheap.
-//!
-//! Several clips can be visible at once: every visual layer with a clip at
-//! the playhead contributes one picture, drawn into the clip's placement.
+//! Visualizers (MilkDrop presets, visualizer plugins) and videos are
+//! rendered ahead of time in the background (see `Prerender`), so the
+//! preview only looks up the frames that belong to the playhead. Images are
+//! decoded once. Whatever is visible at the playhead is then laid over each
+//! other by the `Compositor`, the same one the video export uses, so the
+//! preview shows what an export will contain.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer, PlaybackSource};
 use vizx_core::{
-    AudioStore, EditorSession, FrameSource, ImageState, ImageStore, Prerender, PrerenderJob,
-    VisualizerCatalog, resolve_preset_path,
+    AudioStore, Compositor, DecodedImage, EditorSession, ImageState, ImageStore, LayerDraw,
+    LayerGeometry, Prerender, PrerenderJob, ReactionMeter, VisualizerCatalog, audio_sources,
+    frame_source, layer_geometry,
 };
-use vizx_project::{Clip, ClipId, MediaSource, Placement, ReactionBand, ReactionEffect, TrackId};
+use vizx_project::{AudioInput, ClipId, Placement, ReactionEffect, TrackId};
 
-use crate::transport::{audio_sources_for, project_audio_sources};
-
-/// Width in pixels of a preview picture that fills the whole frame. The
-/// height follows from the project's aspect ratio, and a smaller clip is
-/// rendered proportionally smaller. Kept small so that rendering and
-/// storing every frame of a song stays affordable on modest hardware;
-/// export will render at full size.
+/// Width in pixels at which a clip that fills the whole frame is
+/// pre-rendered. The height follows from the project's aspect ratio, and a
+/// smaller clip is rendered proportionally smaller. Kept small so that
+/// rendering and storing every frame of a song stays affordable on modest
+/// hardware; export renders at full size.
 const PREVIEW_WIDTH: u32 = 640;
-/// Smallest and largest edge of a rendered picture, in pixels.
+/// Smallest and largest edge of a pre-rendered picture, in pixels.
 const RENDER_EDGE_RANGE: (u32, u32) = (16, 1920);
+/// Largest width, in pixels, of the composed preview picture.
+const MAX_COMPOSITION_WIDTH: u32 = 1280;
 /// A render starts only after its settings have stayed the same for this
 /// long. Dragging a size value changes them many times per second, and
 /// each change would otherwise start and throw away a render.
 const RENDER_START_DELAY: Duration = Duration::from_millis(350);
-/// Sample rate at which audio is analysed for clips that react to it.
-const REACTION_SAMPLE_RATE: u32 = 44_100;
-/// For a reaction's release, the sound is measured at earlier moments this
-/// far apart, and at most this many of them.
-const RELEASE_STEP_SECONDS: f64 = 1.0 / 30.0;
-const MAX_RELEASE_STEPS: u32 = 15;
 
-/// One visual clip in the picture at the playhead.
-pub struct LayerView<'a> {
+/// Names under which the preview panel leaves notes for this module in
+/// egui's temporary storage.
+const SHOWN_WIDTH_ID: &str = "vizx_preview_shown_width";
+const DRAGGED_PLACEMENT_ID: &str = "vizx_preview_dragged_placement";
+
+/// Called by the preview panel: the composition is currently shown this
+/// many screen pixels wide. The next frame is composed at that size, so it
+/// is neither blurry nor larger than needed.
+pub fn set_shown_width(ctx: &egui::Context, pixels: f32) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new(SHOWN_WIDTH_ID), pixels));
+}
+
+/// Called by the preview panel while a clip is being moved or resized with
+/// the mouse: draw that clip at this placement instead of the one stored in
+/// the project, so the picture follows the mouse. `None` ends it.
+pub fn set_dragged_placement(ctx: &egui::Context, dragged: Option<(ClipId, Placement)>) {
+    let id = egui::Id::new(DRAGGED_PLACEMENT_ID);
+    ctx.data_mut(|data| match dragged {
+        Some(dragged) => {
+            data.insert_temp(id, dragged);
+        }
+        None => data.remove::<(ClipId, Placement)>(id),
+    });
+}
+
+/// One visual clip at the playhead, for the preview panel: where it is, and
+/// whether it could be drawn.
+pub struct LayerView {
     pub clip_id: ClipId,
     /// The visual layer the clip is on.
     pub track_id: TrackId,
     pub placement: Placement,
-    /// How opaque the clip is drawn right now, 0 to 1: its own opacity
-    /// combined with its reaction to the sound.
-    pub opacity: f32,
-    /// How much larger than its placement the clip is drawn right now,
-    /// because of its reaction to the sound. 1 is its normal size.
-    pub scale: f32,
-    /// How far the clip is shifted right now by its reaction, as fractions
-    /// of the frame's width and height.
-    pub offset: [f32; 2],
-    /// How far the clip is turned right now by its reaction, in degrees
-    /// clockwise.
-    pub rotation_degrees: f32,
-    pub content: LayerContent<'a>,
+    pub state: LayerState,
 }
 
-/// What to draw for one visualizer right now.
-pub enum LayerContent<'a> {
-    /// The frame for the playhead.
-    Picture(&'a egui::TextureHandle),
+/// Whether a clip is part of the composed picture right now.
+pub enum LayerState {
+    /// It is in the picture.
+    Shown,
     /// The clip's frames are still being rendered and the playhead is ahead
     /// of them. `total` is 0 while the clip waits for its turn.
     Rendering { finished: u32, total: u32 },
@@ -74,66 +81,83 @@ pub enum LayerContent<'a> {
     WaitingForAudio,
     /// The image file is still being read.
     LoadingImage,
-    /// The clip cannot be rendered; the text says why.
+    /// The clip cannot be drawn; the text says why.
     Failed(String),
 }
 
-/// What `update` decided to show for a layer; turned into a
-/// [`LayerContent`] by `layers`.
-enum Shown {
-    Picture,
-    Rendering { finished: u32, total: u32 },
-    WaitingForAudio,
-    LoadingImage,
-    Failed(String),
-}
-
-struct ShownLayer {
-    clip_id: ClipId,
-    track_id: TrackId,
-    placement: Placement,
-    opacity: f32,
-    scale: f32,
-    offset: [f32; 2],
-    rotation_degrees: f32,
-    shown: Shown,
-}
-
-/// The picture of one clip that is currently uploaded to the graphics card.
-struct LayerTexture {
-    handle: egui::TextureHandle,
-    /// Which frame it shows, and for which render (its key), so the same
-    /// frame is not decoded and uploaded again every frame. For an image,
-    /// the key is its file and the frame is always 0.
+/// The pixels of one clip as they are right now.
+struct LayerPicture {
+    width: u32,
+    height: u32,
+    pixels: Pixels,
+    /// Which frame this is, and of which render (its key), so the same
+    /// frame is not decoded again every frame. For an image, the key is its
+    /// file and the frame is always 0.
     frame_index: u32,
     render_key: String,
+    /// Counts up whenever the pixels change, which tells the compositor to
+    /// send them to the graphics card again.
+    version: u64,
+}
+
+enum Pixels {
+    /// A decoded pre-rendered frame.
+    Frame(Vec<u8>),
+    /// A decoded image, shared with the image store.
+    Image(Arc<DecodedImage>),
+}
+
+impl LayerPicture {
+    fn bytes(&self) -> &[u8] {
+        match &self.pixels {
+            Pixels::Frame(pixels) => pixels,
+            Pixels::Image(image) => &image.pixels,
+        }
+    }
 }
 
 pub struct VisualPreview {
     /// Folder of the presets that ship with VizX, if this installation has
     /// one. Projects refer to those presets by their place in this folder.
     bundled_presets: Option<PathBuf>,
-    /// Pre-rendered frames of every MilkDrop clip in the project.
+    /// The FFmpeg program, if it was found. Needed for video clips.
+    ffmpeg: Option<PathBuf>,
+    /// Pre-rendered frames of every visualizer and video clip.
     prerenders: HashMap<ClipId, Prerender>,
     /// Renders that are wanted but not started yet: the key of the wanted
     /// job and since when it has been wanted unchanged.
     waiting_since: HashMap<ClipId, (String, Instant)>,
-    textures: HashMap<ClipId, LayerTexture>,
+    pictures: HashMap<ClipId, LayerPicture>,
+    last_picture_version: u64,
     /// The visual clips at the playhead, bottom layer first.
-    layers: Vec<ShownLayer>,
+    layers: Vec<LayerView>,
     /// Measures the sound at the playhead for clips that react to it.
-    analyzer: AudioAnalyzer,
+    meter: ReactionMeter,
+    /// Created when the first picture is composed. `Err` if the graphics
+    /// card could not be used; the text says why.
+    compositor: Option<Result<Compositor, String>>,
+    /// The composed picture, as egui shows it.
+    composition: Option<egui::TextureHandle>,
+    /// Why the picture could not be composed, if it could not.
+    composition_error: Option<String>,
+    frame_pixels: Vec<u8>,
 }
 
 impl VisualPreview {
-    pub fn new(bundled_presets: Option<PathBuf>) -> Self {
+    pub fn new(bundled_presets: Option<PathBuf>, ffmpeg: Option<PathBuf>) -> Self {
         Self {
             bundled_presets,
+            ffmpeg,
             prerenders: HashMap::new(),
             waiting_since: HashMap::new(),
-            textures: HashMap::new(),
+            pictures: HashMap::new(),
+            last_picture_version: 0,
             layers: Vec::new(),
-            analyzer: AudioAnalyzer::new(REACTION_SAMPLE_RATE),
+            meter: ReactionMeter::default(),
+            compositor: None,
+            composition: None,
+            composition_error: None,
+            frame_pixels: Vec::new(),
         }
     }
 
@@ -147,18 +171,20 @@ impl VisualPreview {
         image_store: &ImageStore,
     ) {
         let project = session.project();
-        // Pictures of clips that no longer exist are not needed any more.
-        self.textures
-            .retain(|clip_id, _| project.visual_clips().any(|(clip, _)| clip.id == *clip_id));
         let settings = &project.settings;
         let frames_per_second = settings.frame_rate.as_f64().round().max(1.0) as u32;
+        // Pictures of clips that no longer exist are not needed any more.
+        self.pictures
+            .retain(|clip_id, _| project.visual_clips().any(|(clip, _)| clip.id == *clip_id));
+
         // Rendering waits until all audio is loaded, not only the audio a
         // clip reacts to, so that no clip is rendered twice.
-        let (_all_sources, clips_still_loading) = project_audio_sources(session, audio_store);
+        let (_all_sources, clips_still_loading) =
+            audio_sources(project, audio_store, AudioInput::Mix);
         let is_audio_ready = clips_still_loading == 0;
 
         if is_audio_ready {
-            // What should be rendered: one job per visual clip.
+            // What should be rendered: one job per visualizer or video clip.
             let mut wanted: Vec<(ClipId, PrerenderJob)> = Vec::new();
             for (clip, media) in project.visual_clips() {
                 // An image is shown as it is; nothing is rendered for it.
@@ -168,9 +194,13 @@ impl VisualPreview {
                 // A clip that cannot be rendered at all (for example a
                 // bundled preset this installation does not have) gets no
                 // job; the preview says why further down.
-                let Ok(source) =
-                    frame_source(media, clip, self.bundled_presets.as_deref(), catalog)
-                else {
+                let Ok(source) = frame_source(
+                    media,
+                    clip,
+                    self.bundled_presets.as_deref(),
+                    catalog,
+                    self.ffmpeg.as_deref(),
+                ) else {
                     continue;
                 };
                 let clip_seconds = clip.duration_milliseconds as f64 / 1000.0;
@@ -186,7 +216,7 @@ impl VisualPreview {
                         start_seconds: clip.start_milliseconds as f64 / 1000.0,
                         // Each visualizer hears only the audio it was told
                         // to react to: the mix, or one audio track.
-                        audio_sources: audio_sources_for(session, audio_store, clip.audio_input).0,
+                        audio_sources: audio_sources(project, audio_store, clip.audio_input).0,
                     },
                 ));
             }
@@ -200,8 +230,14 @@ impl VisualPreview {
         let last_millisecond = settings.duration_milliseconds.saturating_sub(1);
         let playhead_seconds = session.playhead_seconds();
         let lookup_milliseconds = ((playhead_seconds * 1000.0) as u64).min(last_millisecond);
+        // A clip the user is dragging right now is drawn where the mouse
+        // has taken it.
+        let dragged: Option<(ClipId, Placement)> =
+            ctx.data(|data| data.get_temp(egui::Id::new(DRAGGED_PLACEMENT_ID)));
 
         self.layers.clear();
+        // Where each layer goes, in the same order as `self.layers`.
+        let mut geometries = Vec::new();
         // The project lists layers from the top down; drawing goes from the
         // bottom up, so that higher layers cover lower ones.
         for (track, clip, media) in project
@@ -209,160 +245,129 @@ impl VisualPreview {
             .into_iter()
             .rev()
         {
+            let state = if media.image().is_some() {
+                self.show_image(clip.id, &media.path, image_store)
+            } else {
+                let problem = frame_source(
+                    media,
+                    clip,
+                    self.bundled_presets.as_deref(),
+                    catalog,
+                    self.ffmpeg.as_deref(),
+                )
+                .err();
+                if let Some(problem) = problem {
+                    LayerState::Failed(problem)
+                } else if !is_audio_ready {
+                    LayerState::WaitingForAudio
+                } else {
+                    let seconds_into_clip =
+                        playhead_seconds - clip.start_milliseconds as f64 / 1000.0;
+                    let frame = (seconds_into_clip.max(0.0) * f64::from(frames_per_second)) as u32;
+                    self.show_frame(clip.id, frame)
+                }
+            };
+
             let effect = if clip.reaction.is_active() {
-                let level = self.reaction_level(session, audio_store, clip, playhead_seconds);
-                clip.reaction.at_level(level)
+                let (sources, _) = audio_sources(project, audio_store, clip.audio_input);
+                self.meter
+                    .effect(&sources, &clip.reaction, playhead_seconds)
             } else {
                 ReactionEffect::NONE
             };
-
-            let problem = if media.image().is_some() {
-                None
-            } else {
-                frame_source(media, clip, self.bundled_presets.as_deref(), catalog).err()
+            let placement = match dragged {
+                Some((dragged_clip, placement)) if dragged_clip == clip.id => placement,
+                _ => clip.placement,
             };
-            let shown = if media.image().is_some() {
-                self.show_image(ctx, clip.id, &media.path, image_store)
-            } else if let Some(problem) = problem {
-                Shown::Failed(problem)
-            } else if !is_audio_ready {
-                Shown::WaitingForAudio
-            } else {
-                let seconds_into_clip = playhead_seconds - clip.start_milliseconds as f64 / 1000.0;
-                let frame = (seconds_into_clip.max(0.0) * f64::from(frames_per_second)) as u32;
-                self.show_frame(ctx, clip.id, frame)
-            };
-            self.layers.push(ShownLayer {
+            geometries.push(layer_geometry(placement, clip.opacity, effect));
+            self.layers.push(LayerView {
                 clip_id: clip.id,
                 track_id: track.id,
                 placement: clip.placement,
-                opacity: (clip.opacity * effect.opacity) as f32,
-                scale: effect.scale as f32,
-                offset: [effect.offset_x as f32, effect.offset_y as f32],
-                rotation_degrees: effect.rotation_degrees as f32,
-                shown,
+                state,
             });
         }
+
+        self.compose(ctx, settings.width, settings.height, &geometries);
     }
 
-    /// How loud the part of the sound is that a clip reacts to, at the
-    /// playhead, from 0 to 1, with the clip's release time applied: the
-    /// value jumps up with the sound and then falls back gradually.
-    ///
-    /// It is worked out from the audio leading up to the playhead and from
-    /// nothing else, so the same moment of the song always gives the same
-    /// value, whether it is reached by playing or by jumping there. For the
-    /// release that means looking at a few earlier moments too: a loud
-    /// moment shortly before still counts, the less the longer ago it was.
-    fn reaction_level(
-        &mut self,
-        session: &EditorSession,
-        audio_store: &AudioStore,
-        clip: &Clip,
-        playhead_seconds: f64,
-    ) -> f64 {
-        let (sources, _) = audio_sources_for(session, audio_store, clip.audio_input);
-        let release = clip.reaction.release_seconds;
-        let steps_back = if release > 0.0 {
-            ((release / RELEASE_STEP_SECONDS).ceil() as u32).min(MAX_RELEASE_STEPS)
-        } else {
-            0
-        };
-
-        let mut level: f64 = 0.0;
-        for step in 0..=steps_back {
-            let seconds_ago = f64::from(step) * RELEASE_STEP_SECONDS;
-            let moment = playhead_seconds - seconds_ago;
-            if moment < 0.0 {
-                break;
-            }
-            // How much of a level from that moment is left by now.
-            let remaining = if step == 0 {
-                1.0
-            } else {
-                (1.0 - seconds_ago / release).max(0.0)
-            };
-            let then = self.level_at(&sources, clip.reaction.band, moment);
-            level = level.max(then * remaining);
-        }
-        level
-    }
-
-    /// How loud one part of the sound is at one moment, from 0 to 1.
-    fn level_at(&mut self, sources: &[PlaybackSource], band: ReactionBand, seconds: f64) -> f64 {
-        let window_end = (seconds.max(0.0) * f64::from(REACTION_SAMPLE_RATE)) as u64;
-        let window_start = window_end.saturating_sub(ANALYSIS_WINDOW as u64);
-        let stereo = vizx_audio::mix_to_stereo(
-            sources,
-            REACTION_SAMPLE_RATE,
-            window_start,
-            (window_end - window_start) as usize,
-        );
-        let mono: Vec<f32> = stereo
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|[left, right]| (left + right) * 0.5)
-            .collect();
-
-        // "Infinitely long ago": the analyzer's memory of earlier calls has
-        // faded completely, so only this moment counts.
-        let sound = self.analyzer.analyze(&mono, f32::MAX);
-        f64::from(match band {
-            ReactionBand::Volume => sound.volume,
-            ReactionBand::Bass => sound.bass,
-            ReactionBand::Mid => sound.mid,
-            ReactionBand::Treble => sound.treble,
-        })
-    }
-    /// Makes sure the texture of an image clip shows its file, and says
-    /// what can be drawn for the clip.
-    fn show_image(
+    /// Lays the layers that can be shown over each other and hands the
+    /// result to egui as one texture.
+    fn compose(
         &mut self,
         ctx: &egui::Context,
-        clip_id: ClipId,
-        path: &str,
-        image_store: &ImageStore,
-    ) -> Shown {
-        let key = format!("image:{path}");
-        if self
-            .textures
-            .get(&clip_id)
-            .is_some_and(|texture| texture.render_key == key)
-        {
-            return Shown::Picture;
-        }
-        let image = match image_store.state(path) {
-            Some(ImageState::Ready(image)) => image,
-            Some(ImageState::Failed(problem)) => {
-                return Shown::Failed(format!("Could not read {path}: {problem}"));
-            }
-            Some(ImageState::Loading) | None => return Shown::LoadingImage,
-        };
+        composition_width: u32,
+        composition_height: u32,
+        geometries: &[LayerGeometry],
+    ) {
+        // As large as the panel shows it, in the composition's shape.
+        let shown_width: f32 = ctx
+            .data(|data| data.get_temp(egui::Id::new(SHOWN_WIDTH_ID)))
+            .unwrap_or(PREVIEW_WIDTH as f32);
+        let width = even_edge(f64::from(shown_width)).min(MAX_COMPOSITION_WIDTH);
+        let height = even_edge(
+            f64::from(width) * f64::from(composition_height) / f64::from(composition_width.max(1)),
+        );
 
-        let handle = ctx.load_texture(
-            format!("visual_preview_{clip_id:?}"),
-            egui::ColorImage::from_rgba_premultiplied(
-                [image.width as usize, image.height as usize],
-                &image.pixels,
-            ),
-            egui::TextureOptions::LINEAR,
-        );
-        self.textures.insert(
-            clip_id,
-            LayerTexture {
-                handle,
-                frame_index: 0,
-                render_key: key,
-            },
-        );
-        Shown::Picture
+        let compositor = match self
+            .compositor
+            .get_or_insert_with(|| Compositor::new(width, height))
+        {
+            Ok(compositor) => compositor,
+            Err(problem) => {
+                self.composition_error = Some(problem.clone());
+                return;
+            }
+        };
+        compositor.resize(width, height);
+
+        let draws: Vec<LayerDraw<'_>> = self
+            .layers
+            .iter()
+            .zip(geometries)
+            .filter(|(layer, _)| matches!(layer.state, LayerState::Shown))
+            .filter_map(|(layer, geometry)| {
+                let picture = self.pictures.get(&layer.clip_id)?;
+                Some(LayerDraw {
+                    key: clip_key(layer.clip_id),
+                    version: picture.version,
+                    width: picture.width,
+                    height: picture.height,
+                    pixels: picture.bytes(),
+                    center: geometry.center,
+                    size: geometry.size,
+                    rotation_degrees: geometry.rotation_degrees,
+                    opacity: geometry.opacity,
+                })
+            })
+            .collect();
+
+        match compositor.render(&draws, &mut self.frame_pixels) {
+            Ok(()) => {
+                let image = egui::ColorImage::from_rgba_premultiplied(
+                    [width as usize, height as usize],
+                    &self.frame_pixels,
+                );
+                match &mut self.composition {
+                    Some(texture) => texture.set(image, egui::TextureOptions::LINEAR),
+                    None => {
+                        self.composition = Some(ctx.load_texture(
+                            "vizx_composition",
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                }
+                self.composition_error = None;
+            }
+            Err(problem) => self.composition_error = Some(problem),
+        }
     }
 
     /// Forgets renders that no longer match the project and starts the
     /// missing ones.
     fn start_and_drop_renders(&mut self, ctx: &egui::Context, wanted: Vec<(ClipId, PrerenderJob)>) {
-        // A render no longer matches when its clip is gone, or its preset,
+        // A render no longer matches when its clip is gone, or its source,
         // size, length or audio changed. Dropping it also stops its thread.
         self.prerenders.retain(|clip_id, prerender| {
             wanted
@@ -414,101 +419,102 @@ impl VisualPreview {
         }
     }
 
-    /// Makes sure the texture of a clip shows the given frame, and says
-    /// what can be drawn for the clip.
-    fn show_frame(&mut self, ctx: &egui::Context, clip_id: ClipId, frame: u32) -> Shown {
+    /// Makes sure the picture of a clip is the given pre-rendered frame,
+    /// and says whether the clip can be shown.
+    fn show_frame(&mut self, clip_id: ClipId, frame: u32) -> LayerState {
         let Some(prerender) = self.prerenders.get(&clip_id) else {
             // Queued behind another clip's render, or about to start.
-            return Shown::Rendering {
+            return LayerState::Rendering {
                 finished: 0,
                 total: 0,
             };
         };
         if let Some(error) = prerender.error() {
-            return Shown::Failed(error);
+            return LayerState::Failed(error);
         }
 
         let frame_index = frame.min(prerender.frame_count().saturating_sub(1));
-        if let Some(texture) = self.textures.get(&clip_id)
-            && texture.frame_index == frame_index
-            && texture.render_key == prerender.key()
+        if let Some(picture) = self.pictures.get(&clip_id)
+            && picture.frame_index == frame_index
+            && picture.render_key == prerender.key()
         {
-            return Shown::Picture;
+            return LayerState::Shown;
         }
         let Some(frame) = prerender.frame(frame_index) else {
-            return Shown::Rendering {
+            return LayerState::Rendering {
                 finished: prerender.finished_frame_count(),
                 total: prerender.frame_count(),
             };
         };
 
-        let image = egui::ColorImage::from_rgba_premultiplied(
-            [frame.width as usize, frame.height as usize],
-            &frame.pixels,
-        );
         let render_key = prerender.key().to_owned();
-        match self.textures.get_mut(&clip_id) {
-            Some(texture) => {
-                texture.handle.set(image, egui::TextureOptions::LINEAR);
-                texture.frame_index = frame_index;
-                texture.render_key = render_key;
-            }
-            None => {
-                let handle = ctx.load_texture(
-                    format!("visual_preview_{clip_id:?}"),
-                    image,
-                    egui::TextureOptions::LINEAR,
-                );
-                self.textures.insert(
-                    clip_id,
-                    LayerTexture {
-                        handle,
-                        frame_index,
-                        render_key,
-                    },
-                );
-            }
-        }
-        Shown::Picture
+        self.last_picture_version += 1;
+        self.pictures.insert(
+            clip_id,
+            LayerPicture {
+                width: frame.width,
+                height: frame.height,
+                pixels: Pixels::Frame(frame.pixels),
+                frame_index,
+                render_key,
+                version: self.last_picture_version,
+            },
+        );
+        LayerState::Shown
     }
 
-    /// The visualizers at the playhead, in drawing order: the bottom layer
-    /// first, the top layer last.
-    pub fn layers(&self) -> Vec<LayerView<'_>> {
-        self.layers
-            .iter()
-            .map(|layer| {
-                let content = match (&layer.shown, self.textures.get(&layer.clip_id)) {
-                    (Shown::Picture, Some(texture)) => LayerContent::Picture(&texture.handle),
-                    (Shown::Picture, None) => LayerContent::Rendering {
-                        finished: 0,
-                        total: 0,
-                    },
-                    (Shown::Rendering { finished, total }, _) => LayerContent::Rendering {
-                        finished: *finished,
-                        total: *total,
-                    },
-                    (Shown::WaitingForAudio, _) => LayerContent::WaitingForAudio,
-                    (Shown::LoadingImage, _) => LayerContent::LoadingImage,
-                    (Shown::Failed(reason), _) => LayerContent::Failed(reason.clone()),
-                };
-                LayerView {
-                    clip_id: layer.clip_id,
-                    track_id: layer.track_id,
-                    placement: layer.placement,
-                    opacity: layer.opacity,
-                    scale: layer.scale,
-                    offset: layer.offset,
-                    rotation_degrees: layer.rotation_degrees,
-                    content,
-                }
-            })
-            .collect()
+    /// Makes sure the picture of an image clip is its file, and says
+    /// whether the clip can be shown.
+    fn show_image(&mut self, clip_id: ClipId, path: &str, image_store: &ImageStore) -> LayerState {
+        let key = format!("image:{path}");
+        if self
+            .pictures
+            .get(&clip_id)
+            .is_some_and(|picture| picture.render_key == key)
+        {
+            return LayerState::Shown;
+        }
+        let image = match image_store.state(path) {
+            Some(ImageState::Ready(image)) => Arc::clone(image),
+            Some(ImageState::Failed(problem)) => {
+                return LayerState::Failed(format!("Could not read {path}: {problem}"));
+            }
+            Some(ImageState::Loading) | None => return LayerState::LoadingImage,
+        };
+
+        self.last_picture_version += 1;
+        self.pictures.insert(
+            clip_id,
+            LayerPicture {
+                width: image.width,
+                height: image.height,
+                pixels: Pixels::Image(image),
+                frame_index: 0,
+                render_key: key,
+                version: self.last_picture_version,
+            },
+        );
+        LayerState::Shown
+    }
+
+    /// The composed picture, once there is one.
+    pub fn composition(&self) -> Option<&egui::TextureHandle> {
+        self.composition.as_ref()
+    }
+
+    /// Why the picture could not be composed, if it could not.
+    pub fn composition_error(&self) -> Option<&str> {
+        self.composition_error.as_deref()
+    }
+
+    /// The visual clips at the playhead, the bottom layer first.
+    pub fn layers(&self) -> &[LayerView] {
+        &self.layers
     }
 
     /// Overall pre-render progress for the status bar: finished and total
     /// frames of all clips, and the disk space the stored frames use. `None`
-    /// when the project has no MilkDrop clips.
+    /// when the project has nothing to pre-render.
     pub fn progress(&self) -> Option<PrerenderProgress> {
         if self.prerenders.is_empty() {
             return None;
@@ -525,50 +531,24 @@ impl VisualPreview {
     }
 }
 
-/// What draws the frames of a clip, or why it cannot be drawn.
-fn frame_source(
-    media: &MediaSource,
-    clip: &Clip,
-    bundled_presets: Option<&Path>,
-    catalog: &mut VisualizerCatalog,
-) -> Result<FrameSource, String> {
-    if media.is_visualizer_plugin() {
-        let plugin = catalog.plugin(&media.path);
-        // A broken `visualizer.json` is reported here; a broken shader is
-        // reported by the render itself.
-        plugin.manifest.as_ref().map_err(Clone::clone)?;
-        let folder = plugin
-            .folder
-            .clone()
-            .ok_or("The visualizer's folder was not found.")?;
-        return Ok(FrameSource::Plugin {
-            folder,
-            parameters: clip.parameters.clone(),
-            version: plugin.version,
-        });
-    }
-
-    let preset_file = resolve_preset_path(&media.path, bundled_presets).ok_or_else(|| {
-        format!(
-            "{} ships with VizX, but the bundled presets were not found on this computer.",
-            media.file_name()
-        )
-    })?;
-    Ok(FrameSource::Milkdrop {
-        preset_path: preset_file.to_string_lossy().into_owned(),
-    })
-}
-
 pub struct PrerenderProgress {
     pub finished_frames: u32,
     pub total_frames: u32,
     pub stored_bytes: u64,
 }
 
-/// Size in pixels at which a clip is rendered for the preview: its share of
-/// a [`PREVIEW_WIDTH`] wide picture of the composition. The picture then has
-/// the clip's own shape, so a preset is rendered for that shape instead of
-/// being squeezed into it.
+/// A number that identifies a clip's picture for the compositor.
+fn clip_key(clip_id: ClipId) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    clip_id.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Size in pixels at which a clip is pre-rendered for the preview: its
+/// share of a [`PREVIEW_WIDTH`] wide picture of the composition. The
+/// picture then has the clip's own shape, so a preset is rendered for that
+/// shape instead of being squeezed into it.
 fn render_size(
     composition_width: u32,
     composition_height: u32,
@@ -649,5 +629,17 @@ mod tests {
             ..Placement::FULL
         };
         assert_eq!(render_size(1920, 1080, huge), (1920, 1920));
+    }
+
+    #[test]
+    fn clips_get_different_stable_keys() {
+        let mut project = vizx_project::Project::with_starter_tracks();
+        let (_, first_layer) = project.add_milkdrop_preset("a.milk");
+        let (_, second_layer) = project.add_milkdrop_preset("b.milk");
+        let first = project.track(first_layer).unwrap().clips[0].id;
+        let second = project.track(second_layer).unwrap().clips[0].id;
+
+        assert_eq!(clip_key(first), clip_key(first));
+        assert_ne!(clip_key(first), clip_key(second));
     }
 }

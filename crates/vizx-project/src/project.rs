@@ -311,12 +311,54 @@ impl Project {
         path: impl Into<String>,
         properties: ImageProperties,
     ) -> (MediaId, TrackId) {
+        self.add_background(path.into(), MediaContent::Image(properties), properties)
+    }
+
+    /// Adds a video as the background, like
+    /// [`Project::add_background_image`].
+    pub fn add_background_video(
+        &mut self,
+        path: impl Into<String>,
+        properties: ImageProperties,
+    ) -> (MediaId, TrackId) {
+        self.add_background(path.into(), MediaContent::Video(properties), properties)
+    }
+
+    /// Adds a video to the media library and places it on a visual layer
+    /// for the whole project, fitted into the frame like an image.
+    pub fn add_video(
+        &mut self,
+        path: impl Into<String>,
+        properties: ImageProperties,
+    ) -> (MediaId, TrackId) {
+        let (media_id, track_id) = self.add_visual(path.into(), MediaContent::Video(properties));
+        let placement = fitted_placement(
+            (properties.width, properties.height),
+            (self.settings.width, self.settings.height),
+        );
+        let new_clip = self
+            .tracks
+            .iter_mut()
+            .flat_map(|track| &mut track.clips)
+            .find(|clip| clip.media == media_id);
+        if let Some(clip) = new_clip {
+            clip.placement = placement;
+        }
+        (media_id, track_id)
+    }
+
+    fn add_background(
+        &mut self,
+        path: String,
+        content: MediaContent,
+        properties: ImageProperties,
+    ) -> (MediaId, TrackId) {
         let media_id = MediaId(self.next_media_id);
         self.next_media_id += 1;
         self.media.push(MediaSource {
             id: media_id,
-            path: path.into(),
-            content: MediaContent::Image(properties),
+            path,
+            content,
         });
 
         let track_id = self.add_track("Background", TrackKind::Visual);
@@ -1086,6 +1128,29 @@ mod tests {
         // It is drawn first, so everything else lies over it.
         assert_eq!(project.visual_layers_at(0).last().unwrap().0.id, background);
     }
+    #[test]
+    fn a_video_can_be_a_layer_or_the_background() {
+        let mut project = Project::with_starter_tracks(); // 1920 x 1080
+        let size = ImageProperties {
+            width: 1280,
+            height: 720,
+        };
+
+        let (media_id, layer) = project.add_video("clip.mp4", size);
+        let source = project.media_source(media_id).unwrap();
+        assert_eq!(source.video(), Some(&size));
+        assert!(source.is_visual() && !source.is_visualizer() && source.image().is_none());
+        // The same shape as the frame: it fills it exactly.
+        assert_eq!(
+            project.track(layer).unwrap().clips[0].placement,
+            Placement::FULL
+        );
+
+        let (_, background) = project.add_background_video("loop.mp4", size);
+        assert_eq!(layer_names(&project), ["Layer 1", "Background", "Audio"]);
+        assert_eq!(project.visual_layers_at(0).last().unwrap().0.id, background);
+    }
+
     #[test]
     fn rename_reports_whether_anything_changed() {
         let mut project = Project::new();

@@ -4,60 +4,20 @@
 use eframe::egui;
 use vizx_audio::{AudioPlayer, PlaybackError, PlaybackSource};
 use vizx_core::{AudioStore, EditorSession};
-use vizx_project::{AudioInput, TrackKind};
+use vizx_project::AudioInput;
 
 /// Everything on the project's audio tracks that can be heard right now:
 /// every audio clip whose file has finished loading, placed at its position
 /// on the timeline. Also returns how many clips are not loaded yet.
 ///
-/// Playback and the visualizer both use this, so the visualizer reacts to
-/// exactly what is audible.
+/// Playback, the visualizers and the export all take their audio from the
+/// same function (`vizx_core::audio_sources`), so they hear the same thing.
 pub fn project_audio_sources(
     session: &EditorSession,
     audio_store: &AudioStore,
 ) -> (Vec<PlaybackSource>, usize) {
-    audio_sources_for(session, audio_store, AudioInput::Mix)
+    vizx_core::audio_sources(session.project(), audio_store, AudioInput::Mix)
 }
-
-/// The loaded audio clips that `input` selects: all audio tracks for the
-/// mix, or the clips of one audio track. Also returns how many of the
-/// selected clips are not loaded yet.
-///
-/// An input naming a track that no longer exists selects the mix, so a
-/// visualizer never goes silent because of a stale reference.
-pub fn audio_sources_for(
-    session: &EditorSession,
-    audio_store: &AudioStore,
-    input: AudioInput,
-) -> (Vec<PlaybackSource>, usize) {
-    let only_track = match input {
-        AudioInput::Track(id) if session.project().track(id).is_some() => Some(id),
-        _ => None,
-    };
-
-    let mut sources = Vec::new();
-    let mut clips_still_loading = 0;
-    for track in session.project().tracks() {
-        if track.kind != TrackKind::Audio || only_track.is_some_and(|id| id != track.id) {
-            continue;
-        }
-        for clip in &track.clips {
-            let loaded = session
-                .project()
-                .media_source(clip.media)
-                .and_then(|source| audio_store.loaded(&source.path));
-            match loaded {
-                Some(loaded) => sources.push(PlaybackSource {
-                    audio: loaded.audio.clone(),
-                    start_seconds: clip.start_milliseconds as f64 / 1000.0,
-                }),
-                None => clips_still_loading += 1,
-            }
-        }
-    }
-    (sources, clips_still_loading)
-}
-
 /// Starts and stops playback and keeps the playhead in step with the sound.
 ///
 /// While playing, the audio player is the clock: the playhead is set from
