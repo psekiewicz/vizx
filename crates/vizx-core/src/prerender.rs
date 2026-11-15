@@ -103,6 +103,9 @@ pub struct PrerenderJob {
     pub start_seconds: f64,
     /// The project audio the preset reacts to.
     pub audio_sources: Vec<PlaybackSource>,
+    /// The audio is multiplied by this before the clip sees it (the clip's
+    /// sensitivity). 1 leaves it unchanged.
+    pub audio_gain: f32,
 }
 
 impl PrerenderJob {
@@ -131,6 +134,7 @@ impl PrerenderJob {
                 source.duration_seconds
             ));
         }
+        key.push_str(&format!("|gain {}", self.audio_gain));
         key
     }
 }
@@ -512,12 +516,17 @@ impl FrameRenderer {
                 // one.
                 let frame_audio_position = seconds_to_audio_frames(project_seconds);
                 if frame_audio_position > *audio_position {
-                    let audio = vizx_audio::mix_to_stereo(
+                    let mut audio = vizx_audio::mix_to_stereo(
                         &self.job.audio_sources,
                         ANALYSIS_SAMPLE_RATE,
                         *audio_position,
                         (frame_audio_position - *audio_position) as usize,
                     );
+                    // The clip's sensitivity: a quieter signal makes the
+                    // preset react less.
+                    for sample in &mut audio {
+                        *sample *= self.job.audio_gain;
+                    }
                     renderer.add_stereo_audio(&audio);
                     *audio_position = frame_audio_position;
                 }
@@ -542,7 +551,7 @@ impl FrameRenderer {
                     .as_chunks::<2>()
                     .0
                     .iter()
-                    .map(|[left, right]| (left + right) * 0.5)
+                    .map(|[left, right]| (left + right) * 0.5 * self.job.audio_gain)
                     .collect();
                 let audio = analyzer.analyze(&mono, (1.0 / frames_per_second) as f32);
 
@@ -685,6 +694,7 @@ mod tests {
             frame_count: 10,
             start_seconds: 0.0,
             audio_sources: Vec::new(),
+            audio_gain: 1.0,
         }
     }
 

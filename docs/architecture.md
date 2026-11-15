@@ -136,7 +136,7 @@ parameter values for them. Version **10** added images as a kind of media
 and a clip's `opacity` and `reaction`. Version **11** extended reactions
 (move, rotate, sensitivity, release). Version **12** added video files as a
 kind of media, version **13** text elements. Version **14** added a clip's
-`source_offset_milliseconds`.
+`source_offset_milliseconds`, version **15** its `audio_gain`.
 
 ### Audio drives the visuals; VizX is not an audio workstation
 
@@ -283,6 +283,33 @@ build) apart from VizX.
   written to a temporary WAV file for FFmpeg. A cancelled or failed export
   removes its unfinished file.
 
+### Undo and redo
+
+`vizx_core::History` keeps earlier states of the project. It does not record
+actions; it compares. Once per frame the session shows it the project
+(`EditorSession::settle_history`), and when the project has changed and then
+stayed the same for 0.4 s with no mouse button held, the state before the
+change becomes an undo step. A whole drag or a burst of typing is therefore
+one step.
+
+- Nothing that edits the project has to know about undo, so nothing can
+  forget to support it.
+- A project is small (it refers to media files, it does not contain them),
+  so a step is simply a copy of the whole project. The newest 100 steps are
+  kept.
+- Undo (Ctrl+Z) and Redo (Ctrl+Shift+Z or Ctrl+Y) are not handled while a
+  text field has the keyboard: the field has its own undo for typing.
+- The selection and the playhead are not part of the project and are not
+  undone.
+
+### Sensitivity
+
+Every visual clip has an `audio_gain` ("Sensitivity" next to "Reacts to"):
+the sound the clip listens to is multiplied by it before the clip's
+visualizer (MilkDrop or plugin) or its animation measures it. Playback is
+not affected. Lowering it is how a visualizer that is too wild is calmed
+down; it ranges from 1 % to 400 % and is part of the pre-render key, so a
+change renders the clip again.
 ### Editing clips on the timeline
 
 A clip is a piece of media at a place in time: `start`, `duration` and, for
@@ -310,8 +337,10 @@ audio and video, `source_offset` (where in the file the clip begins).
   `duration_seconds`), the waveform shows that part, and a trimmed video
   starts inside its file. A visualizer always starts fresh at the start of
   its clip, so splitting one restarts it at the cut.
-- Clips on one track may overlap; nothing prevents it yet, and clips cannot
-  be dragged to another track.
+- Dragging a clip up or down moves it to another track of the same kind
+  (`Project::move_clip_to_track`). While a clip is dragged, its start and
+  end times are shown on it.
+- Clips on one track may overlap; nothing prevents it yet.
 ### Text
 
 A text element (Add > Text, Ctrl+T) is a kind of media that is not a file

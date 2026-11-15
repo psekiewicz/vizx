@@ -218,6 +218,7 @@ impl VisualPreview {
                         // Each visualizer hears only the audio it was told
                         // to react to: the mix, or one audio track.
                         audio_sources: audio_sources(project, audio_store, clip.audio_input).0,
+                        audio_gain: clip.audio_gain as f32,
                     },
                 ));
             }
@@ -274,7 +275,7 @@ impl VisualPreview {
             let effect = if clip.reaction.is_active() {
                 let (sources, _) = audio_sources(project, audio_store, clip.audio_input);
                 self.meter
-                    .effect(&sources, &clip.reaction, playhead_seconds)
+                    .effect(&sources, &clip.reaction, clip.audio_gain, playhead_seconds)
             } else {
                 ReactionEffect::NONE
             };

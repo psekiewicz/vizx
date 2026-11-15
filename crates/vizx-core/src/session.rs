@@ -6,6 +6,7 @@ use vizx_project::{
     TextProperties, Track, TrackId, TrackKind,
 };
 
+use crate::history::History;
 use crate::{PresetEntry, PresetLibrary, Selection};
 
 /// Name shown for a project that has not been saved to a file yet.
@@ -25,29 +26,75 @@ pub struct EditorSession {
     selection: Selection,
     /// Current position on the project timeline, in seconds.
     playhead_seconds: f64,
+    /// Earlier states of the project, for Undo and Redo.
+    history: History,
 }
 
 impl EditorSession {
     /// Starts a session with a new, never-saved project.
     pub fn new_untitled() -> Self {
+        Self::with_project(Project::with_starter_tracks(), None)
+    }
+
+    fn with_project(project: Project, file_path: Option<PathBuf>) -> Self {
         Self {
-            project: Project::with_starter_tracks(),
-            file_path: None,
+            history: History::new(&project),
+            project,
+            file_path,
             has_unsaved_changes: false,
             selection: Selection::Nothing,
             playhead_seconds: 0.0,
         }
     }
 
+    /// Lets the undo history take note of the project. Call once per frame.
+    ///
+    /// `is_user_busy` is true while a mouse button is held down, so that a
+    /// whole drag becomes one undo step instead of hundreds.
+    pub fn settle_history(&mut self, is_user_busy: bool) {
+        self.history
+            .observe(&self.project, is_user_busy, std::time::Instant::now());
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo(&self.project)
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo(&self.project)
+    }
+
+    /// Takes the project back to how it was before the last change.
+    /// Returns `false` if there is nothing to undo.
+    pub fn undo(&mut self) -> bool {
+        let was_undone = self.history.undo(&mut self.project);
+        self.after_history_step(was_undone)
+    }
+
+    /// Brings back the change that was undone last. Returns `false` if
+    /// there is nothing to redo.
+    pub fn redo(&mut self) -> bool {
+        let was_redone = self.history.redo(&mut self.project);
+        self.after_history_step(was_redone)
+    }
+
+    fn after_history_step(&mut self, has_changed: bool) -> bool {
+        if has_changed {
+            // The project differs from the file again (simply assuming so
+            // is safe: at worst the user is asked to save once too often).
+            self.has_unsaved_changes = true;
+            // The playhead may now lie beyond the end of the project.
+            self.set_playhead_seconds(self.playhead_seconds);
+        }
+        has_changed
+    }
+
     /// Starts a session by loading a project from a `.vzx` file.
     pub fn open(path: &Path) -> Result<Self, ProjectFileError> {
-        Ok(Self {
-            project: Project::load_from_file(path)?,
-            file_path: Some(path.to_owned()),
-            has_unsaved_changes: false,
-            selection: Selection::Nothing,
-            playhead_seconds: 0.0,
-        })
+        Ok(Self::with_project(
+            Project::load_from_file(path)?,
+            Some(path.to_owned()),
+        ))
     }
 
     /// Where the playhead is on the project timeline, in seconds.
@@ -485,6 +532,28 @@ mod tests {
         assert_eq!(session.delete_selection(), Some("track"));
         assert!(session.project().track(layer).is_none());
         assert_eq!(session.delete_selection(), None);
+    }
+
+    #[test]
+    fn any_edit_can_be_undone_and_redone() {
+        let mut session = EditorSession::new_untitled();
+        let track_count = session.project().tracks().len();
+        assert!(!session.can_undo());
+
+        // Edits made through different doors: a session method and
+        // `edit_project`. Neither has to know about the history.
+        let layer = session.add_track(TrackKind::Visual);
+        session.edit_project(|project| project.rename_track(layer, "Title"));
+        assert!(session.can_undo());
+
+        assert!(session.undo());
+        assert_eq!(session.project().tracks().len(), track_count);
+        assert!(session.has_unsaved_changes());
+        assert!(!session.undo());
+
+        assert!(session.redo());
+        assert_eq!(session.project().track(layer).unwrap().name, "Title");
+        assert!(!session.redo());
     }
 
     #[test]

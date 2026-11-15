@@ -68,8 +68,22 @@ fn command_item(
 }
 
 fn edit_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
-    unavailable_item(ui, "Undo", "Ctrl+Z");
-    unavailable_item(ui, "Redo", "Ctrl+Shift+Z");
+    history_item(
+        ui,
+        app,
+        "Undo",
+        "Ctrl+Z",
+        AppCommand::Undo,
+        app.session.can_undo(),
+    );
+    history_item(
+        ui,
+        app,
+        "Redo",
+        "Ctrl+Shift+Z",
+        AppCommand::Redo,
+        app.session.can_redo(),
+    );
     ui.separator();
     unavailable_item(ui, "Cut", "Ctrl+X");
     unavailable_item(ui, "Copy", "Ctrl+C");
@@ -119,6 +133,21 @@ fn playback_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
 fn help_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
     if ui.button("About VizX").clicked() {
         app.is_about_window_open = true;
+    }
+}
+
+/// Undo or Redo: greyed out when there is nothing to undo or redo.
+fn history_item(
+    ui: &mut egui::Ui,
+    app: &mut VizxApp,
+    label: &str,
+    shortcut: &str,
+    command: AppCommand,
+    is_available: bool,
+) {
+    let button = egui::Button::new(label).shortcut_text(shortcut);
+    if ui.add_enabled(is_available, button).clicked() {
+        app.request(command);
     }
 }
 

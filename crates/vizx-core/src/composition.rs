@@ -156,14 +156,17 @@ impl Default for ReactionMeter {
 
 impl ReactionMeter {
     /// What a reaction does to its element at a moment of the project.
+    /// `audio_gain` is the clip's sensitivity: the sound is multiplied by it
+    /// before it is measured.
     pub fn effect(
         &mut self,
         sources: &[PlaybackSource],
         reaction: &AudioReaction,
+        audio_gain: f64,
         seconds: f64,
     ) -> ReactionEffect {
         if reaction.is_active() {
-            reaction.at_level(self.level(sources, reaction, seconds))
+            reaction.at_level(self.level(sources, reaction, audio_gain, seconds))
         } else {
             ReactionEffect::NONE
         }
@@ -184,6 +187,7 @@ impl ReactionMeter {
         &mut self,
         sources: &[PlaybackSource],
         reaction: &AudioReaction,
+        audio_gain: f64,
         seconds: f64,
     ) -> f64 {
         let release = reaction.release_seconds;
@@ -206,13 +210,20 @@ impl ReactionMeter {
             } else {
                 (1.0 - seconds_ago / release).max(0.0)
             };
-            level = level.max(self.level_at(sources, reaction.band, moment) * remaining);
+            level =
+                level.max(self.level_at(sources, reaction.band, audio_gain, moment) * remaining);
         }
         level
     }
 
     /// How loud one part of the sound is at one moment, from 0 to 1.
-    fn level_at(&mut self, sources: &[PlaybackSource], band: ReactionBand, seconds: f64) -> f64 {
+    fn level_at(
+        &mut self,
+        sources: &[PlaybackSource],
+        band: ReactionBand,
+        audio_gain: f64,
+        seconds: f64,
+    ) -> f64 {
         let window_end = (seconds.max(0.0) * f64::from(REACTION_SAMPLE_RATE)) as u64;
         let window_start = window_end.saturating_sub(ANALYSIS_WINDOW as u64);
         let stereo = vizx_audio::mix_to_stereo(
@@ -225,7 +236,8 @@ impl ReactionMeter {
             .as_chunks::<2>()
             .0
             .iter()
-            .map(|[left, right]| (left + right) * 0.5)
+            // The clip's sensitivity is applied to the sound itself.
+            .map(|[left, right]| (left + right) * 0.5 * audio_gain as f32)
             .collect();
 
         // "Infinitely long ago": the analyzer's memory of earlier calls has
@@ -313,29 +325,33 @@ mod tests {
             ..AudioReaction::default()
         };
 
-        let during_tone = meter.level(&sources, &immediate, 0.5);
+        let during_tone = meter.level(&sources, &immediate, 1.0, 0.5);
         assert!(during_tone > 0.7, "{during_tone}");
         // 0.2 s after the tone ended.
-        assert_eq!(meter.level(&sources, &immediate, 1.2), 0.0);
+        assert_eq!(meter.level(&sources, &immediate, 1.0, 1.2), 0.0);
 
         // With a release the level is on its way down: about half is left
         // after half of the release time.
-        let falling = meter.level(&sources, &releasing, 1.2);
+        let falling = meter.level(&sources, &releasing, 1.0, 1.2);
         assert!(
             falling > during_tone * 0.3 && falling < during_tone * 0.7,
             "{falling}"
         );
-        assert_eq!(meter.level(&sources, &releasing, 1.8), 0.0);
+        assert_eq!(meter.level(&sources, &releasing, 1.0, 1.8), 0.0);
+
+        // A quarter of the sensitivity: a quieter sound, a lower level.
+        let quiet = meter.level(&sources, &immediate, 0.25, 0.5);
+        assert!(quiet < during_tone * 0.4 && quiet > 0.0, "{quiet}");
 
         // The same moment gives the same value, whatever was asked before.
-        assert_eq!(meter.level(&sources, &releasing, 1.2), falling);
+        assert_eq!(meter.level(&sources, &releasing, 1.0, 1.2), falling);
     }
 
     #[test]
     fn an_inactive_reaction_has_no_effect() {
         let mut meter = ReactionMeter::default();
 
-        let effect = meter.effect(&tone_then_silence(), &AudioReaction::default(), 0.5);
+        let effect = meter.effect(&tone_then_silence(), &AudioReaction::default(), 1.0, 0.5);
 
         assert_eq!(effect, ReactionEffect::NONE);
     }

@@ -103,6 +103,12 @@ pub struct Clip {
     /// to the whole mix.
     #[serde(default)]
     pub audio_input: AudioInput,
+    /// How strongly a visual clip hears its audio: the sound is multiplied
+    /// by this before the clip's visualizer or its animation sees it. 1
+    /// leaves it as it is, less calms the visuals down, more excites them.
+    /// It does not change what is played.
+    #[serde(default = "unchanged_gain")]
+    pub audio_gain: f64,
     /// Where in the picture a visual clip is drawn. Not used by audio
     /// clips. Files from format version 7 and older have no such field;
     /// their clips fill the whole frame.
@@ -125,6 +131,10 @@ pub struct Clip {
 }
 
 fn full_opacity() -> f64 {
+    1.0
+}
+
+fn unchanged_gain() -> f64 {
     1.0
 }
 
@@ -386,6 +396,8 @@ pub enum AudioInput {
 }
 
 impl Clip {
+    /// Smallest and largest allowed `audio_gain`.
+    pub const AUDIO_GAIN_RANGE: (f64, f64) = (0.01, 4.0);
     /// The shortest a clip can be made, in milliseconds.
     pub const MIN_DURATION_MILLISECONDS: u64 = 100;
 

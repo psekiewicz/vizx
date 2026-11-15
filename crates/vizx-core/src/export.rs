@@ -66,6 +66,8 @@ pub struct ExportLayer {
     /// The audio the clip listens to: its visualizer draws from it and its
     /// reaction follows it.
     pub input_audio: Vec<PlaybackSource>,
+    /// The clip's sensitivity: its audio is multiplied by this.
+    pub audio_gain: f64,
 }
 
 pub enum ExportContent {
@@ -122,6 +124,7 @@ impl ExportJob {
                     opacity: clip.opacity,
                     reaction: clip.reaction,
                     input_audio: audio_sources(project, audio_store, clip.audio_input).0,
+                    audio_gain: clip.audio_gain,
                 });
             }
         }
@@ -296,7 +299,12 @@ fn run(
                     } => (*width, *height, pixels),
                     LayerPicture::NotPrepared => continue,
                 };
-                let effect = meter.effect(&layer.input_audio, &layer.reaction, seconds);
+                let effect = meter.effect(
+                    &layer.input_audio,
+                    &layer.reaction,
+                    layer.audio_gain,
+                    seconds,
+                );
                 let geometry = layer_geometry(layer.placement, layer.opacity, effect);
                 draws.push(LayerDraw {
                     key: index as u64,
@@ -369,6 +377,7 @@ fn advance(
                         as u32,
                     start_seconds: layer.start_seconds,
                     audio_sources: layer.input_audio.clone(),
+                    audio_gain: layer.audio_gain as f32,
                 })?;
                 LayerPicture::Frames {
                     renderer: Box::new(renderer),
@@ -462,6 +471,7 @@ mod tests {
             opacity: 1.0,
             reaction: AudioReaction::default(),
             input_audio: Vec::new(),
+            audio_gain: 1.0,
         }
     }
 

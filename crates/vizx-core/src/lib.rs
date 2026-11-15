@@ -9,6 +9,7 @@ mod audio_store;
 mod composition;
 mod export;
 mod ffmpeg;
+mod history;
 mod image_store;
 mod prerender;
 mod preset_library;

@@ -48,6 +48,8 @@ pub enum AppCommand {
     DuplicateClip,
     /// Remove the selected clip, or the selected track.
     DeleteSelection,
+    Undo,
+    Redo,
     /// Open the browser for the presets that ship with VizX.
     BrowseMilkdropPresets,
     /// Pick a preset file of the user's own.
@@ -377,6 +379,20 @@ impl VizxApp {
                     "Select a clip to duplicate it".to_owned()
                 };
             }
+            AppCommand::Undo => {
+                self.status_message = if self.session.undo() {
+                    "Undone".to_owned()
+                } else {
+                    "Nothing to undo".to_owned()
+                };
+            }
+            AppCommand::Redo => {
+                self.status_message = if self.session.redo() {
+                    "Redone".to_owned()
+                } else {
+                    "Nothing to redo".to_owned()
+                };
+            }
             AppCommand::DeleteSelection => {
                 self.status_message = match self.session.delete_selection() {
                     Some(what) => format!("Deleted the {what}"),
@@ -661,6 +677,31 @@ impl VizxApp {
                 self.request(command);
             }
         }
+
+        // Undo and redo, but not while the user is typing: a text field has
+        // its own undo for what is typed into it, and uses the same keys.
+        if !ctx.egui_wants_keyboard_input() {
+            let history_shortcuts = [
+                // Ctrl+Shift+Z before Ctrl+Z, which would match it too.
+                (
+                    KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z),
+                    AppCommand::Redo,
+                ),
+                (
+                    KeyboardShortcut::new(Modifiers::COMMAND, Key::Y),
+                    AppCommand::Redo,
+                ),
+                (
+                    KeyboardShortcut::new(Modifiers::COMMAND, Key::Z),
+                    AppCommand::Undo,
+                ),
+            ];
+            for (shortcut, command) in history_shortcuts {
+                if ctx.input_mut(|input| input.consume_shortcut(&shortcut)) {
+                    self.request(command);
+                }
+            }
+        }
     }
 
     /// Collects audio files that finished loading in the background and
@@ -809,6 +850,10 @@ impl eframe::App for VizxApp {
         // Commands requested anywhere above are executed here, after the
         // whole interface for this frame has been described.
         self.run_requested_command(&ctx, frame);
+        // After everything that could change the project this frame. While
+        // a mouse button is down, the user is in the middle of a drag.
+        let is_user_busy = ctx.input(|input| input.pointer.any_down());
+        self.session.settle_history(is_user_busy);
         self.transport.end_frame(&self.session);
         self.sync_window_title(&ctx);
     }

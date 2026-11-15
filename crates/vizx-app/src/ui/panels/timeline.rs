@@ -23,6 +23,8 @@ const VISUAL_TRACK_HEIGHT: f32 = 28.0;
 /// Audio tracks are taller, to leave room for the waveform.
 const AUDIO_TRACK_HEIGHT: f32 = 64.0;
 const TRACK_HEADER_WIDTH: f32 = 150.0;
+/// How much one click on a zoom button zooms.
+const ZOOM_BUTTON_FACTOR: f32 = 1.5;
 /// Width of the zones at a clip's left and right edge that trim it when
 /// dragged, in screen points.
 const CLIP_EDGE_WIDTH: f32 = 7.0;
@@ -118,7 +120,7 @@ pub fn show(
         headers_rect,
         scroll_offset.y,
     );
-    show_corner(ui, view, corner_rect);
+    show_corner(ui, view, &scale, corner_rect);
 
     let separator = Stroke::new(1.0, theme::SEPARATOR);
     let painter = ui.painter_at(panel_rect);
@@ -351,6 +353,8 @@ fn show_lanes(
         // after it.
         let mut clicked_clip: Option<ClipId> = None;
         let mut edit: Option<(ClipId, ClipGrab, u64)> = None;
+        // The track a moved clip was dragged onto, if it is another one.
+        let mut new_track: Option<(ClipId, TrackId)> = None;
 
         for (track, row) in session.project().tracks().iter().zip(&rows.rows) {
             let top = content_rect.top() + row.top;
@@ -411,6 +415,29 @@ fn show_lanes(
                     FontId::proportional(11.0),
                     Color32::WHITE,
                 );
+
+                // While a clip is dragged, show exactly where it is.
+                if drag.is_some_and(|drag| drag.clip == clip.id) {
+                    let times = format!(
+                        "{} - {}",
+                        format_time(clip.start_milliseconds as f32 / 1000.0, true),
+                        format_time(clip.end_milliseconds() as f32 / 1000.0, true)
+                    );
+                    let position =
+                        egui::pos2(left.max(visible_left) + 6.0, clip_rect.bottom() - 3.0);
+                    let galley =
+                        painter.layout_no_wrap(times, FontId::monospace(10.0), Color32::WHITE);
+                    let background = Rect::from_min_size(
+                        position - egui::vec2(3.0, galley.size().y + 1.0),
+                        galley.size() + egui::vec2(6.0, 2.0),
+                    );
+                    painter.rect_filled(background, 2.0, Color32::from_black_alpha(190));
+                    painter.galley(
+                        position - egui::vec2(0.0, galley.size().y),
+                        galley,
+                        Color32::WHITE,
+                    );
+                }
 
                 // The clip itself: click to select, drag to move. Its two
                 // edges come afterwards, so they are "on top" of it: drag
@@ -496,6 +523,19 @@ fn show_lanes(
                             snap_distance,
                         );
                         edit = Some((clip.id, grab, target));
+
+                        // Dragged up or down onto another track of the
+                        // same kind: the clip changes tracks.
+                        let track_under_pointer = rows
+                            .index_at(pointer.y - content_rect.top())
+                            .and_then(|index| session.project().tracks().get(index));
+                        if grab == ClipGrab::Move
+                            && let Some(target_track) = track_under_pointer
+                            && target_track.id != track.id
+                            && target_track.kind == track.kind
+                        {
+                            new_track = Some((clip.id, target_track.id));
+                        }
                     }
                     if response.drag_stopped() && is_this_drag {
                         drag = None;
@@ -552,6 +592,9 @@ fn show_lanes(
         response.context_menu(|ui| add_menu_section(ui, requested_command));
         if let Some(clip_id) = clicked_clip {
             session.select(Selection::Clip(clip_id));
+        }
+        if let Some((clip_id, track_id)) = new_track {
+            session.edit_project(|project| project.move_clip_to_track(clip_id, track_id));
         }
         if let Some((clip_id, grab, target)) = edit {
             session.edit_project(|project| match grab {
@@ -868,7 +911,7 @@ fn draw_waveform(
 }
 
 /// Top-left corner of the panel: zoom status and the "fit" button.
-fn show_corner(ui: &mut egui::Ui, view: &mut TimelineView, corner_rect: Rect) {
+fn show_corner(ui: &mut egui::Ui, view: &mut TimelineView, scale: &TimeScale, corner_rect: Rect) {
     ui.painter_at(corner_rect)
         .rect_filled(corner_rect, 0.0, theme::PANEL_BACKGROUND);
 
@@ -885,6 +928,41 @@ fn show_corner(ui: &mut egui::Ui, view: &mut TimelineView, corner_rect: Rect) {
         view.zoom = Zoom::FitProject;
         view.pending_horizontal_scroll = Some(0.0);
     }
+
+    // Zoom out / in, for those without a mouse wheel at hand.
+    for (index, (label, factor, tooltip)) in [
+        ("\u{2212}", 1.0 / ZOOM_BUTTON_FACTOR, "Zoom out"),
+        ("+", ZOOM_BUTTON_FACTOR, "Zoom in"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let rect = Rect::from_min_size(
+            button_rect.right_top() + egui::vec2(4.0 + index as f32 * 26.0, 0.0),
+            egui::vec2(22.0, button_rect.height()),
+        );
+        let button = egui::Button::new(egui::RichText::new(label).small());
+        if ui.put(rect, button).on_hover_text(tooltip).clicked() {
+            let (zoom, scroll) = zoomed(scale, view.scroll_offset.x, factor);
+            view.zoom = zoom;
+            view.pending_horizontal_scroll = Some(scroll);
+        }
+    }
+}
+
+/// The zoom and horizontal scroll position after zooming by `factor`,
+/// keeping the left edge of the view at the same moment of the project.
+fn zoomed(scale: &TimeScale, scroll_x: f32, factor: f32) -> (Zoom, f32) {
+    let pixels_per_second = (scale.pixels_per_second * factor)
+        .clamp(scale.fit_pixels_per_second, MAX_PIXELS_PER_SECOND);
+    // Zooming all the way out returns to "fit" mode.
+    let zoom = if pixels_per_second <= scale.fit_pixels_per_second {
+        Zoom::FitProject
+    } else {
+        Zoom::PixelsPerSecond(pixels_per_second)
+    };
+    let seconds_at_left_edge = scroll_x / scale.pixels_per_second;
+    (zoom, seconds_at_left_edge * pixels_per_second)
 }
 
 fn track_color(kind: TrackKind) -> Color32 {
@@ -897,6 +975,32 @@ fn track_color(kind: TrackKind) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoom_buttons_keep_the_left_edge_and_end_in_fit_mode() {
+        // 100 s shown in 1000 px: 10 px per second when fitted.
+        let fitted = scale(Zoom::FitProject, 100.0, 1000.0 + SCROLL_BAR_ALLOWANCE);
+
+        let (zoom, scroll) = zoomed(&fitted, 0.0, 2.0);
+        assert_eq!(zoom, Zoom::PixelsPerSecond(20.0));
+        assert_eq!(scroll, 0.0);
+
+        // Zoomed in and scrolled to second 30: it stays at the left edge.
+        let closer = scale(
+            Zoom::PixelsPerSecond(20.0),
+            100.0,
+            1000.0 + SCROLL_BAR_ALLOWANCE,
+        );
+        let (zoom, scroll) = zoomed(&closer, 600.0, 2.0);
+        assert_eq!(zoom, Zoom::PixelsPerSecond(40.0));
+        assert_eq!(scroll, 1200.0);
+
+        // Zooming out past the whole project goes back to fitting it.
+        assert_eq!(zoomed(&closer, 600.0, 0.25).0, Zoom::FitProject);
+        // And there is an upper limit.
+        let (zoom, _) = zoomed(&closer, 0.0, 1000.0);
+        assert_eq!(zoom, Zoom::PixelsPerSecond(MAX_PIXELS_PER_SECOND));
+    }
 
     #[test]
     fn a_dragged_edge_snaps_to_nearby_points_but_not_to_its_own_clip() {

@@ -158,6 +158,26 @@ fn audio_input_selector(ui: &mut egui::Ui, session: &mut EditorSession, clip: &C
             });
     });
     session.edit_project(|project| project.set_clip_audio_input(clip.id, chosen));
+
+    // How strongly the clip hears that audio. This is what calms a
+    // visualizer down: it gets a quieter sound.
+    let (quietest, loudest) = Clip::AUDIO_GAIN_RANGE;
+    let mut percent = clip.audio_gain * 100.0;
+    ui.horizontal(|ui| {
+        ui.label("Sensitivity").on_hover_text(
+            "How strongly this element reacts to the sound. Lower it if a visualizer is too \
+             wild; raise it for quiet material. It does not change what you hear.",
+        );
+        ui.add(
+            egui::Slider::new(&mut percent, quietest * 100.0..=loudest * 100.0)
+                .logarithmic(true)
+                .max_decimals(0)
+                .suffix(" %"),
+        );
+    });
+    if (percent / 100.0 - clip.audio_gain).abs() > 1e-6 {
+        session.edit_project(|project| project.set_clip_audio_gain(clip.id, percent / 100.0));
+    }
 }
 
 /// Position and size of a visual clip in the picture, as percentages of
@@ -417,16 +437,6 @@ fn opacity_and_reaction_editor(
             ui.label("Rotate")
                 .on_hover_text("How far the element turns when the sound is loud");
             ui.add(egui::Slider::new(&mut edited.rotate_degrees, -180.0..=180.0).suffix("\u{b0}"));
-            ui.end_row();
-
-            let (least_sensitive, most_sensitive) = AudioReaction::SENSITIVITY_RANGE;
-            ui.label("Sensitivity")
-                .on_hover_text("Raise this if the sound is too quiet to move the element much");
-            ui.add(
-                egui::Slider::new(&mut edited.sensitivity, least_sensitive..=most_sensitive)
-                    .logarithmic(true)
-                    .suffix("x"),
-            );
             ui.end_row();
 
             ui.label("Release").on_hover_text(

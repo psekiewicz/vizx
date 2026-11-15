@@ -203,6 +203,39 @@ impl Project {
         has_moved
     }
 
+    /// Moves a clip onto another track of the same kind (a visual clip to
+    /// another layer, an audio clip to another audio track), keeping its
+    /// time. Returns `true` only if the clip changed tracks.
+    pub fn move_clip_to_track(&mut self, id: ClipId, track_id: TrackId) -> bool {
+        let Some((from, _)) = self.clip(id) else {
+            return false;
+        };
+        let (from_id, from_kind) = (from.id, from.kind);
+        let is_allowed = self
+            .track(track_id)
+            .is_some_and(|to| to.id != from_id && to.kind == from_kind);
+        if !is_allowed {
+            return false;
+        }
+
+        let mut moved = None;
+        if let Some(from) = self.tracks.iter_mut().find(|track| track.id == from_id)
+            && let Some(index) = from.clips.iter().position(|clip| clip.id == id)
+        {
+            moved = Some(from.clips.remove(index));
+        }
+        match (
+            moved,
+            self.tracks.iter_mut().find(|track| track.id == track_id),
+        ) {
+            (Some(clip), Some(to)) => {
+                to.clips.push(clip);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Moves the left edge of a clip to `start_milliseconds`, keeping its
     /// right edge where it is. For audio and video this also changes where
     /// in the file the clip begins, so the rest of it stays in place.
@@ -462,6 +495,7 @@ impl Project {
             start_milliseconds: 0,
             duration_milliseconds: properties.duration_milliseconds,
             source_offset_milliseconds: 0,
+            audio_gain: 1.0,
             audio_input: AudioInput::Mix,
             placement: Placement::FULL,
             parameters: BTreeMap::new(),
@@ -591,6 +625,7 @@ impl Project {
             start_milliseconds: 0,
             duration_milliseconds: self.settings.duration_milliseconds,
             source_offset_milliseconds: 0,
+            audio_gain: 1.0,
             audio_input: AudioInput::Mix,
             placement: covering_placement(
                 (properties.width, properties.height),
@@ -630,6 +665,7 @@ impl Project {
             start_milliseconds: 0,
             duration_milliseconds: self.settings.duration_milliseconds,
             source_offset_milliseconds: 0,
+            audio_gain: 1.0,
             audio_input: AudioInput::Mix,
             placement: Placement::FULL,
             parameters: BTreeMap::new(),
@@ -754,6 +790,24 @@ impl Project {
             .iter_mut()
             .flat_map(|track| &mut track.clips)
             .find(|clip| clip.media == media_id)
+    }
+
+    /// Sets how strongly a visual clip hears its audio (see
+    /// `Clip::audio_gain`). Returns `true` only if this changed something.
+    pub fn set_clip_audio_gain(&mut self, clip_id: ClipId, gain: f64) -> bool {
+        let (quietest, loudest) = Clip::AUDIO_GAIN_RANGE;
+        let gain = if gain.is_finite() {
+            gain.clamp(quietest, loudest)
+        } else {
+            1.0
+        };
+        match self.clip_mut(clip_id) {
+            Some(clip) if clip.audio_gain != gain => {
+                clip.audio_gain = gain;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Sets how opaque a clip is as a whole (0 to 1). Returns `true` only
@@ -1239,8 +1293,14 @@ mod tests {
         let clip_id = project.track(layer).unwrap().clips[0].id;
         let clip = |project: &Project| project.track(layer).unwrap().clips[0].clone();
 
-        // A new clip is fully opaque and does not react.
+        // A new clip is fully opaque, hears its audio unchanged and does
+        // not react.
         assert_eq!(clip(&project).opacity, 1.0);
+        assert_eq!(clip(&project).audio_gain, 1.0);
+        assert!(project.set_clip_audio_gain(clip_id, 0.1));
+        assert!(!project.set_clip_audio_gain(clip_id, 0.1));
+        project.set_clip_audio_gain(clip_id, 0.0);
+        assert_eq!(clip(&project).audio_gain, Clip::AUDIO_GAIN_RANGE.0);
         assert!(!clip(&project).reaction.is_active());
 
         assert!(project.set_clip_opacity(clip_id, 0.4));
@@ -1603,6 +1663,31 @@ mod tests {
         assert_eq!(project.media().len(), 1);
         project.remove_clip(second);
         assert!(project.media().is_empty());
+    }
+
+    #[test]
+    fn a_clip_can_change_to_another_track_of_the_same_kind_only() {
+        let mut project = Project::with_starter_tracks();
+        project.settings.duration_milliseconds = 10_000;
+        let (_, layer) = project.add_milkdrop_preset("a.milk");
+        let clip = project.track(layer).unwrap().clips[0].id;
+        project.move_clip(clip, 3_000);
+        let other_layer = project.add_default_named_track(TrackKind::Visual);
+        let audio_track = project
+            .tracks()
+            .iter()
+            .find(|track| track.kind == TrackKind::Audio)
+            .unwrap()
+            .id;
+
+        assert!(!project.move_clip_to_track(clip, audio_track));
+        assert!(!project.move_clip_to_track(clip, layer)); // already there
+        assert!(project.move_clip_to_track(clip, other_layer));
+
+        assert!(project.track(layer).unwrap().clips.is_empty());
+        assert_eq!(project.clip(clip).unwrap().0.id, other_layer);
+        // Its time is unchanged.
+        assert_eq!(timing(&project, clip), (3_000, 10_000, 0));
     }
 
     #[test]
