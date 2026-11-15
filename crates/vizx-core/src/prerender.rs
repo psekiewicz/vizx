@@ -368,12 +368,20 @@ fn set_error(state: &Mutex<State>, message: String) {
     }
 }
 
-/// A new, unique file in the system's temporary folder. Leftover files of
-/// earlier runs (for example after a crash) are removed on the way.
+/// Environment variable with a folder for pre-rendered frames, instead of
+/// the system's temporary folder (they take gigabytes, which may not fit on
+/// the system drive).
+pub const CACHE_DIR_VARIABLE: &str = "VIZX_CACHE_DIR";
+
+/// A new, unique file in the system's temporary folder (or the one named by
+/// [`CACHE_DIR_VARIABLE`]). Leftover files of earlier runs (for example
+/// after a crash) are removed on the way.
 fn new_frame_file_path() -> PathBuf {
     static NEXT_FILE_NUMBER: AtomicU64 = AtomicU64::new(0);
 
-    let folder = std::env::temp_dir().join("vizx-prerender");
+    let folder = std::env::var_os(CACHE_DIR_VARIABLE)
+        .map_or_else(std::env::temp_dir, PathBuf::from)
+        .join("vizx-prerender");
     let _ = fs::create_dir_all(&folder);
     remove_old_frame_files(&folder);
     folder.join(format!(

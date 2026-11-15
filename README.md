@@ -81,6 +81,9 @@ uses a quick built-in separation. VizX looks for `onnxruntime.dll` and
 `.onnx` file). `VIZX_STEMS_DIR` puts the separated stems in one folder
 instead of next to each song. Everything runs locally.
 
+Pre-rendered MilkDrop frames can take gigabytes; they go to the system's
+temporary folder, or to `VIZX_CACHE_DIR` when it is set.
+
 The bundled MilkDrop presets are a git submodule. Clone with
 `git clone --recurse-submodules`, or run `git submodule update --init` in an
 existing clone.
