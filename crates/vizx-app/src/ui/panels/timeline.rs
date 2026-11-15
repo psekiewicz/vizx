@@ -140,6 +140,19 @@ pub fn show(
     // The playhead: a line across the ruler and all lanes, drawn last so it
     // is on top of everything.
     let timeline_rect = ruler_rect.union(lanes_rect);
+
+    // While looping, the loop's edges run down through all lanes.
+    if let Some((start, end)) = session.loop_region().filter(|_| session.is_looping()) {
+        let edge_painter = ui.painter_at(lanes_rect);
+        for seconds in [start, end] {
+            let x = lanes_rect.left() - scroll_offset.x + seconds as f32 * scale.pixels_per_second;
+            edge_painter.vline(
+                x,
+                lanes_rect.y_range(),
+                Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.6)),
+            );
+        }
+    }
     let playhead_seconds = session.playhead_seconds();
     let playhead_x =
         timeline_rect.left() - scroll_offset.x + playhead_seconds as f32 * scale.pixels_per_second;
@@ -839,14 +852,83 @@ fn show_ruler(
         ui.id().with("timeline_ruler"),
         Sense::click_and_drag(),
     );
-    let is_scrubbing = response.clicked() || response.dragged();
-    if is_scrubbing && let Some(pointer) = response.interact_pointer_pos() {
-        let seconds = (pointer.x - ruler_rect.left() + scroll_x) / scale.pixels_per_second;
-        session.set_playhead_seconds(f64::from(seconds));
+    let seconds_at =
+        |x: f32| f64::from((x - ruler_rect.left() + scroll_x) / scale.pixels_per_second);
+    let x_at =
+        |seconds: f64| ruler_rect.left() - scroll_x + seconds as f32 * scale.pixels_per_second;
+
+    // Shift+drag marks the loop region; a plain click or drag scrubs.
+    let loop_anchor_id = ui.id().with("loop_anchor");
+    if response.drag_started()
+        && ui.input(|input| input.modifiers.shift)
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        ui.data_mut(|data| data.insert_temp(loop_anchor_id, seconds_at(pointer.x)));
     }
+    let loop_anchor: Option<f64> = ui.data(|data| data.get_temp(loop_anchor_id));
+    let is_marking_loop = loop_anchor.is_some() && response.dragged();
+    if let (Some(anchor), Some(pointer)) = (loop_anchor, response.interact_pointer_pos())
+        && response.dragged()
+    {
+        session.set_loop_region(anchor, seconds_at(pointer.x));
+    }
+    if response.drag_stopped() {
+        ui.data_mut(|data| data.remove::<f64>(loop_anchor_id));
+    }
+
+    let is_scrubbing = !is_marking_loop && (response.clicked() || response.dragged());
+    if is_scrubbing && let Some(pointer) = response.interact_pointer_pos() {
+        session.set_playhead_seconds(seconds_at(pointer.x));
+    }
+    response.context_menu(|ui| {
+        let has_loop = session.loop_region().is_some();
+        if ui
+            .button("Loop Start at Playhead")
+            .on_hover_text("I")
+            .clicked()
+        {
+            session.set_loop_start_at_playhead();
+            ui.close();
+        }
+        if ui
+            .button("Loop End at Playhead")
+            .on_hover_text("O")
+            .clicked()
+        {
+            session.set_loop_end_at_playhead();
+            ui.close();
+        }
+        if ui
+            .add_enabled(has_loop, egui::Button::new("Clear Loop"))
+            .clicked()
+        {
+            session.clear_loop();
+            ui.close();
+        }
+        ui.separator();
+        if ui
+            .button("Add Marker at Playhead")
+            .on_hover_text("M")
+            .clicked()
+        {
+            session.add_marker_at_playhead();
+            ui.close();
+        }
+    });
 
     let painter = ui.painter_at(ruler_rect);
     painter.rect_filled(ruler_rect, 0.0, theme::PANEL_BACKGROUND);
+
+    // The loop region: bright while looping, faint while not.
+    if let Some((start, end)) = session.loop_region() {
+        let band = Rect::from_x_y_ranges(x_at(start)..=x_at(end), ruler_rect.y_range());
+        let color = if session.is_looping() {
+            theme::ACCENT.gamma_multiply(0.35)
+        } else {
+            Color32::from_gray(90).gamma_multiply(0.35)
+        };
+        painter.rect_filled(band, 0.0, color);
+    }
 
     let stroke = Stroke::new(1.0, theme::SEPARATOR);
     // Five small marks between two labelled ones.
@@ -879,7 +961,90 @@ fn show_ruler(
         }
     }
 
+    show_markers(ui, session, ruler_rect, &x_at, &seconds_at);
     is_scrubbing
+}
+
+/// The markers on the ruler: a flag with the marker's name. A click moves
+/// the playhead there, a drag moves the marker, a right-click renames or
+/// deletes it.
+fn show_markers(
+    ui: &egui::Ui,
+    session: &mut EditorSession,
+    ruler_rect: Rect,
+    x_at: &dyn Fn(f64) -> f32,
+    seconds_at: &dyn Fn(f32) -> f64,
+) {
+    const MARKER_COLOR: Color32 = Color32::from_rgb(240, 190, 60);
+    let painter = ui.painter_at(ruler_rect);
+    let markers = session.project().markers().to_vec();
+    for (index, marker) in markers.iter().enumerate() {
+        let seconds = marker.milliseconds as f64 / 1000.0;
+        let x = x_at(seconds);
+        if x < ruler_rect.left() - 120.0 || x > ruler_rect.right() {
+            continue;
+        }
+        let flag = [
+            egui::pos2(x, ruler_rect.top() + 2.0),
+            egui::pos2(x + 8.0, ruler_rect.top() + 6.0),
+            egui::pos2(x, ruler_rect.top() + 10.0),
+        ];
+        painter.add(egui::Shape::convex_polygon(
+            flag.to_vec(),
+            MARKER_COLOR,
+            Stroke::NONE,
+        ));
+        painter.vline(x, ruler_rect.y_range(), Stroke::new(1.0, MARKER_COLOR));
+        let label = painter.text(
+            egui::pos2(x + 10.0, ruler_rect.top() + 1.0),
+            Align2::LEFT_TOP,
+            &marker.name,
+            FontId::proportional(11.0),
+            MARKER_COLOR,
+        );
+
+        let hit = Rect::from_min_max(
+            egui::pos2(x - 4.0, ruler_rect.top()),
+            egui::pos2(label.right().max(x + 10.0), ruler_rect.top() + 12.0),
+        );
+        let response = ui
+            .interact(
+                hit,
+                ui.id().with(("marker", index)),
+                Sense::click_and_drag(),
+            )
+            .on_hover_text(format!(
+                "{}: click to go there, drag to move, right-click to rename",
+                marker.name
+            ));
+        if response.clicked() {
+            session.set_playhead_seconds(seconds);
+        }
+        if response.dragged()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let milliseconds = (seconds_at(pointer.x).max(0.0) * 1000.0).round() as u64;
+            session.edit_project(|project| {
+                project.move_marker(index, milliseconds);
+                true
+            });
+        }
+        response.context_menu(|ui| {
+            let buffer_id = ui.id().with(("marker_name", index));
+            let mut name: String = ui
+                .data(|data| data.get_temp(buffer_id))
+                .unwrap_or_else(|| marker.name.clone());
+            let field = ui.text_edit_singleline(&mut name);
+            if field.changed() {
+                ui.data_mut(|data| data.insert_temp(buffer_id, name.clone()));
+                session.edit_project(|project| project.rename_marker(index, &name));
+            }
+            if ui.button("Delete Marker").clicked() {
+                session.edit_project(|project| project.remove_marker(index));
+                ui.close();
+            }
+        });
+    }
 }
 
 fn show_track_headers(

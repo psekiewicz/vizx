@@ -168,6 +168,37 @@ fn playback_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
         AppCommand::PreviousClipEdge,
     );
     command_item(ui, app, "Next Clip Edge", "Down", AppCommand::NextClipEdge);
+    ui.separator();
+    let loop_label = if app.session.is_looping() {
+        "Loop Off"
+    } else {
+        "Loop On"
+    };
+    command_item(ui, app, loop_label, "L", AppCommand::ToggleLoop);
+    command_item(
+        ui,
+        app,
+        "Loop Start at Playhead",
+        "I",
+        AppCommand::LoopStartHere,
+    );
+    command_item(
+        ui,
+        app,
+        "Loop End at Playhead",
+        "O",
+        AppCommand::LoopEndHere,
+    );
+    ui.separator();
+    command_item(ui, app, "Add Marker", "M", AppCommand::AddMarker);
+    command_item(
+        ui,
+        app,
+        "Previous Marker",
+        "Ctrl+Left",
+        AppCommand::PreviousMarker,
+    );
+    command_item(ui, app, "Next Marker", "Ctrl+Right", AppCommand::NextMarker);
 }
 
 fn help_menu(ui: &mut egui::Ui, app: &mut VizxApp) {

@@ -45,6 +45,19 @@ impl Transport {
         if let Some(player) = self.player.as_ref().filter(|_| self.is_playing) {
             session.set_playhead_seconds(player.position_seconds());
 
+            // Looping: past the loop's end (or at the end of the project),
+            // back to its start.
+            let loop_region = session.loop_region().filter(|_| session.is_looping());
+            if let Some((start, end)) = loop_region
+                && (player.position_seconds() >= end || !player.is_playing())
+            {
+                player.seek(start);
+                session.set_playhead_seconds(start);
+                if !player.is_playing() {
+                    let _ = player.play();
+                }
+            }
+
             if player.is_playing() {
                 // Keep redrawing so the playhead moves smoothly, even when
                 // the mouse is still.
@@ -86,6 +99,12 @@ impl Transport {
         let project_end = session.project().settings.duration_seconds();
         if session.playhead_seconds() >= project_end {
             session.set_playhead_seconds(0.0);
+        }
+        // While looping, playing from past the loop starts at the loop.
+        if let Some((start, end)) = session.loop_region().filter(|_| session.is_looping())
+            && session.playhead_seconds() >= end
+        {
+            session.set_playhead_seconds(start);
         }
 
         player.set_sources(sources);

@@ -39,6 +39,10 @@ pub struct EditorSession {
     playhead_seconds: f64,
     /// Earlier states of the project, for Undo and Redo.
     history: History,
+    /// The stretch of time played over and over, in seconds, if one was
+    /// marked; and whether playback loops it right now.
+    loop_region: Option<(f64, f64)>,
+    is_looping: bool,
 }
 
 impl EditorSession {
@@ -55,6 +59,8 @@ impl EditorSession {
             has_unsaved_changes: false,
             selection: Selection::Nothing,
             playhead_seconds: 0.0,
+            loop_region: None,
+            is_looping: false,
         }
     }
 
@@ -140,8 +146,8 @@ impl EditorSession {
     }
 
     /// Moves the playhead to the nearest place after it (`forward`) or
-    /// before it where a clip starts or ends, or to the project's start or
-    /// end. Returns `false` if there is none in that direction.
+    /// before it where a clip starts or ends or a marker is, or to the
+    /// project's start or end. Returns `false` if there is none in that direction.
     pub fn jump_to_clip_edge(&mut self, forward: bool) -> bool {
         // A moment closer than this counts as "here".
         const HERE: f64 = 0.001;
@@ -152,6 +158,12 @@ impl EditorSession {
             .iter()
             .flat_map(|track| &track.clips)
             .flat_map(|clip| [clip.start_milliseconds, clip.end_milliseconds()])
+            .chain(
+                self.project
+                    .markers()
+                    .iter()
+                    .map(|marker| marker.milliseconds),
+            )
             .map(|milliseconds| milliseconds as f64 / 1000.0)
             .chain([0.0, self.project.settings.duration_seconds()]);
         let target = if forward {
@@ -166,6 +178,113 @@ impl EditorSession {
             }
             None => false,
         }
+    }
+
+    /// Moves the playhead to the next (`forward`) or previous marker.
+    /// Returns `false` if there is none in that direction.
+    pub fn jump_to_marker(&mut self, forward: bool) -> bool {
+        const HERE: f64 = 0.001;
+        let now = self.playhead_seconds;
+        let mut times = self
+            .project
+            .markers()
+            .iter()
+            .map(|marker| marker.milliseconds as f64 / 1000.0);
+        let target = if forward {
+            times.find(|time| *time > now + HERE)
+        } else {
+            times.rev().find(|time| *time < now - HERE)
+        };
+        target.is_some_and(|time| {
+            self.set_playhead_seconds(time);
+            true
+        })
+    }
+
+    /// Adds a marker at the playhead and returns its place among the
+    /// markers.
+    pub fn add_marker_at_playhead(&mut self) -> usize {
+        let milliseconds = (self.playhead_seconds * 1000.0).round() as u64;
+        let index = self.project.add_marker(milliseconds, "");
+        self.has_unsaved_changes = true;
+        index
+    }
+
+    /// The stretch of time played over and over, if one was marked (also
+    /// while looping is off).
+    pub fn loop_region(&self) -> Option<(f64, f64)> {
+        self.loop_region
+    }
+
+    /// Whether playback loops the loop region right now.
+    pub fn is_looping(&self) -> bool {
+        self.is_looping && self.loop_region.is_some()
+    }
+
+    /// Marks the stretch from `start` to `end` seconds (either order) to be
+    /// played over and over, and turns looping on.
+    pub fn set_loop_region(&mut self, start: f64, end: f64) {
+        const SHORTEST: f64 = 0.1;
+        let project_end = self.project.settings.duration_seconds();
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let start = start.clamp(0.0, project_end);
+        let end = end.clamp(0.0, project_end);
+        if end - start < SHORTEST {
+            return;
+        }
+        self.loop_region = Some((start, end));
+        self.is_looping = true;
+    }
+
+    /// The loop starts at the playhead (it ends where it did, or at the end
+    /// of the project).
+    pub fn set_loop_start_at_playhead(&mut self) {
+        let end = self
+            .loop_region
+            .map(|(_, end)| end)
+            .filter(|end| *end > self.playhead_seconds)
+            .unwrap_or_else(|| self.project.settings.duration_seconds());
+        self.set_loop_region(self.playhead_seconds, end);
+    }
+
+    /// The loop ends at the playhead (it starts where it did, or at the
+    /// start of the project).
+    pub fn set_loop_end_at_playhead(&mut self) {
+        let start = self
+            .loop_region
+            .map(|(start, _)| start)
+            .filter(|start| *start < self.playhead_seconds)
+            .unwrap_or(0.0);
+        self.set_loop_region(start, self.playhead_seconds);
+    }
+
+    /// Turns looping on or off. Without a loop region yet, the selected
+    /// clip (or else the whole project) becomes the region. Returns whether
+    /// it loops now.
+    pub fn toggle_looping(&mut self) -> bool {
+        if self.loop_region.is_none() {
+            let (start, end) = match self.selected_clip_id().and_then(|id| self.project.clip(id)) {
+                Some((_, clip)) => (
+                    clip.start_milliseconds as f64 / 1000.0,
+                    clip.end_milliseconds() as f64 / 1000.0,
+                ),
+                None => (0.0, self.project.settings.duration_seconds()),
+            };
+            self.set_loop_region(start, end);
+            return self.is_looping();
+        }
+        self.is_looping = !self.is_looping;
+        self.is_looping
+    }
+
+    /// Forgets the loop region.
+    pub fn clear_loop(&mut self) {
+        self.loop_region = None;
+        self.is_looping = false;
     }
 
     pub fn set_playhead_seconds(&mut self, seconds: f64) {
@@ -925,6 +1044,40 @@ mod tests {
         assert_eq!(session.playhead_seconds(), 2.0);
         session.set_playhead_seconds(0.0);
         assert!(!session.jump_to_clip_edge(false));
+    }
+
+    #[test]
+    fn a_loop_region_is_marked_toggled_and_markers_are_jumped_to() {
+        let mut session = EditorSession::new_untitled();
+        session.add_text().unwrap();
+        session.set_playhead_seconds(2.0);
+        session.add_marker_at_playhead();
+        session.set_playhead_seconds(5.0);
+        session.add_marker_at_playhead();
+
+        session.set_playhead_seconds(0.0);
+        assert!(session.jump_to_marker(true));
+        assert_eq!(session.playhead_seconds(), 2.0);
+        assert!(session.jump_to_marker(true));
+        assert!(!session.jump_to_marker(true));
+        assert!(session.jump_to_marker(false));
+        assert_eq!(session.playhead_seconds(), 2.0);
+
+        // In and out at the playhead.
+        session.set_loop_start_at_playhead();
+        session.set_playhead_seconds(4.0);
+        session.set_loop_end_at_playhead();
+        assert_eq!(session.loop_region(), Some((2.0, 4.0)));
+        assert!(session.is_looping());
+        assert!(!session.toggle_looping());
+        assert_eq!(session.loop_region(), Some((2.0, 4.0)));
+        // Too short a loop is ignored.
+        session.set_loop_region(3.0, 3.01);
+        assert_eq!(session.loop_region(), Some((2.0, 4.0)));
+        session.clear_loop();
+        // Without a region, the whole project loops.
+        assert!(session.toggle_looping());
+        assert_eq!(session.loop_region().unwrap().0, 0.0);
     }
 
     #[test]

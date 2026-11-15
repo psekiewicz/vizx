@@ -38,6 +38,16 @@ pub struct Project {
     next_media_id: u64,
     #[serde(default)]
     next_clip_id: u64,
+    /// Named moments on the timeline (`Chorus`, `Drop`), in order of time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    markers: Vec<Marker>,
+}
+
+/// A named moment on the timeline, to find one's way around a song.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Marker {
+    pub milliseconds: u64,
+    pub name: String,
 }
 
 impl Default for Project {
@@ -58,6 +68,7 @@ impl Project {
             media: Vec::new(),
             next_media_id: 0,
             next_clip_id: 0,
+            markers: Vec::new(),
         }
     }
 
@@ -78,6 +89,71 @@ impl Project {
 
     pub fn track(&self, id: TrackId) -> Option<&Track> {
         self.tracks.iter().find(|track| track.id == id)
+    }
+
+    /// The timeline's markers, in order of time.
+    pub fn markers(&self) -> &[Marker] {
+        &self.markers
+    }
+
+    /// Adds a marker at `milliseconds` (named `Marker 3` and so on if
+    /// `name` is empty) and returns its place in [`Self::markers`]. A marker
+    /// already at that moment is returned instead of a second one.
+    pub fn add_marker(&mut self, milliseconds: u64, name: &str) -> usize {
+        if let Some(index) = self
+            .markers
+            .iter()
+            .position(|marker| marker.milliseconds.abs_diff(milliseconds) < 10)
+        {
+            return index;
+        }
+        let name = if name.trim().is_empty() {
+            format!("Marker {}", self.markers.len() + 1)
+        } else {
+            name.trim().to_owned()
+        };
+        let index = self
+            .markers
+            .partition_point(|marker| marker.milliseconds <= milliseconds);
+        self.markers.insert(index, Marker { milliseconds, name });
+        index
+    }
+
+    /// Renames marker `index`. Returns `true` only if this changed
+    /// something.
+    pub fn rename_marker(&mut self, index: usize, name: &str) -> bool {
+        match self.markers.get_mut(index) {
+            Some(marker) if marker.name != name && !name.trim().is_empty() => {
+                marker.name = name.trim().to_owned();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Moves marker `index` to `milliseconds`, keeping the markers in
+    /// order. Returns its new place.
+    pub fn move_marker(&mut self, index: usize, milliseconds: u64) -> Option<usize> {
+        if index >= self.markers.len() {
+            return None;
+        }
+        let mut marker = self.markers.remove(index);
+        marker.milliseconds = milliseconds;
+        let new_index = self
+            .markers
+            .partition_point(|other| other.milliseconds <= milliseconds);
+        self.markers.insert(new_index, marker);
+        Some(new_index)
+    }
+
+    /// Removes marker `index`. Returns `false` if there is no such marker.
+    pub fn remove_marker(&mut self, index: usize) -> bool {
+        if index < self.markers.len() {
+            self.markers.remove(index);
+            true
+        } else {
+            false
+        }
     }
 
     /// Adds a track and returns its id.
@@ -1519,6 +1595,30 @@ mod tests {
             sample_rate: 44_100,
             channel_count: 2,
         }
+    }
+
+    #[test]
+    fn markers_stay_in_order_and_get_names() {
+        let mut project = Project::new();
+        assert_eq!(project.add_marker(5000, "Chorus"), 0);
+        assert_eq!(project.add_marker(1000, ""), 0);
+        // Again at (nearly) the same moment: the same marker.
+        assert_eq!(project.add_marker(1004, "Other"), 0);
+        assert_eq!(project.markers()[0].name, "Marker 2");
+
+        assert!(project.rename_marker(0, " Intro "));
+        assert_eq!(project.move_marker(0, 9000), Some(1));
+        let names: Vec<&str> = project
+            .markers()
+            .iter()
+            .map(|marker| marker.name.as_str())
+            .collect();
+        assert_eq!(names, ["Chorus", "Intro"]);
+        assert!(project.remove_marker(0));
+        assert!(!project.remove_marker(5));
+
+        let reloaded = Project::from_vzx_str(&project.to_vzx_string().unwrap()).unwrap();
+        assert_eq!(reloaded.markers(), project.markers());
     }
 
     #[test]

@@ -27,7 +27,12 @@ const GROUPS: [(&str, &[(&str, &str)]); 5] = [
             ("Home / End", "Go to the start / end"),
             ("Left / Right", "One frame back / forward"),
             ("Shift+Left / Right", "One second back / forward"),
-            ("Up / Down", "Previous / next clip start or end"),
+            ("Up / Down", "Previous / next clip start or end, or marker"),
+            ("Ctrl+Left / Right", "Previous / next marker"),
+            ("M", "Add a marker at the playhead"),
+            ("L", "Loop on / off"),
+            ("I / O", "Loop starts / ends at the playhead"),
+            ("Shift+drag on the ruler", "Mark the stretch to loop"),
         ],
     ),
     (

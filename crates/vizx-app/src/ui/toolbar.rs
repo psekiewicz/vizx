@@ -37,6 +37,22 @@ pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
             AppCommand::StopPlayback,
         );
         command_button(ui, app, "\u{23ED}", "Go to end (End)", AppCommand::GoToEnd);
+        let looping = app.session.is_looping();
+        let loop_tooltip = match app.session.loop_region() {
+            Some((start, end)) => format!(
+                "Loop {} - {} (L). Shift+drag on the ruler to mark another stretch; I / O set its start / end at the playhead",
+                format_timecode(start),
+                format_timecode(end)
+            ),
+            None => "Loop (L): play a stretch over and over. Shift+drag on the ruler to mark it".to_owned(),
+        };
+        if ui
+            .selectable_label(looping, "\u{1F501}")
+            .on_hover_text(loop_tooltip)
+            .clicked()
+        {
+            app.request(AppCommand::ToggleLoop);
+        }
 
         ui.separator();
 

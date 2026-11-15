@@ -84,6 +84,16 @@ pub enum AppCommand {
     NextClipEdge,
     /// Show the list of keyboard shortcuts.
     ShowShortcuts,
+    /// Turn playing the loop region over and over on or off.
+    ToggleLoop,
+    /// The loop starts / ends at the playhead.
+    LoopStartHere,
+    LoopEndHere,
+    /// Add a marker at the playhead.
+    AddMarker,
+    /// Move the playhead to the previous / next marker.
+    PreviousMarker,
+    NextMarker,
     /// Place a beat at the playhead on the selected audio clip.
     TapBeat,
     /// Open the browser for the presets that ship with VizX.
@@ -610,6 +620,26 @@ impl VizxApp {
                 self.session.jump_to_clip_edge(true);
             }
             AppCommand::ShowShortcuts => self.is_shortcuts_open = true,
+            AppCommand::ToggleLoop => {
+                self.status_message = if self.session.toggle_looping() {
+                    "Looping on".to_owned()
+                } else {
+                    "Looping off".to_owned()
+                };
+            }
+            AppCommand::LoopStartHere => self.session.set_loop_start_at_playhead(),
+            AppCommand::LoopEndHere => self.session.set_loop_end_at_playhead(),
+            AppCommand::AddMarker => {
+                self.session.add_marker_at_playhead();
+                self.status_message =
+                    "Marker added; right-click it on the ruler to rename it".to_owned();
+            }
+            AppCommand::PreviousMarker => {
+                self.session.jump_to_marker(false);
+            }
+            AppCommand::NextMarker => {
+                self.session.jump_to_marker(true);
+            }
             AppCommand::ShowWelcome => self.is_welcome_open = true,
             AppCommand::StartFromTemplate(template) => self.start_from_template(template, frame),
             AppCommand::SaveProject => {
@@ -1061,6 +1091,24 @@ impl VizxApp {
         // typing into a text field, where Space and Home mean something else.
         if !ctx.egui_wants_keyboard_input() {
             for (key, command) in [
+                (Key::ArrowLeft, AppCommand::PreviousMarker),
+                (Key::ArrowRight, AppCommand::NextMarker),
+            ] {
+                if ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, key)) {
+                    self.request(command);
+                }
+            }
+            for (key, command) in [
+                (Key::ArrowLeft, AppCommand::MovePlayheadSeconds(-1)),
+                (Key::ArrowRight, AppCommand::MovePlayheadSeconds(1)),
+            ] {
+                if ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, key)) {
+                    self.request(command);
+                }
+            }
+            // Without modifiers last: a pattern without Shift also matches
+            // with Shift held, so Shift+Left must be consumed first.
+            for (key, command) in [
                 (Key::Space, AppCommand::TogglePlayback),
                 (Key::Delete, AppCommand::DeleteSelection),
                 (Key::B, AppCommand::TapBeat),
@@ -1071,16 +1119,12 @@ impl VizxApp {
                 (Key::ArrowUp, AppCommand::PreviousClipEdge),
                 (Key::ArrowDown, AppCommand::NextClipEdge),
                 (Key::F1, AppCommand::ShowShortcuts),
+                (Key::L, AppCommand::ToggleLoop),
+                (Key::I, AppCommand::LoopStartHere),
+                (Key::O, AppCommand::LoopEndHere),
+                (Key::M, AppCommand::AddMarker),
             ] {
                 if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key)) {
-                    self.request(command);
-                }
-            }
-            for (key, command) in [
-                (Key::ArrowLeft, AppCommand::MovePlayheadSeconds(-1)),
-                (Key::ArrowRight, AppCommand::MovePlayheadSeconds(1)),
-            ] {
-                if ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, key)) {
                     self.request(command);
                 }
             }

@@ -26,7 +26,7 @@ pub use media::{
 };
 pub use metadata::ProjectMetadata;
 pub use motion::{Easing, KEYFRAME_TOLERANCE_MILLISECONDS, Keyframe, Motion, Transform};
-pub use project::{LayerMove, Project};
+pub use project::{LayerMove, Marker, Project};
 pub use settings::{FrameRate, ProjectSettings};
 pub use track::{
     AudioInput, AudioReaction, Clip, ClipId, Placement, ReactionBand, ReactionEffect, Track,
@@ -72,4 +72,7 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 /// - 17: an audio file's hand-placed `manual_beats` and chosen `tempo_bpm`.
 /// - 18: frame animations (image sequences and sprite sheets) as a kind of
 ///   media.
-pub const CURRENT_FORMAT_VERSION: u32 = 18;
+/// - 19: timeline `markers`, muted audio tracks (`muted`), a clip's
+///   `sharp_pixels` and sprite sheet rows of their own length
+///   (`row_lengths`). Older files load without them.
+pub const CURRENT_FORMAT_VERSION: u32 = 19;
