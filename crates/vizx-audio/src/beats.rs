@@ -117,9 +117,15 @@ fn track_beats(envelope: &[f32], seconds_per_step: f64, tempo_bpm: f64) -> Vec<B
         let latest = step as f64 - period / 2.0;
         let mut best: Option<(f64, usize)> = None;
         if latest >= 0.0 {
-            for candidate in (earliest.max(0.0).ceil() as usize)..=(latest as usize) {
+            let first = earliest.max(0.0).ceil() as usize;
+            for (candidate, earlier_score) in score
+                .iter()
+                .enumerate()
+                .take(latest as usize + 1)
+                .skip(first)
+            {
                 let off_tempo = ((step - candidate) as f64 / period).ln();
-                let value = score[candidate] - TIGHTNESS * off_tempo * off_tempo;
+                let value = earlier_score - TIGHTNESS * off_tempo * off_tempo;
                 if best.is_none_or(|(best_value, _)| value > best_value) {
                     best = Some((value, candidate));
                 }
