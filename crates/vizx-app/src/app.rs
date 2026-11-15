@@ -287,9 +287,14 @@ impl VizxApp {
             clip_id,
             std::sync::Arc::clone(&loaded.audio),
             Path::new(&source.path),
+            vizx_core::StemEngine::best_available(),
             move || ctx.request_repaint(),
         );
-        self.status_message = format!("Separating {} into stems...", job.song_name());
+        self.status_message = format!(
+            "Separating {} into stems with {}...",
+            job.song_name(),
+            job.engine_label()
+        );
         self.stem_job = Some(job);
     }
 
@@ -300,8 +305,9 @@ impl VizxApp {
         };
         let Some(outcome) = job.finished() else {
             self.status_message = format!(
-                "Separating {} into stems: {:.0} %",
+                "Separating {} into stems with {}: {:.0} %",
                 job.song_name(),
+                job.engine_label(),
                 job.progress() * 100.0
             );
             return;

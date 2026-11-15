@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 vizx-audio.workspace = true
 vizx-milkdrop.workspace = true
+vizx-ml.workspace = true
 vizx-render.workspace = true
 vizx-visualizer.workspace = true
 ab_glyph.workspace = true

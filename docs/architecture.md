@@ -12,7 +12,7 @@ its own copy of anything.
 
 ## Crates
 
-The workspace has seven crates. Dependencies point in one direction only:
+The workspace has eight crates. Dependencies point in one direction only:
 
 ```text
 vizx-app  ──►  vizx-core  ──►  vizx-project
@@ -23,6 +23,8 @@ vizx-app  ──►  vizx-core  ──►  vizx-project
                           │     (MilkDrop presets via projectM)
                           ├──►  vizx-visualizer
                           │     (visualizer plugins: shaders via wgpu)
+                          ├──►  vizx-ml  ──►  vizx-audio
+                          │     (HTDemucs stem separation via ONNX Runtime)
                           └──►  vizx-render
                                 (off-screen wgpu device, layer compositor)
 ```
@@ -38,6 +40,7 @@ in the project.
 | `vizx-milkdrop` | Rendering MilkDrop presets to pixels with the projectM library. The only crate with `unsafe` code, C declarations and OpenGL. | GUI, project data |
 | `vizx-visualizer` | Visualizer plugins: reading a plugin folder and rendering its WGSL shader off-screen with wgpu. | GUI, project data, the timeline |
 | `vizx-render` | The rendering engine: an off-screen wgpu device and the compositor that lays pictures over each other into one frame. | GUI, project data, the timeline |
+| `vizx-ml` | Local machine learning: the HTDemucs stem separation model, run by ONNX Runtime loaded at run time. Nothing leaves the computer. | GUI, project data, network access |
 | `vizx-core` | Editing state and logic operating on a project. Future home of subsystem coordination. | GUI code |
 | `vizx-app` | The window, panels, menus and visual style. | Project rules or logic that other front ends would need |
 
@@ -510,16 +513,35 @@ track is neither played nor part of the mix (`audio_sources` and
 `beat_times` leave it out), but a visualizer or reaction can choose it as
 its input ("Reacts to: Vocals").
 
-The built-in separation needs no model and no download. It works on the
-spectrogram: harmonic-percussive separation by median filtering (drums are
-short and wide in frequency, notes long and narrow), the centered harmonic
-part between ~150 Hz and ~7 kHz as vocals, the harmonic part below ~250 Hz
-as bass, and the rest as other; the four masks add up to 1, so the stems add
-up to the song. It is made to drive visuals, not to be listened to alone. A
-separation model (Demucs, MDX-Net through ONNX Runtime) would be a cleaner
-engine behind the same `StemJob`, writing the same four files; it needs a
-runtime library and a model file to be downloaded first.
+Two engines can do the separation (`vizx_core::StemEngine`):
 
+- **HTDemucs** (`vizx-ml`), Meta's Hybrid Transformer Demucs, as an ONNX
+  model (the 4-stem single-file export with the STFT inside the graph,
+  fp16-stored weights, 166 MB; MIT licence like Demucs). It takes 7.8 s
+  pieces of stereo 44.1 kHz audio; the song is converted to that rate, cut
+  into pieces overlapping by a quarter and cross-faded back together. On a
+  CPU it takes roughly 2.3 times the song's length (about 10 minutes for 4
+  minutes of music) and about 2.6 GB of memory. It is used when it is
+  installed.
+- **Quick** (`vizx_audio::separate_stems`), built in, no model: on the
+  spectrogram, harmonic-percussive separation by median filtering (drums),
+  the centered harmonic part between ~150 Hz and ~7 kHz (vocals), the
+  harmonic part below ~250 Hz (bass) and the rest; the four masks add up
+  to 1. Seconds instead of minutes, rough, but enough to drive visuals.
+
+Their stems go to different folders (`<song> stems`, `<song> quick stems`).
+The folder is next to the song, or under `VIZX_STEMS_DIR` when it is set
+(stems are about 40 MB each for four minutes of music).
+
+**Installing the model.** Nothing is downloaded by the build or the app.
+ONNX Runtime is loaded at run time (`ort` with `load-dynamic`) from
+`onnxruntime.dll` next to the VizX executable or `%VIZX_ONNXRUNTIME_DIR%/lib`
+(the unpacked release archive from github.com/microsoft/onnxruntime); the
+model from `models/htdemucs.onnx` (or `htdemucs_fp16weights.onnx`) next to
+the executable or `%VIZX_DEMUCS_MODEL%` (huggingface.co/StemSplitio/
+htdemucs-onnx). On the development machine both live in `D:\tools` and the
+variables are set in cargo's `config.toml`. `cargo run --release -p vizx-ml
+--example demucs -- <song> <folder>` separates a file without the window.
 ### Visualizer plugins
 
 Visualizers other than MilkDrop presets are **plugins**: a folder with a
@@ -725,7 +747,7 @@ Not implemented. Listed to show where they will attach:
 | Composition engine | Combines all project elements into one frame description |
 | Rendering engine | Draws that description with wgpu; the same code path for preview and export |
 | Export | Deterministic project clock driving the renderer, encoded through FFmpeg |
-| Local ML | A separation model (Demucs / MDX-Net through ONNX Runtime) as a cleaner engine for the stem separation that exists; not downloaded yet |
+| Local ML | More models later (for example voice-only, or lyrics timing from the vocals); stem separation with HTDemucs exists |
 
 Each will add data to `vizx-project`, logic coordinated through `vizx-core`,
 and views in `vizx-app`.

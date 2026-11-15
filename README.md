@@ -41,6 +41,7 @@ vizx/
 │   ├── vizx-milkdrop/     MilkDrop presets through projectM (no GUI)
 │   ├── vizx-visualizer/   Visualizer plugins: WGSL shaders via wgpu (no GUI)
 │   ├── vizx-render/       Off-screen wgpu device and layer compositor (no GUI)
+│   ├── vizx-ml/           Local stem separation: HTDemucs via ONNX Runtime (no GUI)
 │   ├── vizx-core/         Shared application logic (no GUI)
 │   └── vizx-app/          Desktop application: window and interface
 ├── assets/                Bundled visualizer plugins and MilkDrop presets (git submodule)
@@ -70,6 +71,15 @@ VizX starts the `ffmpeg` program; it finds it next to its own executable,
 in `%VIZX_FFMPEG_DIR%/bin` or on the `PATH`. For development, set
 `VIZX_FFMPEG_DIR` in your personal Cargo configuration, next to
 `VIZX_PROJECTM_DIR` (see [docs/milkdrop.md](docs/milkdrop.md)).
+
+Optional: [ONNX Runtime](https://github.com/microsoft/onnxruntime/releases)
+and the [HTDemucs ONNX model](https://huggingface.co/StemSplitio/htdemucs-onnx),
+for clean stem separation (vocals, drums, bass, other). Without them VizX
+uses a quick built-in separation. VizX looks for `onnxruntime.dll` and
+`models/htdemucs.onnx` next to its executable, or uses
+`VIZX_ONNXRUNTIME_DIR` (the unpacked archive) and `VIZX_DEMUCS_MODEL` (the
+`.onnx` file). `VIZX_STEMS_DIR` puts the separated stems in one folder
+instead of next to each song. Everything runs locally.
 
 The bundled MilkDrop presets are a git submodule. Clone with
 `git clone --recurse-submodules`, or run `git submodule update --init` in an

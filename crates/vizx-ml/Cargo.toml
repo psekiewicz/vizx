@@ -1,0 +1,10 @@
+[package]
+name = "vizx-ml"
+description = "VizX local machine learning: stem separation with HTDemucs through ONNX Runtime. No GUI code, no cloud."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+vizx-audio.workspace = true
+ort.workspace = true

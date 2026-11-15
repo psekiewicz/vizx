@@ -5,6 +5,7 @@ members = [
     "crates/vizx-audio",
     "crates/vizx-core",
     "crates/vizx-milkdrop",
+    "crates/vizx-ml",
     "crates/vizx-project",
     "crates/vizx-render",
     "crates/vizx-visualizer",
@@ -23,6 +24,7 @@ repository = "https://github.com/psekiewicz/vizx"
 vizx-audio = { path = "crates/vizx-audio" }
 vizx-core = { path = "crates/vizx-core" }
 vizx-milkdrop = { path = "crates/vizx-milkdrop" }
+vizx-ml = { path = "crates/vizx-ml" }
 vizx-project = { path = "crates/vizx-project" }
 vizx-render = { path = "crates/vizx-render" }
 vizx-visualizer = { path = "crates/vizx-visualizer" }
@@ -49,6 +51,10 @@ jpeg-encoder = { version = "0.7", features = ["simd"] }
 # Decompresses those frames again for display, and reads the image files
 # (PNG, JPEG) a project uses.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Runs ONNX models (stem separation) with ONNX Runtime. The runtime library
+# is loaded at run time from a folder (load-dynamic), never downloaded by the
+# build.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
 # Loads a dynamic library (DLL / .so) at run time; used for projectM.
 libloading = "0.8"
 # Raw Windows API, used only to create the off-screen OpenGL context for
