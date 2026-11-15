@@ -367,6 +367,19 @@ on the development laptop).
 
 `cargo run -p vizx-audio --example beats -- <file>` prints what is found.
 
+**Beats drawn by hand.** An audio file can use beats placed by hand
+instead (`MediaSource::manual_beats`, seconds in the file, saved with the
+project). In the Properties panel of an audio clip, "Edit These Beats"
+starts from a copy of the found ones and "Draw My Own" from none; "Back to
+Automatic" forgets them. With the clip selected, a strip along its bottom
+on the timeline adds a beat where it is clicked and removes one that is
+clicked on, and B places a beat at the playhead (tapping along while the
+song plays). Hand-placed beats have full strength, their tempo is worked
+out from the typical gap between them (`vizx_core::tempo_of`), and they
+replace the found ones everywhere: animations, visualizer plugins and the
+marks on the timeline (drawn in another color). Like every edit they can be
+undone.
+
 Beats are used in three places, always in project time
 (`vizx_core::beat_times`, which follows trimmed clips and merges the beats
 of several stems): "Beat" as what an animation follows, `vizx.beat`,
