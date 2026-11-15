@@ -50,13 +50,13 @@ pub fn set_shown_width(ctx: &egui::Context, pixels: f32) {
 /// Called by the preview panel while a clip is being moved or resized with
 /// the mouse: draw that clip at this placement instead of the one stored in
 /// the project, so the picture follows the mouse. `None` ends it.
-pub fn set_dragged_placement(ctx: &egui::Context, dragged: Option<(ClipId, Placement)>) {
+pub fn set_dragged_placement(ctx: &egui::Context, dragged: Option<(ClipId, Placement, f64)>) {
     let id = egui::Id::new(DRAGGED_PLACEMENT_ID);
     ctx.data_mut(|data| match dragged {
         Some(dragged) => {
             data.insert_temp(id, dragged);
         }
-        None => data.remove::<(ClipId, Placement)>(id),
+        None => data.remove::<(ClipId, Placement, f64)>(id),
     });
 }
 
@@ -67,6 +67,8 @@ pub struct LayerView {
     /// The visual layer the clip is on.
     pub track_id: TrackId,
     pub placement: Placement,
+    /// Its keyed rotation at the playhead, in degrees clockwise.
+    pub rotation_degrees: f64,
     pub state: LayerState,
 }
 
@@ -244,7 +246,7 @@ impl VisualPreview {
         let lookup_milliseconds = ((playhead_seconds * 1000.0) as u64).min(last_millisecond);
         // A clip the user is dragging right now is drawn where the mouse
         // has taken it.
-        let dragged: Option<(ClipId, Placement)> =
+        let dragged: Option<(ClipId, Placement, f64)> =
             ctx.data(|data| data.get_temp(egui::Id::new(DRAGGED_PLACEMENT_ID)));
 
         self.layers.clear();
@@ -299,10 +301,12 @@ impl VisualPreview {
             let seconds_into_clip = playhead_seconds - clip.start_milliseconds as f64 / 1000.0;
             let mut transform = clip.motion().animated_at(seconds_into_clip.max(0.0));
             let keyed = clip.transform_at(seconds_into_clip.max(0.0) * 1000.0);
-            if let Some((dragged_clip, placement)) = dragged
+            if let Some((dragged_clip, placement, rotation)) = dragged
                 && dragged_clip == clip.id
             {
                 transform.placement = placement;
+                // The dragged rotation replaces the keyed one; spin stays.
+                transform.rotation_degrees += rotation - keyed.rotation_degrees;
             }
             geometries.push(layer_geometry(&transform, effect));
             self.layers.push(LayerView {
@@ -311,6 +315,7 @@ impl VisualPreview {
                 // The frame and handles in the preview show the clip where
                 // it is at the playhead.
                 placement: keyed.placement,
+                rotation_degrees: keyed.rotation_degrees,
                 state,
             });
         }

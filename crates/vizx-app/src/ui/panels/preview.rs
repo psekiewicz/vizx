@@ -10,6 +10,8 @@ use crate::visual_preview::{self, LayerState, LayerView, VisualPreview};
 const FRAME_MARGIN: f32 = 24.0;
 /// Edge length of the square resize handles, in screen points.
 const HANDLE_SIZE: f32 = 8.0;
+/// Distance of the rotation knob above the top edge, in screen points.
+const ROTATION_HANDLE_DISTANCE: f32 = 22.0;
 /// A dragged edge closer than this to a guide (frame edge or middle) jumps
 /// onto it, in screen points.
 const SNAP_DISTANCE: f32 = 6.0;
@@ -103,14 +105,18 @@ pub fn show(
     let layer_painter = ui.painter_at(composition_rect);
     for layer in layers {
         let placement = shown_placement(layer, drag);
+        let rotation = shown_rotation(layer, drag);
         let layer_rect = to_screen(placement, composition_rect);
         // The clip's frame and handles stay where its placement is, even
         // while its animation moves the picture, so they do not jump
         // around while the music plays.
         draw_layer_state(&layer_painter, layer_rect, &layer.state);
 
+        // A turned element is grabbed anywhere within the box around it.
+        let corners = turned_corners(layer_rect, rotation);
+        let reach = Rect::from_points(&corners);
         let response = ui.interact(
-            layer_rect.intersect(panel_rect),
+            reach.intersect(panel_rect),
             ui.id().with(("preview_layer", layer.clip_id)),
             egui::Sense::click_and_drag(),
         );
@@ -122,7 +128,7 @@ pub fn show(
             &response,
             layer.clip_id,
             Grab::MOVE,
-            placement,
+            (placement, rotation),
             composition_rect,
             &mut drag,
             &mut finished_drag,
@@ -135,15 +141,49 @@ pub fn show(
             continue;
         }
         let placement = shown_placement(layer, drag);
+        let rotation = shown_rotation(layer, drag);
         let layer_rect = to_screen(placement, composition_rect);
-        painter.rect_stroke(
-            layer_rect,
-            0.0,
+        let center = layer_rect.center();
+        let corners = turned_corners(layer_rect, rotation);
+        painter.add(egui::Shape::closed_line(
+            corners.to_vec(),
             Stroke::new(1.0, theme::ACCENT),
-            StrokeKind::Outside,
+        ));
+
+        // The rotation handle: a round knob above the top edge.
+        let top_middle = center + turned(egui::vec2(0.0, -layer_rect.height() / 2.0), rotation);
+        let knob = center
+            + turned(
+                egui::vec2(0.0, -layer_rect.height() / 2.0 - ROTATION_HANDLE_DISTANCE),
+                rotation,
+            );
+        painter.line_segment([top_middle, knob], Stroke::new(1.0, theme::ACCENT));
+        painter.circle(
+            knob,
+            HANDLE_SIZE / 2.0 + 1.0,
+            Color32::WHITE,
+            Stroke::new(1.0, theme::ACCENT),
+        );
+        let response = ui
+            .interact(
+                Rect::from_center_size(knob, egui::Vec2::splat(HANDLE_SIZE + 8.0)),
+                ui.id().with(("preview_rotate", layer.clip_id)),
+                egui::Sense::drag(),
+            )
+            .on_hover_cursor(CursorIcon::Crosshair)
+            .on_hover_text("Drag to turn. Hold Shift for steps of 15\u{b0}.");
+        follow_drag(
+            &response,
+            layer.clip_id,
+            Grab::ROTATE,
+            (placement, rotation),
+            composition_rect,
+            &mut drag,
+            &mut finished_drag,
         );
 
-        for (grab, position, cursor) in handles(layer_rect) {
+        for (grab, unturned_position, cursor) in handles(layer_rect) {
+            let position = center + turned(unturned_position - center, rotation);
             let handle_rect = Rect::from_center_size(position, egui::Vec2::splat(HANDLE_SIZE));
             let response = ui
                 .interact(
@@ -164,7 +204,7 @@ pub fn show(
                 &response,
                 layer.clip_id,
                 grab,
-                placement,
+                (placement, rotation),
                 composition_rect,
                 &mut drag,
                 &mut finished_drag,
@@ -173,7 +213,10 @@ pub fn show(
     }
 
     // While dragging, the picture itself follows the mouse too.
-    visual_preview::set_dragged_placement(ui.ctx(), drag.map(|drag| (drag.clip, drag.current)));
+    visual_preview::set_dragged_placement(
+        ui.ctx(),
+        drag.map(|drag| (drag.clip, drag.current, drag.rotation)),
+    );
     ui.data_mut(|data| match drag {
         Some(drag) => {
             data.insert_temp(drag_id, drag);
@@ -187,6 +230,7 @@ pub fn show(
         session.edit_project(|project| {
             project.edit_clip_transform_at(finished.clip, playhead_milliseconds, |transform| {
                 transform.placement = finished.current;
+                transform.rotation_degrees = finished.rotation;
             })
         });
     }
@@ -222,6 +266,13 @@ impl Grab {
         right: true,
         bottom: true,
     };
+    /// No edge moves: the clip turns around its middle.
+    const ROTATE: Self = Self {
+        left: false,
+        top: false,
+        right: false,
+        bottom: false,
+    };
 }
 
 /// A move or resize that is in progress.
@@ -235,6 +286,11 @@ struct Drag {
     offset: egui::Vec2,
     /// Placement the drag has produced so far.
     current: Placement,
+    /// Rotation, in degrees, when the drag began and so far.
+    start_rotation: f64,
+    rotation: f64,
+    /// Where the mouse took hold, in screen points.
+    start_pointer: egui::Pos2,
 }
 
 /// The placement to draw a layer with: the one being dragged, if it is
@@ -246,13 +302,22 @@ fn shown_placement(layer: &LayerView, drag: Option<Drag>) -> Placement {
     }
 }
 
+/// The rotation to draw a layer with: the one being dragged, if it is
+/// being dragged, otherwise the one stored in the project.
+fn shown_rotation(layer: &LayerView, drag: Option<Drag>) -> f64 {
+    match drag {
+        Some(drag) if drag.clip == layer.clip_id => drag.rotation,
+        _ => layer.rotation_degrees,
+    }
+}
+
 /// Starts, continues or ends a drag according to what happened to
 /// `response` this frame.
 fn follow_drag(
     response: &egui::Response,
     clip: ClipId,
     grab: Grab,
-    placement: Placement,
+    (placement, rotation): (Placement, f64),
     composition_rect: Rect,
     drag: &mut Option<Drag>,
     finished_drag: &mut Option<Drag>,
@@ -264,6 +329,9 @@ fn follow_drag(
             start: placement,
             offset: egui::Vec2::ZERO,
             current: placement,
+            start_rotation: rotation,
+            rotation,
+            start_pointer: response.interact_pointer_pos().unwrap_or_default(),
         });
     }
     let is_this_drag = |drag: &Drag| drag.clip == clip && drag.grab == grab;
@@ -272,20 +340,119 @@ fn follow_drag(
         && let Some(active) = drag.as_mut().filter(|active| is_this_drag(active))
     {
         active.offset += response.drag_delta();
-        active.current = dragged_placement(active.start, grab, active.offset, composition_rect);
+        if grab == Grab::ROTATE {
+            let center = to_screen(active.start, composition_rect).center();
+            let pointer = active.start_pointer + active.offset;
+            let snap_degrees = response
+                .ctx
+                .input(|input| input.modifiers.shift)
+                .then_some(15.0);
+            active.rotation = dragged_rotation(
+                active.start_rotation,
+                active.start_pointer - center,
+                pointer - center,
+                snap_degrees,
+            );
+        } else {
+            active.current = turned_dragged_placement(
+                active.start,
+                active.start_rotation,
+                grab,
+                active.offset,
+                composition_rect,
+            );
+        }
     }
     if response.drag_stopped() && drag.as_ref().is_some_and(is_this_drag) {
         *finished_drag = drag.take();
     }
 }
 
+/// The rotation after the mouse has gone round the middle from `from` to
+/// `to` (both relative to the middle, in screen points), in degrees
+/// clockwise, optionally in steps of `snap_degrees`.
+fn dragged_rotation(
+    start_rotation: f64,
+    from: egui::Vec2,
+    to: egui::Vec2,
+    snap_degrees: Option<f64>,
+) -> f64 {
+    let angle = |vector: egui::Vec2| f64::from(vector.y).atan2(f64::from(vector.x));
+    // Angles in screen space grow clockwise, because y grows downwards.
+    let mut turn = (angle(to) - angle(from)).to_degrees();
+    // The shortest way round, so crossing the left side does not jump.
+    turn = (turn + 180.0).rem_euclid(360.0) - 180.0;
+    let rotation = start_rotation + turn;
+    match snap_degrees {
+        Some(step) if step > 0.0 => (rotation / step).round() * step,
+        _ => rotation,
+    }
+}
+
+/// Like [`dragged_placement`], for an element turned by `rotation`
+/// degrees: the mouse movement is measured along the element's own edges,
+/// and the opposite edge stays where it is on the screen.
+fn turned_dragged_placement(
+    start: Placement,
+    rotation: f64,
+    grab: Grab,
+    offset: egui::Vec2,
+    composition_rect: Rect,
+) -> Placement {
+    let is_turned = rotation.rem_euclid(360.0).abs() > 1e-9;
+    if grab == Grab::MOVE || !is_turned {
+        // Guides along the frame's edges only make sense for an upright
+        // element.
+        return dragged_placement(start, grab, offset, composition_rect, !is_turned);
+    }
+    let local_offset = turned(offset, -rotation);
+    let upright = dragged_placement(start, grab, local_offset, composition_rect, false);
+
+    // The upright result has its middle moved along the screen's axes;
+    // turn that move to follow the element's own axes.
+    let start_center = to_screen(start, composition_rect).center();
+    let moved = to_screen(upright, composition_rect).center() - start_center;
+    let center = start_center + turned(moved, rotation);
+    Placement {
+        x: f64::from((center.x - composition_rect.left()) / composition_rect.width())
+            - upright.width / 2.0,
+        y: f64::from((center.y - composition_rect.top()) / composition_rect.height())
+            - upright.height / 2.0,
+        ..upright
+    }
+    .sanitized()
+}
+
+/// `vector` turned by `degrees` clockwise on the screen.
+fn turned(vector: egui::Vec2, degrees: f64) -> egui::Vec2 {
+    let (sin, cos) = (degrees.to_radians() as f32).sin_cos();
+    egui::vec2(
+        vector.x * cos - vector.y * sin,
+        vector.x * sin + vector.y * cos,
+    )
+}
+
+/// The four corners of `rect` turned by `degrees` around its middle.
+fn turned_corners(rect: Rect, degrees: f64) -> [egui::Pos2; 4] {
+    let center = rect.center();
+    [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+    ]
+    .map(|corner| center + turned(corner - center, degrees))
+}
+
 /// The placement that results from dragging the grabbed edges of `start`
-/// by `offset` screen points.
+/// by `offset` screen points. With `snap`, edges jump onto the frame's
+/// edges and middle when they come close.
 fn dragged_placement(
     start: Placement,
     grab: Grab,
     offset: egui::Vec2,
     composition_rect: Rect,
+    snap: bool,
 ) -> Placement {
     if composition_rect.width() <= 0.0 || composition_rect.height() <= 0.0 {
         return start;
@@ -293,8 +460,9 @@ fn dragged_placement(
     // Screen points to fractions of the composition.
     let delta_x = f64::from(offset.x / composition_rect.width());
     let delta_y = f64::from(offset.y / composition_rect.height());
-    let snap_x = f64::from(SNAP_DISTANCE / composition_rect.width());
-    let snap_y = f64::from(SNAP_DISTANCE / composition_rect.height());
+    let snap_distance = if snap { SNAP_DISTANCE } else { 0.0 };
+    let snap_x = f64::from(snap_distance / composition_rect.width());
+    let snap_y = f64::from(snap_distance / composition_rect.height());
 
     let (left, right) = dragged_axis(
         start.x,
@@ -501,10 +669,53 @@ mod tests {
     }
 
     #[test]
+    fn turning_follows_the_mouse_around_the_middle() {
+        let right = egui::vec2(10.0, 0.0);
+        // Screen y grows downwards, so "down" is a quarter turn clockwise.
+        assert!((dragged_rotation(0.0, right, egui::vec2(0.0, 10.0), None) - 90.0).abs() < 1e-4);
+        assert!((dragged_rotation(30.0, right, egui::vec2(0.0, -10.0), None) + 60.0).abs() < 1e-4);
+        // Across the left side it takes the short way, not almost a full
+        // turn the other way.
+        let crossing = dragged_rotation(0.0, egui::vec2(-10.0, 1.0), egui::vec2(-10.0, -1.0), None);
+        assert!(crossing > 0.0 && crossing < 15.0, "{crossing}");
+        // With steps of 15 degrees.
+        let snapped = dragged_rotation(0.0, right, egui::vec2(10.0, 7.5), Some(15.0));
+        assert_eq!(snapped, 30.0);
+    }
+
+    #[test]
+    fn a_turned_element_grows_along_its_own_edges() {
+        let start = placement(0.4, 0.4, 0.2, 0.2); // 200 x 100 points
+        let right_edge = Grab {
+            left: false,
+            top: false,
+            right: true,
+            bottom: false,
+        };
+
+        // Turned a quarter clockwise, its own right edge faces down: moving
+        // the mouse down by 50 points makes it 50 points (0.05) wider, and
+        // its middle moves down by half of that.
+        let grown =
+            turned_dragged_placement(start, 90.0, right_edge, egui::vec2(0.0, 50.0), frame());
+        assert_close(grown, placement(0.375, 0.45, 0.25, 0.2));
+
+        // Moving the mouse sideways does not resize it.
+        let sideways =
+            turned_dragged_placement(start, 90.0, right_edge, egui::vec2(50.0, 0.0), frame());
+        assert_close(sideways, start);
+
+        // Upright, it is the ordinary resize.
+        let upright =
+            turned_dragged_placement(start, 0.0, right_edge, egui::vec2(50.0, 0.0), frame());
+        assert_close(upright, placement(0.4, 0.4, 0.25, 0.2));
+    }
+
+    #[test]
     fn moving_keeps_the_size() {
         let start = placement(0.2, 0.2, 0.3, 0.4);
 
-        let moved = dragged_placement(start, Grab::MOVE, egui::vec2(100.0, -50.0), frame());
+        let moved = dragged_placement(start, Grab::MOVE, egui::vec2(100.0, -50.0), frame(), true);
 
         assert_close(moved, placement(0.3, 0.1, 0.3, 0.4));
     }
@@ -519,7 +730,8 @@ mod tests {
             bottom: true,
         };
 
-        let resized = dragged_placement(start, bottom_right, egui::vec2(100.0, 50.0), frame());
+        let resized =
+            dragged_placement(start, bottom_right, egui::vec2(100.0, 50.0), frame(), true);
 
         assert_close(resized, placement(0.2, 0.2, 0.4, 0.5));
     }
@@ -535,12 +747,12 @@ mod tests {
         };
         // The right edge is at 0.5 already; 4 points away is within reach
         // of the middle guide, so it stays there.
-        let nudged = dragged_placement(start, right_edge, egui::vec2(4.0, 0.0), frame());
+        let nudged = dragged_placement(start, right_edge, egui::vec2(4.0, 0.0), frame(), true);
         assert_close(nudged, start);
 
         // Moving left by 197 points puts the left edge 3 points from the
         // frame edge: it snaps onto it, and the size is kept.
-        let moved = dragged_placement(start, Grab::MOVE, egui::vec2(-197.0, 0.0), frame());
+        let moved = dragged_placement(start, Grab::MOVE, egui::vec2(-197.0, 0.0), frame(), true);
         assert_close(moved, placement(0.0, 0.2, 0.3, 0.4));
     }
 
@@ -554,7 +766,7 @@ mod tests {
             bottom: false,
         };
 
-        let squeezed = dragged_placement(start, left_edge, egui::vec2(900.0, 0.0), frame());
+        let squeezed = dragged_placement(start, left_edge, egui::vec2(900.0, 0.0), frame(), true);
 
         assert_close(
             squeezed,
