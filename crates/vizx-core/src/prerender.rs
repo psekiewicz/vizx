@@ -9,12 +9,17 @@ use std::time::Duration;
 
 use image::ImageFormat;
 use jpeg_encoder::{ColorType, Encoder};
-use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer, PlaybackSource};
+use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer, Beat, PlaybackSource};
 use vizx_milkdrop::MilkdropRenderer;
 use vizx_visualizer::{FrameInput, ParameterValues, ShaderRenderer, VisualizerPlugin};
 
+use crate::composition::{beat_count, beat_pulse, last_beat};
 use crate::ffmpeg::VideoReader;
 
+/// How long `vizx.beat` takes to fade after a beat, in seconds.
+const SHADER_BEAT_SECONDS: f64 = 0.25;
+/// `vizx.since_beat` before the first beat.
+const NO_BEAT_YET_SECONDS: f32 = 1_000.0;
 /// Sample rate of the audio handed to the visualizer.
 const ANALYSIS_SAMPLE_RATE: u32 = 44_100;
 /// JPEG quality of stored frames (1-100). High enough that the preview
@@ -106,6 +111,11 @@ pub struct PrerenderJob {
     /// The audio is multiplied by this before the clip sees it (the clip's
     /// sensitivity). 1 leaves it unchanged.
     pub audio_gain: f32,
+    /// The beats of that audio, in project time, and its tempo (0 if not
+    /// known). They come from the same audio, so they are not part of the
+    /// key.
+    pub beats: Arc<Vec<Beat>>,
+    pub tempo_bpm: f64,
 }
 
 impl PrerenderJob {
@@ -564,6 +574,15 @@ impl FrameRenderer {
                         bass: audio.bass,
                         mid: audio.mid,
                         treble: audio.treble,
+                        beat: (beat_pulse(&self.job.beats, project_seconds, SHADER_BEAT_SECONDS)
+                            * self.job.audio_gain)
+                            .min(1.0),
+                        seconds_since_beat: last_beat(&self.job.beats, project_seconds)
+                            .map_or(NO_BEAT_YET_SECONDS, |beat| {
+                                (project_seconds - beat.seconds) as f32
+                            }),
+                        beat_count: beat_count(&self.job.beats, project_seconds) as f32,
+                        tempo_bpm: self.job.tempo_bpm as f32,
                         parameters: *parameters,
                     },
                     pixels,
@@ -695,6 +714,8 @@ mod tests {
             start_seconds: 0.0,
             audio_sources: Vec::new(),
             audio_gain: 1.0,
+            beats: Arc::new(Vec::new()),
+            tempo_bpm: 0.0,
         }
     }
 

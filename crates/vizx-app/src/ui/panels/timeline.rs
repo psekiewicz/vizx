@@ -398,6 +398,14 @@ fn show_lanes(
                             scale.pixels_per_second,
                             color,
                         );
+                        draw_beat_marks(
+                            &clip_painter,
+                            clip_rect,
+                            visible_left..=visible_right,
+                            &loaded.beats.beats,
+                            clip.source_offset_milliseconds as f64 / 1000.0,
+                            scale.pixels_per_second,
+                        );
                         ""
                     }
                     Some(AudioState::Loading) => "  (reading waveform...)",
@@ -907,6 +915,43 @@ fn draw_waveform(
             painter.vline(x + 0.5, top..=bottom.max(top + 1.0), stroke);
         }
         x += 1.0;
+    }
+}
+
+/// Small marks along the bottom edge of an audio clip where its beats are.
+/// Stronger beats get taller marks.
+fn draw_beat_marks(
+    painter: &egui::Painter,
+    clip_rect: Rect,
+    visible_x: std::ops::RangeInclusive<f32>,
+    beats: &[vizx_audio::Beat],
+    source_offset_seconds: f64,
+    pixels_per_second: f32,
+) {
+    // Too crowded to be useful when zoomed far out.
+    let seconds_per_pixel = 1.0 / f64::from(pixels_per_second);
+    if seconds_per_pixel > 0.08 {
+        return;
+    }
+    let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 220, 120, 200));
+    for beat in beats {
+        let seconds_in_clip = beat.seconds - source_offset_seconds;
+        if seconds_in_clip < 0.0 {
+            continue;
+        }
+        let x = clip_rect.left() + seconds_in_clip as f32 * pixels_per_second;
+        if x > clip_rect.right() || x > *visible_x.end() {
+            break;
+        }
+        if x < *visible_x.start() {
+            continue;
+        }
+        let height = 3.0 + 6.0 * beat.strength;
+        painter.vline(
+            x,
+            (clip_rect.bottom() - height)..=clip_rect.bottom(),
+            stroke,
+        );
     }
 }
 

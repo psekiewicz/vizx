@@ -9,7 +9,8 @@ fn visualize(uv: vec2f) -> vec4f {
     let radius = length(point);
     let pixel = 2.0 / vizx.resolution.y;
 
-    let core_radius = p_size() * (1.0 + vizx.bass * p_pulse());
+    // The core swells with the bass and jumps on every beat.
+    let core_radius = p_size() * (1.0 + max(vizx.bass, vizx.beat) * p_pulse());
 
     // The core: brightest in the middle, with a soft edge.
     let core = 1.0 - smoothstep(core_radius - pixel * 2.0, core_radius, radius);

@@ -19,7 +19,10 @@ mod text;
 mod visualizer_catalog;
 
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
-pub use composition::{LayerGeometry, ReactionMeter, audio_sources, frame_source, layer_geometry};
+pub use composition::{
+    LayerGeometry, ReactionMeter, audio_sources, beat_count, beat_pulse, beat_times, frame_source,
+    last_beat, layer_geometry,
+};
 pub use export::{Export, ExportContent, ExportJob, ExportLayer};
 pub use ffmpeg::{
     FFMPEG_DIR_VARIABLE, SUPPORTED_VIDEO_EXTENSIONS, VideoReader, VideoWriter, find_ffmpeg,

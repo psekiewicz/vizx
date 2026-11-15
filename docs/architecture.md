@@ -310,6 +310,33 @@ visualizer (MilkDrop or plugin) or its animation measures it. Playback is
 not affected. Lowering it is how a visualizer that is too wild is calmed
 down; it ranges from 1 % to 400 % and is part of the pre-render key, so a
 change renders the clip again.
+### Beats
+
+`vizx_audio::detect_beats` finds the beats of an audio file once, when it
+is loaded (`LoadedAudio::beats`, about half a second for a four-minute song
+on the development laptop).
+
+1. **Change envelope.** For every 10 ms, how much new energy appears
+   (logarithmic spectral flux), separately for the bass (below 200 Hz) and
+   the frequencies above it. From each, the steady background is taken
+   away, each is scaled to its own strongest hit, and the two are mixed
+   65 : 35 in favour of the bass, so the kick drum leads.
+2. **Tempo** from the autocorrelation of that envelope, 60 to 200 BPM, with
+   a mild preference for tempos near 120 (to choose between a tempo and its
+   double).
+3. **Beat tracking** (dynamic programming after D. Ellis, 2007): the chain
+   of strong moments that follow each other at the tempo. Hi-hats and other
+   hits between the beats are left out, and beats in quiet passages are
+   dropped. Without a tempo (a short file), strong moments are used as
+   they are.
+
+`cargo run -p vizx-audio --example beats -- <file>` prints what is found.
+
+Beats are used in three places, always in project time
+(`vizx_core::beat_times`, which follows trimmed clips and merges the beats
+of several stems): "Beat" as what an animation follows, `vizx.beat`,
+`vizx.since_beat`, `vizx.beat_count` and `vizx.tempo` in visualizer plugins,
+and small marks along the bottom of audio clips on the timeline.
 ### Editing clips on the timeline
 
 A clip is a piece of media at a place in time: `start`, `duration` and, for

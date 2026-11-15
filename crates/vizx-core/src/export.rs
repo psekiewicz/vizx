@@ -14,11 +14,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use vizx_audio::PlaybackSource;
+use vizx_audio::{Beat, PlaybackSource};
 use vizx_project::{AudioReaction, Placement, Project, TextProperties};
 use vizx_render::{Compositor, LayerDraw};
 
-use crate::composition::{ReactionMeter, audio_sources, frame_source, layer_geometry};
+use crate::composition::{ReactionMeter, audio_sources, beat_times, frame_source, layer_geometry};
 use crate::ffmpeg::VideoWriter;
 use crate::image_store::{DecodedImage, decode_image_file};
 use crate::prerender::{FrameRenderer, apply_opacity_from_brightness};
@@ -68,6 +68,10 @@ pub struct ExportLayer {
     pub input_audio: Vec<PlaybackSource>,
     /// The clip's sensitivity: its audio is multiplied by this.
     pub audio_gain: f64,
+    /// The beats of that audio, in project time, and its tempo (0 if not
+    /// known).
+    pub beats: Arc<Vec<Beat>>,
+    pub tempo_bpm: f64,
 }
 
 pub enum ExportContent {
@@ -116,6 +120,7 @@ impl ExportJob {
                         .map_err(|problem| format!("{}: {problem}", media.file_name()))?;
                     ExportContent::Frames(source)
                 };
+                let (beats, tempo) = beat_times(project, audio_store, clip.audio_input);
                 layers.push(ExportLayer {
                     content,
                     start_seconds: clip.start_milliseconds as f64 / 1000.0,
@@ -125,6 +130,8 @@ impl ExportJob {
                     reaction: clip.reaction,
                     input_audio: audio_sources(project, audio_store, clip.audio_input).0,
                     audio_gain: clip.audio_gain,
+                    beats: Arc::new(beats),
+                    tempo_bpm: tempo.unwrap_or(0.0),
                 });
             }
         }
@@ -301,6 +308,7 @@ fn run(
                 };
                 let effect = meter.effect(
                     &layer.input_audio,
+                    &layer.beats,
                     &layer.reaction,
                     layer.audio_gain,
                     seconds,
@@ -378,6 +386,8 @@ fn advance(
                     start_seconds: layer.start_seconds,
                     audio_sources: layer.input_audio.clone(),
                     audio_gain: layer.audio_gain as f32,
+                    beats: Arc::clone(&layer.beats),
+                    tempo_bpm: layer.tempo_bpm,
                 })?;
                 LayerPicture::Frames {
                     renderer: Box::new(renderer),
@@ -472,6 +482,8 @@ mod tests {
             reaction: AudioReaction::default(),
             input_audio: Vec::new(),
             audio_gain: 1.0,
+            beats: Arc::new(Vec::new()),
+            tempo_bpm: 0.0,
         }
     }
 

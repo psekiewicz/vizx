@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer, PlaybackSource};
+use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer, Beat, PlaybackSource};
 use vizx_project::{
     AudioInput, AudioReaction, Clip, MediaSource, Placement, Project, ReactionBand, ReactionEffect,
     TrackKind,
@@ -62,6 +62,96 @@ pub fn audio_sources(
         }
     }
     (sources, clips_still_loading)
+}
+
+/// Two beats from different files closer than this are one beat.
+const SAME_BEAT_SECONDS: f64 = 0.05;
+/// A beat is felt for at least this long, even with no release time.
+const SHORTEST_BEAT_SECONDS: f64 = 0.08;
+
+/// The beats `input` selects, in project time and in order: the beats of
+/// every loaded audio clip involved, where that clip plays them (a trimmed
+/// clip only brings the beats of its own part). Also the tempo of the first
+/// of those files that has one.
+pub fn beat_times(
+    project: &Project,
+    audio_store: &AudioStore,
+    input: AudioInput,
+) -> (Vec<Beat>, Option<f64>) {
+    let only_track = match input {
+        AudioInput::Track(id) if project.track(id).is_some() => Some(id),
+        _ => None,
+    };
+
+    let mut beats = Vec::new();
+    let mut tempo = None;
+    for track in project.tracks() {
+        if track.kind != TrackKind::Audio || only_track.is_some_and(|id| id != track.id) {
+            continue;
+        }
+        for clip in &track.clips {
+            let Some(loaded) = project
+                .media_source(clip.media)
+                .and_then(|source| audio_store.loaded(&source.path))
+            else {
+                continue;
+            };
+            let start = clip.start_milliseconds as f64 / 1000.0;
+            let offset = clip.source_offset_milliseconds as f64 / 1000.0;
+            let duration = clip.duration_milliseconds as f64 / 1000.0;
+            beats.extend(
+                loaded
+                    .beats
+                    .beats
+                    .iter()
+                    .filter(|beat| beat.seconds >= offset && beat.seconds < offset + duration)
+                    .map(|beat| Beat {
+                        seconds: start + beat.seconds - offset,
+                        strength: beat.strength,
+                    }),
+            );
+            tempo = tempo.or(loaded.beats.tempo_bpm);
+        }
+    }
+
+    beats.sort_by(|a, b| a.seconds.total_cmp(&b.seconds));
+    // The same drum on two stems is one beat, as strong as the stronger.
+    let mut merged: Vec<Beat> = Vec::with_capacity(beats.len());
+    for beat in beats {
+        match merged.last_mut() {
+            Some(last) if beat.seconds - last.seconds < SAME_BEAT_SECONDS => {
+                last.strength = last.strength.max(beat.strength);
+            }
+            _ => merged.push(beat),
+        }
+    }
+    (merged, tempo)
+}
+
+/// How strongly the beats are felt at `seconds`: the last beat's strength
+/// right on it, falling to 0 over `decay_seconds`.
+pub fn beat_pulse(beats: &[Beat], seconds: f64, decay_seconds: f64) -> f32 {
+    let Some(beat) = last_beat(beats, seconds) else {
+        return 0.0;
+    };
+    let decay = decay_seconds.max(SHORTEST_BEAT_SECONDS);
+    let since = seconds - beat.seconds;
+    if since >= decay {
+        0.0
+    } else {
+        beat.strength * (1.0 - since / decay) as f32
+    }
+}
+
+/// The last beat at or before `seconds`.
+pub fn last_beat(beats: &[Beat], seconds: f64) -> Option<Beat> {
+    let count = beat_count(beats, seconds);
+    count.checked_sub(1).map(|index| beats[index])
+}
+
+/// How many beats have happened up to `seconds` (inclusive).
+pub fn beat_count(beats: &[Beat], seconds: f64) -> usize {
+    beats.partition_point(|beat| beat.seconds <= seconds)
 }
 
 /// What draws the frames of a visualizer or video clip, or why it cannot be
@@ -161,12 +251,13 @@ impl ReactionMeter {
     pub fn effect(
         &mut self,
         sources: &[PlaybackSource],
+        beats: &[Beat],
         reaction: &AudioReaction,
         audio_gain: f64,
         seconds: f64,
     ) -> ReactionEffect {
         if reaction.is_active() {
-            reaction.at_level(self.level(sources, reaction, audio_gain, seconds))
+            reaction.at_level(self.level(sources, beats, reaction, audio_gain, seconds))
         } else {
             ReactionEffect::NONE
         }
@@ -186,10 +277,17 @@ impl ReactionMeter {
     pub fn level(
         &mut self,
         sources: &[PlaybackSource],
+        beats: &[Beat],
         reaction: &AudioReaction,
         audio_gain: f64,
         seconds: f64,
     ) -> f64 {
+        // Beats are known in advance: a push on each, fading over the
+        // release time.
+        if reaction.band == ReactionBand::Beat {
+            let pulse = beat_pulse(beats, seconds, reaction.release_seconds);
+            return (f64::from(pulse) * audio_gain).min(1.0);
+        }
         let release = reaction.release_seconds;
         let steps_back = if release > 0.0 {
             ((release / RELEASE_STEP_SECONDS).ceil() as u32).min(MAX_RELEASE_STEPS)
@@ -248,6 +346,8 @@ impl ReactionMeter {
             ReactionBand::Bass => sound.bass,
             ReactionBand::Mid => sound.mid,
             ReactionBand::Treble => sound.treble,
+            // Handled in `level`.
+            ReactionBand::Beat => 0.0,
         })
     }
 }
@@ -325,33 +425,75 @@ mod tests {
             ..AudioReaction::default()
         };
 
-        let during_tone = meter.level(&sources, &immediate, 1.0, 0.5);
+        let during_tone = meter.level(&sources, &[], &immediate, 1.0, 0.5);
         assert!(during_tone > 0.7, "{during_tone}");
         // 0.2 s after the tone ended.
-        assert_eq!(meter.level(&sources, &immediate, 1.0, 1.2), 0.0);
+        assert_eq!(meter.level(&sources, &[], &immediate, 1.0, 1.2), 0.0);
 
         // With a release the level is on its way down: about half is left
         // after half of the release time.
-        let falling = meter.level(&sources, &releasing, 1.0, 1.2);
+        let falling = meter.level(&sources, &[], &releasing, 1.0, 1.2);
         assert!(
             falling > during_tone * 0.3 && falling < during_tone * 0.7,
             "{falling}"
         );
-        assert_eq!(meter.level(&sources, &releasing, 1.0, 1.8), 0.0);
+        assert_eq!(meter.level(&sources, &[], &releasing, 1.0, 1.8), 0.0);
 
         // A quarter of the sensitivity: a quieter sound, a lower level.
-        let quiet = meter.level(&sources, &immediate, 0.25, 0.5);
+        let quiet = meter.level(&sources, &[], &immediate, 0.25, 0.5);
         assert!(quiet < during_tone * 0.4 && quiet > 0.0, "{quiet}");
 
         // The same moment gives the same value, whatever was asked before.
-        assert_eq!(meter.level(&sources, &releasing, 1.0, 1.2), falling);
+        assert_eq!(meter.level(&sources, &[], &releasing, 1.0, 1.2), falling);
+    }
+
+    #[test]
+    fn a_beat_is_felt_right_on_it_and_fades_out() {
+        let beats = [
+            Beat {
+                seconds: 1.0,
+                strength: 1.0,
+            },
+            Beat {
+                seconds: 2.0,
+                strength: 0.5,
+            },
+        ];
+
+        assert_eq!(beat_pulse(&beats, 0.5, 0.2), 0.0);
+        assert_eq!(beat_pulse(&beats, 1.0, 0.2), 1.0);
+        assert!((beat_pulse(&beats, 1.1, 0.2) - 0.5).abs() < 1e-6);
+        assert_eq!(beat_pulse(&beats, 1.3, 0.2), 0.0);
+        assert_eq!(beat_pulse(&beats, 2.0, 0.2), 0.5);
+        // Even without a release time a beat is felt for a moment.
+        assert!(beat_pulse(&beats, 1.04, 0.0) > 0.0);
+        assert_eq!((beat_count(&beats, 0.9), beat_count(&beats, 1.0)), (0, 1));
+        assert_eq!(last_beat(&beats, 5.0).unwrap().seconds, 2.0);
+
+        // As an animation: the "Beat" band follows the beats, not the sound.
+        let reaction = AudioReaction {
+            band: ReactionBand::Beat,
+            scale: 1.0,
+            release_seconds: 0.2,
+            ..AudioReaction::default()
+        };
+        let mut meter = ReactionMeter::default();
+        assert_eq!(meter.level(&[], &beats, &reaction, 1.0, 1.0), 1.0);
+        assert_eq!(meter.level(&[], &beats, &reaction, 0.5, 1.0), 0.5);
+        assert_eq!(meter.level(&[], &beats, &reaction, 1.0, 1.5), 0.0);
     }
 
     #[test]
     fn an_inactive_reaction_has_no_effect() {
         let mut meter = ReactionMeter::default();
 
-        let effect = meter.effect(&tone_then_silence(), &AudioReaction::default(), 1.0, 0.5);
+        let effect = meter.effect(
+            &tone_then_silence(),
+            &[],
+            &AudioReaction::default(),
+            1.0,
+            0.5,
+        );
 
         assert_eq!(effect, ReactionEffect::NONE);
     }

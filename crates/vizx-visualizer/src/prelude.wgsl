@@ -17,6 +17,15 @@ struct Vizx {
     bass: f32,
     mid: f32,
     treble: f32,
+    // 1 on a beat (times its strength), fading to 0 within a quarter second.
+    beat: f32,
+    // Seconds since the last beat; very large before the first one.
+    since_beat: f32,
+    // How many beats there have been so far (count them to alternate
+    // colors, sides, ...).
+    beat_count: f32,
+    // Beats per minute, or 0 if not known.
+    tempo: f32,
     // Parameter values; read them with the generated p_<id>() functions.
     params: array<vec4f, 8>,
 }

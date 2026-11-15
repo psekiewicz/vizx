@@ -12,6 +12,7 @@
 //! needs no system libraries, so it behaves the same on Windows and Linux.
 
 mod analysis;
+mod beats;
 mod decode;
 mod playback;
 mod probe;
@@ -19,6 +20,7 @@ mod wav;
 mod waveform;
 
 pub use analysis::{ANALYSIS_WINDOW, AudioAnalyzer, AudioFeatures, SPECTRUM_BINS, WAVEFORM_POINTS};
+pub use beats::{Beat, BeatAnalysis, detect_beats};
 pub use decode::{DecodedAudio, decode_audio_file};
 pub use playback::{AudioPlayer, PlaybackError, PlaybackSource, mix_to_stereo};
 pub use probe::{AudioFileError, AudioFileInfo, probe_audio_file};

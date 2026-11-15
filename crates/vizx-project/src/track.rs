@@ -303,10 +303,19 @@ pub enum ReactionBand {
     Mid,
     /// High frequencies: cymbals, hi-hats.
     Treble,
+    /// The beats: a short push on every beat, fading out over the release
+    /// time.
+    Beat,
 }
 
 impl ReactionBand {
-    pub const ALL: [Self; 4] = [Self::Volume, Self::Bass, Self::Mid, Self::Treble];
+    pub const ALL: [Self; 5] = [
+        Self::Volume,
+        Self::Bass,
+        Self::Mid,
+        Self::Treble,
+        Self::Beat,
+    ];
 
     /// Name shown to the user.
     pub fn label(self) -> &'static str {
@@ -315,6 +324,7 @@ impl ReactionBand {
             Self::Bass => "Bass",
             Self::Mid => "Mid",
             Self::Treble => "Treble",
+            Self::Beat => "Beat",
         }
     }
 }

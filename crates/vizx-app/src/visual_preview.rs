@@ -16,7 +16,7 @@ use eframe::egui;
 use vizx_core::{
     AudioStore, Compositor, DecodedImage, EditorSession, ImageState, ImageStore, LayerDraw,
     LayerGeometry, Prerender, PrerenderJob, ReactionMeter, VisualizerCatalog, audio_sources,
-    frame_source, layer_geometry,
+    beat_times, frame_source, layer_geometry,
 };
 use vizx_project::{AudioInput, ClipId, Placement, ReactionEffect, TextProperties, TrackId};
 
@@ -205,6 +205,7 @@ impl VisualPreview {
                     continue;
                 };
                 let clip_seconds = clip.duration_milliseconds as f64 / 1000.0;
+                let (beats, tempo) = beat_times(project, audio_store, clip.audio_input);
                 let (width, height) = render_size(settings.width, settings.height, clip.placement);
                 wanted.push((
                     clip.id,
@@ -219,6 +220,8 @@ impl VisualPreview {
                         // to react to: the mix, or one audio track.
                         audio_sources: audio_sources(project, audio_store, clip.audio_input).0,
                         audio_gain: clip.audio_gain as f32,
+                        beats: Arc::new(beats),
+                        tempo_bpm: tempo.unwrap_or(0.0),
                     },
                 ));
             }
@@ -274,8 +277,14 @@ impl VisualPreview {
 
             let effect = if clip.reaction.is_active() {
                 let (sources, _) = audio_sources(project, audio_store, clip.audio_input);
-                self.meter
-                    .effect(&sources, &clip.reaction, clip.audio_gain, playhead_seconds)
+                let (beats, _) = beat_times(project, audio_store, clip.audio_input);
+                self.meter.effect(
+                    &sources,
+                    &beats,
+                    &clip.reaction,
+                    clip.audio_gain,
+                    playhead_seconds,
+                )
             } else {
                 ReactionEffect::NONE
             };

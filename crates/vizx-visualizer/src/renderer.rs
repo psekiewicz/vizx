@@ -24,7 +24,7 @@ pub const HISTORY_ROWS: usize = 256;
 /// Width of the textures that carry the spectrum and the waveform.
 const AUDIO_COLUMNS: usize = 512;
 /// Size in bytes of the `Vizx` struct in `prelude.wgsl`.
-const UNIFORM_SIZE: usize = 32 + PARAMETER_SLOTS * 4;
+const UNIFORM_SIZE: usize = 48 + PARAMETER_SLOTS * 4;
 /// Pixel format of the picture: 8 bits each for red, green, blue, alpha.
 const PICTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 const BYTES_PER_PIXEL: u32 = 4;
@@ -44,6 +44,14 @@ pub struct FrameInput<'a> {
     pub bass: f32,
     pub mid: f32,
     pub treble: f32,
+    /// 1 on a beat (times its strength), fading to 0 shortly after.
+    pub beat: f32,
+    /// Seconds since the last beat; large before the first one.
+    pub seconds_since_beat: f32,
+    /// How many beats there have been so far.
+    pub beat_count: f32,
+    /// Beats per minute, or 0 if not known.
+    pub tempo_bpm: f32,
     /// From [`VisualizerPlugin::pack_parameters`].
     pub parameters: [f32; PARAMETER_SLOTS],
 }
@@ -312,6 +320,10 @@ impl ShaderRenderer {
             input.bass,
             input.mid,
             input.treble,
+            input.beat,
+            input.seconds_since_beat,
+            input.beat_count,
+            input.tempo_bpm,
         ];
         header
             .iter()
@@ -606,6 +618,10 @@ mod tests {
             bass: 0.0,
             mid: 0.0,
             treble: 0.0,
+            beat: 0.0,
+            seconds_since_beat: 0.0,
+            beat_count: 0.0,
+            tempo_bpm: 0.0,
             parameters: [0.0; PARAMETER_SLOTS],
         }
     }

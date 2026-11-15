@@ -4,13 +4,15 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use vizx_audio::{DecodedAudio, WaveformPeaks};
+use vizx_audio::{BeatAnalysis, DecodedAudio, WaveformPeaks};
 
 /// An audio file that has been decoded and is ready to be drawn and played.
 #[derive(Debug)]
 pub struct LoadedAudio {
     /// Summary of the samples for drawing the waveform.
     pub peaks: WaveformPeaks,
+    /// Where the beats of the file are, and its tempo.
+    pub beats: BeatAnalysis,
     /// The samples themselves, for playback. `Arc` is a shared pointer: the
     /// audio player can use the same samples without copying them.
     pub audio: Arc<DecodedAudio>,
@@ -86,6 +88,7 @@ impl AudioStore {
             let state = match vizx_audio::decode_audio_file(&PathBuf::from(&path)) {
                 Ok(audio) => AudioState::Ready(Arc::new(LoadedAudio {
                     peaks: WaveformPeaks::from_audio(&audio),
+                    beats: vizx_audio::detect_beats(&audio),
                     audio: Arc::new(audio),
                 })),
                 Err(error) => AudioState::Failed(error.to_string()),

@@ -86,6 +86,12 @@ the same picture for the same moment of the song on every computer.
 | `vizx.bass` | Loudness below 250 Hz, 0 to 1. |
 | `vizx.mid` | Loudness from 250 Hz to 4 kHz, 0 to 1. |
 | `vizx.treble` | Loudness above 4 kHz, 0 to 1. |
+| `vizx.beat` | 1 right on a beat (times how strong the beat is), fading to 0 within a quarter second. |
+| `vizx.since_beat` | Seconds since the last beat; very large before the first one. |
+| `vizx.beat_count` | How many beats there have been so far. Use it to alternate: `fract(vizx.beat_count / 2.0)` is 0 or 0.5. |
+| `vizx.tempo` | Beats per minute, or 0 if not known. |
+
+Beats are found once, when the audio is loaded (see `vizx-audio/src/beats.rs`).
 
 The sound is whatever the clip's **Reacts to** setting selects: the whole
 mix or a single audio track.
