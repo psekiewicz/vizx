@@ -16,9 +16,10 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 /// `ffmpeg` next to its executable or on the system's `PATH` instead.
 pub const FFMPEG_DIR_VARIABLE: &str = "VIZX_FFMPEG_DIR";
 
-/// File extensions of the video formats offered when importing, in lower
-/// case. FFmpeg reads many more; these are the common ones.
-pub const SUPPORTED_VIDEO_EXTENSIONS: [&str; 5] = ["mp4", "mov", "mkv", "webm", "avi"];
+/// File extensions of the moving-picture formats offered when importing,
+/// in lower case: videos and animated GIFs. FFmpeg reads many more; these
+/// are the common ones.
+pub const SUPPORTED_VIDEO_EXTENSIONS: [&str; 6] = ["mp4", "mov", "mkv", "webm", "avi", "gif"];
 
 #[cfg(windows)]
 const FFMPEG_FILE_NAME: &str = "ffmpeg.exe";
@@ -373,6 +374,72 @@ mod tests {
         let _ = std::fs::remove_file(&file);
     }
 
+    /// An animated GIF with transparent parts reads like a video, keeps
+    /// its transparency and starts over when it ends.
+    #[test]
+    fn an_animated_gif_keeps_its_transparency_and_loops() {
+        let Some(ffmpeg) = find_ffmpeg() else {
+            eprintln!("FFmpeg not found: skipping");
+            return;
+        };
+        let file =
+            std::env::temp_dir().join(format!("vizx-ffmpeg-test-{}.gif", std::process::id()));
+        // 4 frames at 4 per second: an opaque red square on the left half,
+        // the right half transparent, the square turning blue at frame 2.
+        // A GIF stores transparency as one reserved palette color, which
+        // FFmpeg only sets aside when asked to.
+        let made = quiet_command(&ffmpeg)
+            .args([
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=16x16:r=4:d=1",
+            ])
+            .arg("-filter_complex")
+            .arg(
+                "[0]format=rgba,\
+                 geq=r='if(lt(N,2),255,0)':g=0:b='if(lt(N,2),0,255)':a='if(lt(X,8),255,0)',\
+                 split[a][b];[a]palettegen=reserve_transparent=1:stats_mode=single[p];\
+                 [b][p]paletteuse=alpha_threshold=128:new=1",
+            )
+            .args(["-loop", "0"])
+            .arg(&file)
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(made, "FFmpeg could not make the test GIF");
+
+        let size = probe_video(&ffmpeg, &file);
+        let mut reader = VideoReader::open(&ffmpeg, &file, (16, 16), 4, 0.0).unwrap();
+        let mut frames = Vec::new();
+        for _ in 0..6 {
+            let mut pixels = Vec::new();
+            reader.read_frame(&mut pixels).unwrap();
+            frames.push(pixels);
+        }
+        drop(reader);
+        let _ = std::fs::remove_file(&file);
+
+        assert_eq!(size, Ok((16, 16)));
+        let pixel = |frame: &[u8], x: usize| {
+            [
+                frame[(8 * 16 + x) * 4],
+                frame[(8 * 16 + x) * 4 + 2],
+                frame[(8 * 16 + x) * 4 + 3],
+            ]
+        };
+        // A GIF has a palette of 256 colors, so values are close to, not
+        // exactly, what was asked for.
+        let is_red = |[red, blue, opacity]: [u8; 3]| red > 230 && blue < 25 && opacity == 255;
+        let is_blue = |[red, blue, opacity]: [u8; 3]| blue > 230 && red < 25 && opacity == 255;
+        assert!(is_red(pixel(&frames[0], 2)), "{:?}", pixel(&frames[0], 2));
+        assert_eq!(pixel(&frames[0], 13)[2], 0, "the right half is transparent");
+        assert!(is_blue(pixel(&frames[3], 2)), "{:?}", pixel(&frames[3], 2));
+        // Frame 4 is the first one again.
+        assert!(is_red(pixel(&frames[4], 2)), "{:?}", pixel(&frames[4], 2));
+    }
     #[test]
     fn a_file_that_is_not_a_video_is_refused() {
         let Some(ffmpeg) = find_ffmpeg() else {

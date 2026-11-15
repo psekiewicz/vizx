@@ -588,7 +588,14 @@ impl FrameRenderer {
                     pixels,
                 )
             }
-            Drawing::Video(reader) => reader.read_frame(pixels),
+            Drawing::Video(reader) => {
+                reader.read_frame(pixels)?;
+                // FFmpeg gives the opacity of an animated GIF as it is; VizX
+                // works with color multiplied by it. (A video is opaque, and
+                // this changes nothing.)
+                crate::image_store::premultiply(pixels);
+                Ok(())
+            }
         }
     }
 }

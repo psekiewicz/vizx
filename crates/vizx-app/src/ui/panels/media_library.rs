@@ -95,9 +95,18 @@ pub fn show(ui: &mut egui::Ui, session: &EditorSession) {
                 is_empty = false;
                 ui.label(source.file_name()).on_hover_text(&source.path);
                 ui.label(
-                    egui::RichText::new(format!("Video  |  {} x {}", video.width, video.height))
-                        .small()
-                        .color(theme::TEXT_MUTED),
+                    egui::RichText::new(format!(
+                        "{}  |  {} x {}",
+                        if source.path.to_lowercase().ends_with(".gif") {
+                            "Animated GIF"
+                        } else {
+                            "Video"
+                        },
+                        video.width,
+                        video.height
+                    ))
+                    .small()
+                    .color(theme::TEXT_MUTED),
                 );
                 ui.add_space(2.0);
             }

@@ -130,7 +130,7 @@ pub fn decode_image_file(path: &Path, edge_limit: u32) -> Result<DecodedImage, S
 }
 
 /// Multiplies each pixel's color by its opacity.
-fn premultiply(rgba: &mut [u8]) {
+pub(crate) fn premultiply(rgba: &mut [u8]) {
     for pixel in rgba.as_chunks_mut::<4>().0 {
         let opacity = u16::from(pixel[3]);
         if opacity < 255 {

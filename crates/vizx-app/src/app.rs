@@ -186,7 +186,10 @@ impl VizxApp {
             return;
         };
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Video", &vizx_core::SUPPORTED_VIDEO_EXTENSIONS)
+            .add_filter(
+                "Video or animated GIF",
+                &vizx_core::SUPPORTED_VIDEO_EXTENSIONS,
+            )
             .set_parent(frame)
             .pick_file()
         else {

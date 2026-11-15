@@ -42,7 +42,7 @@ pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
         "",
         AppCommand::ImportBackgroundImage,
     );
-    item(ui, "Video File...", "", AppCommand::ImportVideo);
+    item(ui, "Video or GIF...", "", AppCommand::ImportVideo);
     item(
         ui,
         "Background Video...",

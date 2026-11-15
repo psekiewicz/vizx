@@ -272,6 +272,9 @@ build) apart from VizX.
 
 - **Video as a layer or background.** A video is a kind of media
   (`MediaContent::Video`) used for its picture only; its sound is ignored.
+  Animated GIFs are handled the same way and keep their transparency:
+  FFmpeg hands over the opacity of every pixel, and VizX premultiplies the
+  colors by it like every other picture.
   It plays from its start when its clip starts and begins again when it
   ends. For the preview it is pre-rendered like a visualizer: FFmpeg decodes
   it at preview size into the frame store.
