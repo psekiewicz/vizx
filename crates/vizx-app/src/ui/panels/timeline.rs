@@ -419,7 +419,11 @@ fn show_lanes(
                                     strength: 1.0,
                                 })
                                 .collect(),
-                            None => loaded.beats.beats.clone(),
+                            None => loaded
+                                .beats_at(source.and_then(|source| source.tempo_bpm))
+                                .0
+                                .as_ref()
+                                .clone(),
                         };
                         draw_beat_marks(
                             &clip_painter,

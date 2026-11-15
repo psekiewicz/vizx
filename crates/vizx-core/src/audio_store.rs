@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
-use vizx_audio::{BeatAnalysis, DecodedAudio, WaveformPeaks};
+use vizx_audio::{Beat, BeatAnalysis, DecodedAudio, WaveformPeaks};
 
 /// An audio file that has been decoded and is ready to be drawn and played.
 #[derive(Debug)]
@@ -13,9 +13,34 @@ pub struct LoadedAudio {
     pub peaks: WaveformPeaks,
     /// Where the beats of the file are, and its tempo.
     pub beats: BeatAnalysis,
+    /// The beats found again at a tempo the user chose, kept for the last
+    /// such tempo so they are not worked out every frame.
+    beats_at_chosen_tempo: Mutex<Option<(u64, Arc<Vec<Beat>>)>>,
     /// The samples themselves, for playback. `Arc` is a shared pointer: the
     /// audio player can use the same samples without copying them.
     pub audio: Arc<DecodedAudio>,
+}
+
+impl LoadedAudio {
+    /// The beats of the file and their tempo: as found, or found again at
+    /// `chosen_tempo` if the user set one.
+    pub fn beats_at(&self, chosen_tempo: Option<f64>) -> (Arc<Vec<Beat>>, Option<f64>) {
+        let Some(tempo) = chosen_tempo else {
+            return (Arc::new(self.beats.beats.clone()), self.beats.tempo_bpm);
+        };
+        let key = tempo.to_bits();
+        let Ok(mut cache) = self.beats_at_chosen_tempo.lock() else {
+            return (Arc::new(self.beats.beats_at_tempo(tempo)), Some(tempo));
+        };
+        match cache.as_ref() {
+            Some((cached_key, beats)) if *cached_key == key => (Arc::clone(beats), Some(tempo)),
+            _ => {
+                let beats = Arc::new(self.beats.beats_at_tempo(tempo));
+                *cache = Some((key, Arc::clone(&beats)));
+                (beats, Some(tempo))
+            }
+        }
+    }
 }
 
 /// Progress of loading one audio file.
@@ -89,6 +114,7 @@ impl AudioStore {
                 Ok(audio) => AudioState::Ready(Arc::new(LoadedAudio {
                     peaks: WaveformPeaks::from_audio(&audio),
                     beats: vizx_audio::detect_beats(&audio),
+                    beats_at_chosen_tempo: Mutex::new(None),
                     audio: Arc::new(audio),
                 })),
                 Err(error) => AudioState::Failed(error.to_string()),

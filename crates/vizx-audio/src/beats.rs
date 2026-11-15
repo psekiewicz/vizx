@@ -68,6 +68,23 @@ pub struct BeatAnalysis {
     /// The most likely tempo in beats per minute, if the file is long and
     /// regular enough to tell.
     pub tempo_bpm: Option<f64>,
+    /// How much new energy appears every analysed moment, kept so that
+    /// beats can be found again at another tempo (see `beats_at_tempo`).
+    envelope: Vec<f32>,
+    seconds_per_step: f64,
+}
+
+impl BeatAnalysis {
+    /// The beats as they fall at `tempo_bpm`, for when the tempo found
+    /// automatically is not the one the music is felt in (often half or
+    /// double). Takes milliseconds, so it can be done whenever the tempo
+    /// is changed.
+    pub fn beats_at_tempo(&self, tempo_bpm: f64) -> Vec<Beat> {
+        if !tempo_bpm.is_finite() || tempo_bpm <= 0.0 || self.seconds_per_step <= 0.0 {
+            return Vec::new();
+        }
+        track_beats(&self.envelope, self.seconds_per_step, tempo_bpm)
+    }
 }
 
 /// Finds the beats of `audio` (all channels mixed together).
@@ -88,7 +105,12 @@ pub fn detect_beats(audio: &DecodedAudio) -> BeatAnalysis {
         Some(tempo) => track_beats(&envelope, seconds_per_step, tempo),
         None => pick_beats(&envelope, seconds_per_step),
     };
-    BeatAnalysis { beats, tempo_bpm }
+    BeatAnalysis {
+        beats,
+        tempo_bpm,
+        envelope,
+        seconds_per_step,
+    }
 }
 
 /// Chooses beats that are both strong and spaced like the tempo.
@@ -424,6 +446,27 @@ mod tests {
     }
 
     #[test]
+    fn beats_can_be_found_again_at_half_the_tempo() {
+        let analysis = detect_beats(&kicks(0.5, 8.0));
+
+        let half = analysis.beats_at_tempo(60.0);
+
+        // Every other kick, a second apart, still on the kicks.
+        assert!((7..=9).contains(&half.len()), "{half:?}");
+        for pair in half.windows(2) {
+            assert!(
+                (pair[1].seconds - pair[0].seconds - 1.0).abs() < 0.05,
+                "{half:?}"
+            );
+        }
+        assert!(
+            half.iter()
+                .all(|beat| ((beat.seconds + 0.25) % 0.5 - 0.25).abs() < 0.04)
+        );
+        assert!(analysis.beats_at_tempo(f64::NAN).is_empty());
+    }
+
+    #[test]
     fn a_faster_pattern_gives_a_faster_tempo() {
         let tempo = detect_beats(&kicks(60.0 / 150.0, 10.0)).tempo_bpm.unwrap();
 
@@ -437,7 +480,8 @@ mod tests {
             channel_count: 2,
             samples: vec![0.0; RATE as usize * 6],
         };
-        assert_eq!(detect_beats(&silence), BeatAnalysis::default());
+        let quiet = detect_beats(&silence);
+        assert!(quiet.beats.is_empty() && quiet.tempo_bpm.is_none());
 
         let short = detect_beats(&kicks(0.5, 1.0));
         assert!(short.tempo_bpm.is_none());

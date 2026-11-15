@@ -25,6 +25,11 @@ pub struct MediaSource {
     /// itself; `None` uses those.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manual_beats: Option<Vec<f64>>,
+    /// For an audio file: the tempo the user says it has, in beats per
+    /// minute. The beats are then found at that tempo; `None` uses the
+    /// tempo found automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo_bpm: Option<f64>,
 }
 
 impl MediaSource {

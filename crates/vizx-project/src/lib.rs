@@ -67,4 +67,5 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 /// - 15: a visual clip's `audio_gain` (how strongly it hears its audio).
 /// - 16: a visual clip's `rotation_degrees`, `spin_degrees_per_second` and
 ///   `keyframes`. Older files load unturned and without keyframes.
-pub const CURRENT_FORMAT_VERSION: u32 = 16;
+/// - 17: an audio file's hand-placed `manual_beats` and chosen `tempo_bpm`.
+pub const CURRENT_FORMAT_VERSION: u32 = 17;

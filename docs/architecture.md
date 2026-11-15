@@ -367,6 +367,14 @@ on the development laptop).
 
 `cargo run -p vizx-audio --example beats -- <file>` prints what is found.
 
+**Choosing the tempo.** Music is often felt at half (or double) the tempo
+that repeats most strongly in the sound: a song with a snare between the
+kicks repeats every eighth note, but is felt in quarter notes. That choice
+cannot be made reliably from the sound alone, so the Properties panel of an
+audio clip shows the tempo with "½" and "×2" buttons and lets it be typed
+(`MediaSource::tempo_bpm`, saved with the project). The beats are then
+tracked again at that tempo (`BeatAnalysis::beats_at_tempo`, a few
+milliseconds, from the kept change envelope); "Auto" goes back.
 **Beats drawn by hand.** An audio file can use beats placed by hand
 instead (`MediaSource::manual_beats`, seconds in the file, saved with the
 project). In the Properties panel of an audio clip, "Edit These Beats"

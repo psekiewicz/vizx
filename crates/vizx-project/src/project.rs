@@ -487,6 +487,7 @@ impl Project {
             path: path.into(),
             content: MediaContent::Audio(properties),
             manual_beats: None,
+            tempo_bpm: None,
         });
 
         let free_audio_track = self
@@ -626,6 +627,7 @@ impl Project {
             path,
             content,
             manual_beats: None,
+            tempo_bpm: None,
         });
 
         let track_id = self.add_track("Background", TrackKind::Visual);
@@ -665,6 +667,7 @@ impl Project {
             path,
             content,
             manual_beats: None,
+            tempo_bpm: None,
         });
 
         let free_layer = self
@@ -973,6 +976,25 @@ impl Project {
             }
             _ => false,
         }
+    }
+
+    /// Sets the tempo of an audio file, in beats per minute (`None`: the
+    /// tempo found automatically). Returns `true` only if this changed
+    /// something.
+    pub fn set_audio_tempo(&mut self, media_id: MediaId, tempo_bpm: Option<f64>) -> bool {
+        let tempo = tempo_bpm
+            .filter(|tempo| tempo.is_finite())
+            .map(|tempo| tempo.clamp(30.0, 300.0));
+        let Some(source) = self
+            .media
+            .iter_mut()
+            .find(|source| source.id == media_id && source.audio().is_some())
+        else {
+            return false;
+        };
+        let has_changed = source.tempo_bpm != tempo;
+        source.tempo_bpm = tempo;
+        has_changed
     }
 
     fn set_manual_beats(&mut self, media_id: MediaId, beats: Option<Vec<f64>>) -> bool {
@@ -2033,6 +2055,11 @@ mod tests {
         // Saved with the project, and given up again.
         let saved = project.to_vzx_string().unwrap();
         assert_eq!(Project::from_vzx_str(&saved).unwrap(), project);
+        assert!(project.set_audio_tempo(song, Some(75.0)));
+        assert!(!project.set_audio_tempo(song, Some(75.0)));
+        project.set_audio_tempo(song, Some(1_000.0));
+        assert_eq!(project.media_source(song).unwrap().tempo_bpm, Some(300.0));
+        assert!(!project.set_audio_tempo(preset, Some(90.0)));
         assert!(project.use_automatic_beats(song));
         assert_eq!(manual(&project), None);
     }

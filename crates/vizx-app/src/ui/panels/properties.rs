@@ -403,26 +403,70 @@ fn beats_editor(
 
     match &source.manual_beats {
         None => {
-            let found = audio_store.loaded(&source.path).map(|loaded| &loaded.beats);
-            let summary = match found {
-                Some(found) => match found.tempo_bpm {
-                    Some(tempo) => format!(
-                        "Found automatically: {} beats, {tempo:.0} BPM",
-                        found.beats.len()
-                    ),
-                    None => format!("Found automatically: {} beats", found.beats.len()),
-                },
+            let loaded = audio_store.loaded(&source.path);
+            let found = loaded.map(|loaded| loaded.beats_at(source.tempo_bpm));
+            let summary = match &found {
+                Some((beats, _)) if source.tempo_bpm.is_some() => {
+                    format!("{} beats at the tempo you chose", beats.len())
+                }
+                Some((beats, _)) => format!("Found automatically: {} beats", beats.len()),
                 None => "Reading the file...".to_owned(),
             };
             ui.label(summary);
+
+            // The tempo: found automatically, or set by the user. Music is
+            // often felt at half or double the tempo found, so those are
+            // one click away.
+            if let Some((_, Some(tempo))) = found {
+                let mut chosen = tempo;
+                ui.horizontal(|ui| {
+                    ui.label("Tempo").on_hover_text(
+                        "The beats are placed at this tempo. If they come twice as often as \
+                         you feel the music, halve it.",
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut chosen)
+                            .range(30.0..=300.0)
+                            .speed(0.5)
+                            .max_decimals(1)
+                            .suffix(" BPM"),
+                    );
+                    if ui
+                        .button("\u{bd}")
+                        .on_hover_text("Half the tempo")
+                        .clicked()
+                    {
+                        chosen = tempo / 2.0;
+                    }
+                    if ui
+                        .button("\u{d7}2")
+                        .on_hover_text("Double the tempo")
+                        .clicked()
+                    {
+                        chosen = tempo * 2.0;
+                    }
+                    if source.tempo_bpm.is_some()
+                        && ui
+                            .button("Auto")
+                            .on_hover_text("Use the tempo found automatically")
+                            .clicked()
+                    {
+                        session.edit_project(|project| project.set_audio_tempo(media_id, None));
+                    }
+                });
+                if (chosen - tempo).abs() > 1e-6 {
+                    session.edit_project(|project| project.set_audio_tempo(media_id, Some(chosen)));
+                }
+            }
+
             ui.horizontal(|ui| {
                 let edit = ui
                     .add_enabled(found.is_some(), egui::Button::new("Edit These Beats"))
-                    .on_hover_text("Start from the beats found automatically and correct them");
+                    .on_hover_text("Start from these beats and correct them by hand");
                 if edit.clicked()
-                    && let Some(found) = found
+                    && let Some((beats, _)) = &found
                 {
-                    let seconds = found.beats.iter().map(|beat| beat.seconds).collect();
+                    let seconds = beats.iter().map(|beat| beat.seconds).collect();
                     session.edit_project(|project| project.use_manual_beats(media_id, seconds));
                 }
                 if ui

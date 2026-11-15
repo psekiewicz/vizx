@@ -106,7 +106,11 @@ pub fn beat_times(
                     tempo_of(manual),
                 ),
                 None => match audio_store.loaded(&source.path) {
-                    Some(loaded) => (loaded.beats.beats.clone(), loaded.beats.tempo_bpm),
+                    // At the tempo the user chose, if any.
+                    Some(loaded) => {
+                        let (beats, tempo) = loaded.beats_at(source.tempo_bpm);
+                        (beats.as_ref().clone(), tempo)
+                    }
                     None => continue,
                 },
             };

@@ -1,11 +1,13 @@
 //! Prints the beats and the tempo VizX finds in an audio file.
 //!
 //! ```text
-//! cargo run -p vizx-audio --example beats -- <audio file> [seconds to list]
+//! cargo run -p vizx-audio --example beats -- <audio file> [seconds to list] [tempo]
 //! ```
 //!
 //! Handy for checking the beat detection on real music without the VizX
 //! window. Only the beats of the first seconds (default 10) are listed.
+//! With a tempo, the beats are found at that tempo instead of the one found
+//! automatically.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -13,7 +15,7 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let Some(file) = arguments.first() else {
-        eprintln!("usage: beats <audio file> [seconds to list]");
+        eprintln!("usage: beats <audio file> [seconds to list] [tempo]");
         return ExitCode::FAILURE;
     };
     let listed_seconds: f64 = arguments
@@ -29,7 +31,11 @@ fn main() -> ExitCode {
         }
     };
     let started = std::time::Instant::now();
-    let analysis = vizx_audio::detect_beats(&audio);
+    let mut analysis = vizx_audio::detect_beats(&audio);
+    if let Some(tempo) = arguments.get(2).and_then(|text| text.parse::<f64>().ok()) {
+        analysis.beats = analysis.beats_at_tempo(tempo);
+        analysis.tempo_bpm = Some(tempo);
+    }
 
     println!(
         "{:.1} s of audio analysed in {:.2} s",
