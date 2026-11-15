@@ -566,6 +566,29 @@ for every step is expensive.
   second, Up/Down jump to the previous/next clip start or end.
 - **F1** shows all shortcuts in one window (`shortcuts_window.rs`); keep
   its list in step with `handle_keyboard_shortcuts`.
+- **Welcome window** (`welcome_window.rs`), in the spirit of Blender's
+  splash screen: an animated banner, New Project templates (Empty, Music
+  Visualizer, Lyrics Video, Cover Art Video: each asks for the files it
+  needs and sets up the layers), recent projects and Open. It opens at
+  startup unless turned off (Help > Welcome Screen brings it back), and not
+  over the offer to recover work.
+- **Panel layout** is stored in `settings.json` when VizX closes
+  (`DockState` through egui_dock's serde support) and restored at startup.
+- **Loop**: a loop region (Shift+drag on the ruler, or I / O at the
+  playhead; L or the toolbar button turns looping on and off) is editing
+  state in the session, not saved. While looping, the transport seeks back
+  to its start when playback passes its end.
+- **Markers** (format version 19, `Project::markers`): named moments added
+  with M, drawn as flags on the ruler; click to go there, drag to move,
+  right-click to rename or delete. Ctrl+Left/Right jump between them.
+- **Several clips** can be selected: Ctrl+click, a rectangle dragged over
+  empty lanes, or Ctrl+A. The session keeps them next to the main
+  selection (`selected_clip_ids`); dragging one moves all, Delete removes
+  all, and copy/paste keeps their distances.
+- **Thumbnails** on visual clips (`vizx_core::make_thumbnail`,
+  `thumbnails.rs`): the image, the first frame of an animation or a video
+  (through FFmpeg) or the text, made once in the background and repeated
+  along the clip like a film strip.
 ### Visualizer plugins
 
 Visualizers other than MilkDrop presets are **plugins**: a folder with a

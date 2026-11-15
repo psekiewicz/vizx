@@ -174,6 +174,8 @@ pub struct VizxApp {
     pub is_shortcuts_open: bool,
     /// The welcome window shown at startup.
     pub is_welcome_open: bool,
+    /// Small pictures of the media, for the timeline.
+    thumbnails: crate::thumbnails::Thumbnails,
     /// The stem separation running in the background, if any.
     stem_job: Option<vizx_core::StemJob>,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
@@ -199,6 +201,7 @@ impl VizxApp {
         // Looked up once: both the preset browser and the preview need it.
         let bundled_presets = vizx_core::find_bundled_presets();
         let ffmpeg = vizx_core::find_ffmpeg();
+        let thumbnails = crate::thumbnails::Thumbnails::new(ffmpeg.clone());
         let app_data = vizx_core::app_data_dir();
 
         let mut app = Self {
@@ -218,6 +221,7 @@ impl VizxApp {
             is_project_settings_open: false,
             lyrics: LyricsWindow::default(),
             stem_job: None,
+            thumbnails,
             settings: app_data
                 .as_deref()
                 .map(vizx_core::AppSettings::load)
@@ -1325,9 +1329,12 @@ impl eframe::App for VizxApp {
                 self.workspace.show(
                     ui,
                     &mut self.session,
-                    &self.audio_store,
-                    &self.visual_preview,
-                    &mut self.visualizer_catalog,
+                    crate::ui::workspace::PanelResources {
+                        audio_store: &self.audio_store,
+                        visual_preview: &self.visual_preview,
+                        visualizer_catalog: &mut self.visualizer_catalog,
+                        thumbnails: &mut self.thumbnails,
+                    },
                     &mut self.requested_command,
                 );
             });

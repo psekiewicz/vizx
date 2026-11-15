@@ -16,6 +16,7 @@ use vizx_project::{ClipId, LayerMove, MediaId, Track, TrackId, TrackKind};
 
 use crate::app::AppCommand;
 use crate::theme;
+use crate::thumbnails::Thumbnails;
 use crate::ui::{add_menu_section, add_submenu};
 
 const RULER_HEIGHT: f32 = 22.0;
@@ -84,6 +85,7 @@ pub fn show(
     session: &mut EditorSession,
     view: &mut TimelineView,
     audio_store: &AudioStore,
+    thumbnails: &mut Thumbnails,
     requested_command: &mut Option<AppCommand>,
 ) {
     let panel_rect = ui.available_rect_before_wrap();
@@ -115,7 +117,7 @@ pub fn show(
         ui,
         session,
         view,
-        audio_store,
+        (audio_store, thumbnails),
         requested_command,
         &scale,
         lanes_rect,
@@ -283,7 +285,8 @@ fn show_lanes(
     ui: &mut egui::Ui,
     session: &mut EditorSession,
     view: &mut TimelineView,
-    audio_store: &AudioStore,
+    // What clips show: waveforms and thumbnails.
+    (audio_store, thumbnails): (&AudioStore, &mut Thumbnails),
     requested_command: &mut Option<AppCommand>,
     scale: &TimeScale,
     lanes_rect: Rect,
@@ -412,6 +415,29 @@ fn show_lanes(
                 // Nothing drawn for a clip may spill outside of it.
                 let clip_painter = painter.with_clip_rect(clip_rect.intersect(painter.clip_rect()));
                 let source = session.project().media_source(clip.media);
+
+                // Pictures in a row along the clip, like a film strip.
+                if let Some((texture, aspect)) =
+                    source.and_then(|source| thumbnails.get(ui.ctx(), source))
+                {
+                    let inner = clip_rect.shrink(2.0);
+                    let tile_width = (inner.height() * aspect).max(4.0);
+                    let first = ((visible_left - inner.left()) / tile_width)
+                        .floor()
+                        .max(0.0) as usize;
+                    let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    for index in first.. {
+                        let x = inner.left() + index as f32 * tile_width;
+                        if x > inner.right().min(visible_right) {
+                            break;
+                        }
+                        let tile = Rect::from_min_size(
+                            egui::pos2(x, inner.top()),
+                            egui::vec2(tile_width, inner.height()),
+                        );
+                        clip_painter.image(texture, tile, uv, Color32::from_white_alpha(170));
+                    }
+                }
                 let waveform = source.and_then(|source| audio_store.state(&source.path));
 
                 let status = match waveform {
@@ -462,13 +488,23 @@ fn show_lanes(
                 // The label stays readable at the left edge of the view when
                 // the clip starts off-screen.
                 let file_name = source.map_or("Missing media", |source| source.display_name());
-                clip_painter.text(
-                    egui::pos2(left.max(visible_left) + 6.0, clip_rect.top() + 3.0),
-                    Align2::LEFT_TOP,
+                // On a dark backing, so it stays readable over thumbnails.
+                let label = clip_painter.layout_no_wrap(
                     format!("{file_name}{status}"),
                     FontId::proportional(11.0),
                     Color32::WHITE,
                 );
+                let label_position =
+                    egui::pos2(left.max(visible_left) + 6.0, clip_rect.top() + 3.0);
+                clip_painter.rect_filled(
+                    Rect::from_min_size(
+                        label_position - egui::vec2(3.0, 1.0),
+                        label.size() + egui::vec2(6.0, 2.0),
+                    ),
+                    2.0,
+                    Color32::from_black_alpha(140),
+                );
+                clip_painter.galley(label_position, label, Color32::WHITE);
 
                 // While a clip is dragged, show exactly where it is.
                 if drag.is_some_and(|drag| drag.clip == clip.id) {

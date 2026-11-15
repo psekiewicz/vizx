@@ -20,6 +20,7 @@ mod selection;
 mod session;
 mod stems;
 mod text;
+mod thumbnail;
 mod visualizer_catalog;
 
 pub use animation::{AnimationReader, find_image_sequence, find_row_lengths, guess_sprite_sheet};
@@ -51,6 +52,7 @@ pub use selection::Selection;
 pub use session::{CopiedClip, EditorSession, UNTITLED_PROJECT_NAME};
 pub use stems::{STEM_NAMES, StemEngine, StemFiles, StemJob, stem_folder};
 pub use text::render_text;
+pub use thumbnail::{THUMBNAIL_EDGE, make_thumbnail};
 pub use visualizer_catalog::{
     BUNDLED_VISUALIZER_PREFIX, BundledVisualizer, PluginState, VisualizerCatalog,
 };

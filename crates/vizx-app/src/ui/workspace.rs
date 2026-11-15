@@ -6,6 +6,7 @@ use vizx_core::{AudioStore, EditorSession, VisualizerCatalog};
 
 use crate::app::AppCommand;
 use crate::theme;
+use crate::thumbnails::Thumbnails;
 use crate::ui::panels;
 use crate::ui::panels::timeline::TimelineView;
 use crate::visual_preview::VisualPreview;
@@ -40,6 +41,14 @@ impl PanelKind {
             Self::Timeline => "Timeline",
         }
     }
+}
+
+/// What the panels draw from besides the session.
+pub struct PanelResources<'a> {
+    pub audio_store: &'a AudioStore,
+    pub visual_preview: &'a VisualPreview,
+    pub visualizer_catalog: &'a mut VisualizerCatalog,
+    pub thumbnails: &'a mut Thumbnails,
 }
 
 /// Current arrangement of the dockable panels.
@@ -102,11 +111,15 @@ impl Workspace {
         &mut self,
         ui: &mut egui::Ui,
         session: &mut EditorSession,
-        audio_store: &AudioStore,
-        visual_preview: &VisualPreview,
-        visualizer_catalog: &mut VisualizerCatalog,
+        resources: PanelResources<'_>,
         requested_command: &mut Option<AppCommand>,
     ) {
+        let PanelResources {
+            audio_store,
+            visual_preview,
+            visualizer_catalog,
+            thumbnails,
+        } = resources;
         let style = theme::dock_style(ui.style());
         let mut panel_viewer = PanelViewer {
             session,
@@ -114,6 +127,7 @@ impl Workspace {
             audio_store,
             visual_preview,
             visualizer_catalog,
+            thumbnails,
             requested_command,
         };
 
@@ -162,6 +176,7 @@ struct PanelViewer<'session> {
     /// The composed picture and the clips in it.
     visual_preview: &'session VisualPreview,
     visualizer_catalog: &'session mut VisualizerCatalog,
+    thumbnails: &'session mut Thumbnails,
     requested_command: &'session mut Option<AppCommand>,
 }
 
@@ -204,6 +219,7 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
                     self.session,
                     self.timeline_view,
                     self.audio_store,
+                    self.thumbnails,
                     self.requested_command,
                 );
             }

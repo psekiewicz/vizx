@@ -6,6 +6,7 @@
 mod app;
 mod graphics;
 mod theme;
+mod thumbnails;
 mod transport;
 mod ui;
 mod visual_preview;
