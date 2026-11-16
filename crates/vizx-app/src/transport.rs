@@ -24,7 +24,6 @@ pub fn project_audio_sources(
 /// the amount of audio actually handed to the sound card, so picture and
 /// sound cannot drift apart. While stopped, the playhead simply stays where
 /// the user put it.
-#[derive(Default)]
 pub struct Transport {
     /// Created the first time playback starts, so VizX does not touch the
     /// sound card until it is needed.
@@ -33,6 +32,42 @@ pub struct Transport {
     /// Where the playhead was after this frame's update from the player.
     /// Used to notice when the UI moved it during the frame.
     playhead_at_frame_start: f64,
+    /// What the player was last given, to notice when the audio changes
+    /// during playback (a file finished loading, a clip was moved or muted).
+    sources_signature: SourcesSignature,
+    /// Loudness of playback, 0 to 1.
+    volume: f32,
+}
+
+/// Every source's audio (by address), placement and length, and the end of
+/// the project: if this changes, the player needs the new sources.
+type SourcesSignature = (Vec<(usize, u64, u64, Option<u64>)>, u64);
+
+fn signature(sources: &[PlaybackSource], end_seconds: f64) -> SourcesSignature {
+    let placed = sources
+        .iter()
+        .map(|source| {
+            (
+                std::sync::Arc::as_ptr(&source.audio) as usize,
+                source.start_seconds.to_bits(),
+                source.offset_seconds.to_bits(),
+                source.duration_seconds.map(f64::to_bits),
+            )
+        })
+        .collect();
+    (placed, end_seconds.to_bits())
+}
+
+impl Default for Transport {
+    fn default() -> Self {
+        Self {
+            player: None,
+            is_playing: false,
+            playhead_at_frame_start: 0.0,
+            sources_signature: (Vec::new(), 0),
+            volume: 1.0,
+        }
+    }
 }
 
 impl Transport {
@@ -40,9 +75,48 @@ impl Transport {
         self.is_playing
     }
 
+    /// The project time of what is being heard right now: while playing,
+    /// slightly behind the playhead (the sound card's delay); otherwise the
+    /// playhead. Taps along with the music are placed here.
+    pub fn heard_seconds(&self, session: &EditorSession) -> f64 {
+        let playhead = session.playhead_seconds();
+        match self.player.as_ref().filter(|_| self.is_playing) {
+            Some(player) => (playhead - player.heard_delay_seconds()).max(0.0),
+            None => playhead,
+        }
+    }
+
+    pub fn volume(&self) -> f32 {
+        self.volume
+    }
+
+    /// Sets how loud playback is, 0 to 1. It does not change the export.
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.0);
+        if let Some(player) = &self.player {
+            player.set_volume(self.volume);
+        }
+    }
+
     /// Call at the start of every frame, before the UI is drawn.
-    pub fn begin_frame(&mut self, session: &mut EditorSession, ctx: &egui::Context) {
+    pub fn begin_frame(
+        &mut self,
+        session: &mut EditorSession,
+        audio_store: &AudioStore,
+        ctx: &egui::Context,
+    ) {
         if let Some(player) = self.player.as_ref().filter(|_| self.is_playing) {
+            // The audio changed while playing: hand over the new sources
+            // right away instead of waiting for the next Play.
+            let (sources, _) = project_audio_sources(session, audio_store);
+            let project_end = session.project().settings.duration_seconds();
+            let current = signature(&sources, project_end);
+            if current != self.sources_signature {
+                player.set_sources(sources);
+                player.set_end_seconds(project_end);
+                self.sources_signature = current;
+            }
+
             session.set_playhead_seconds(player.position_seconds());
 
             // Looping: past the loop's end (or at the end of the project),
@@ -107,15 +181,17 @@ impl Transport {
             session.set_playhead_seconds(start);
         }
 
+        self.sources_signature = signature(&sources, project_end);
         player.set_sources(sources);
         player.set_end_seconds(project_end);
+        player.set_volume(self.volume);
         player.seek(session.playhead_seconds());
         let result = player.play();
 
         let note = if clips_still_loading > 0 {
-            format!("Playing ({clips_still_loading} audio file(s) not loaded yet)")
+            format!("Playing - {clips_still_loading} audio file(s) still loading")
         } else {
-            format!("Playing - output: {}", player.device_description())
+            format!("Playing ({})", player.device_description())
         };
         self.player = Some(player);
         result?;

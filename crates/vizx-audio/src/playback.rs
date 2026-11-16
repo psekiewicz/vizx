@@ -8,7 +8,7 @@
 //! take.
 
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -72,6 +72,13 @@ struct SharedState {
     position_frames: AtomicU64,
     /// Position at which playback stops by itself (the end of the project).
     end_frame: AtomicU64,
+    /// Loudness of what is heard, 0 to 1, as the bits of an `f32`. It only
+    /// changes the output, not what the visualizers or the export get.
+    volume_bits: AtomicU32,
+    /// How far, in microseconds, the position runs ahead of what can be
+    /// heard: one buffer plus the device's delay. Measured by the audio
+    /// thread.
+    heard_delay_micros: AtomicU64,
     sources: Mutex<Arc<Vec<PlaybackSource>>>,
 }
 
@@ -100,6 +107,8 @@ impl AudioPlayer {
             is_playing: AtomicBool::new(false),
             position_frames: AtomicU64::new(0),
             end_frame: AtomicU64::new(u64::MAX),
+            volume_bits: AtomicU32::new(1.0_f32.to_bits()),
+            heard_delay_micros: AtomicU64::new(0),
             sources: Mutex::new(Arc::new(Vec::new())),
         });
 
@@ -148,6 +157,14 @@ impl AudioPlayer {
             .store(self.seconds_to_frames(seconds), Ordering::Relaxed);
     }
 
+    /// Sets how loud playback is: 0 is silent, 1 is as mixed.
+    pub fn set_volume(&self, volume: f32) {
+        let volume = if volume.is_finite() { volume.clamp(0.0, 1.0) } else { 1.0 };
+        self.shared
+            .volume_bits
+            .store(volume.to_bits(), Ordering::Relaxed);
+    }
+
     pub fn play(&self) -> Result<(), PlaybackError> {
         self.shared.is_playing.store(true, Ordering::Relaxed);
         self.stream.play()?;
@@ -170,6 +187,14 @@ impl AudioPlayer {
     pub fn position_seconds(&self) -> f64 {
         self.shared.position_frames.load(Ordering::Relaxed) as f64
             / f64::from(self.output_sample_rate)
+    }
+
+    /// How far [`Self::position_seconds`] runs ahead of what is heard while
+    /// playing. Something done "on the beat one hears" (tapping along)
+    /// happened this much earlier in the project.
+    pub fn heard_delay_seconds(&self) -> f64 {
+        // Capped, in case a device reports nonsense.
+        (self.shared.heard_delay_micros.load(Ordering::Relaxed) as f64 / 1e6).min(0.5)
     }
 
     pub fn seek(&self, seconds: f64) {
@@ -200,7 +225,15 @@ where
 
     let stream = device.build_output_stream(
         config,
-        move |output: &mut [T], _: &cpal::OutputCallbackInfo| {
+        move |output: &mut [T], info: &cpal::OutputCallbackInfo| {
+            let timestamp = info.timestamp();
+            let device_delay = timestamp.playback.duration_since(timestamp.callback);
+            let buffer_seconds =
+                (output.len() / channel_count.max(1)) as f64 / f64::from(sample_rate.max(1));
+            let delay = device_delay.as_secs_f64() + buffer_seconds;
+            shared
+                .heard_delay_micros
+                .store((delay * 1e6) as u64, Ordering::Relaxed);
             mix_buffer.clear();
             mix_buffer.resize(output.len(), 0.0);
             fill_from_shared(&mut mix_buffer, channel_count, sample_rate, &shared);
@@ -248,6 +281,12 @@ fn fill_from_shared(
         position,
         &sources,
     );
+    let volume = f32::from_bits(shared.volume_bits.load(Ordering::Relaxed));
+    if volume < 1.0 {
+        for sample in &mut output[..playable_samples] {
+            *sample *= volume;
+        }
+    }
 
     // Advance the position, unless the UI thread moved it (a seek) while
     // this piece was being mixed; in that case the seek wins.
@@ -355,8 +394,30 @@ mod tests {
             is_playing: AtomicBool::new(true),
             position_frames: AtomicU64::new(position),
             end_frame: AtomicU64::new(end),
+            volume_bits: AtomicU32::new(1.0_f32.to_bits()),
+            heard_delay_micros: AtomicU64::new(0),
             sources: Mutex::new(Arc::new(sources)),
         }
+    }
+
+    #[test]
+    fn volume_scales_what_is_heard() {
+        let audio = Arc::new(DecodedAudio {
+            sample_rate: 100,
+            channel_count: 1,
+            samples: vec![0.8; 100],
+        });
+        let source = PlaybackSource {
+            audio,
+            start_seconds: 0.0,
+            offset_seconds: 0.0,
+            duration_seconds: None,
+        };
+        let state = shared(vec![source], 0, u64::MAX);
+        state.volume_bits.store(0.5_f32.to_bits(), Ordering::Relaxed);
+        let mut output = vec![0.0; 10];
+        fill_from_shared(&mut output, 1, 100, &state);
+        assert!(output.iter().all(|sample| (sample - 0.4).abs() < 1e-6), "{output:?}");
     }
 
     #[test]

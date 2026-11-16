@@ -41,6 +41,8 @@ pub struct AppSettings {
     /// How the panels were arranged when VizX closed, as the user interface
     /// stores it (`None`: the default layout).
     pub panel_layout: Option<serde_json::Value>,
+    /// Playback volume, 0 to 1.
+    pub volume: f32,
 }
 
 impl Default for AppSettings {
@@ -49,6 +51,7 @@ impl Default for AppSettings {
             recent_projects: Vec::new(),
             show_welcome: true,
             panel_layout: None,
+            volume: 1.0,
         }
     }
 }

@@ -449,7 +449,7 @@ fn start_tapping(app: &mut VizxApp, lines: Vec<String>) {
 
 /// Ends the line shown now and starts the next one, at the playhead.
 fn tap_next(app: &mut VizxApp) {
-    let now = app.session.playhead_seconds();
+    let now = app.transport.heard_seconds(&app.session);
     let style = app.lyrics.style.clone();
     let Some(tapping) = &mut app.lyrics.tapping else {
         return;
@@ -478,7 +478,7 @@ fn tap_next(app: &mut VizxApp) {
 
 /// Ends the line shown now, leaving a pause until the next tap.
 fn tap_end(app: &mut VizxApp) {
-    let now = app.session.playhead_seconds();
+    let now = app.transport.heard_seconds(&app.session);
     let style = app.lyrics.style.clone();
     let Some(tapping) = &mut app.lyrics.tapping else {
         return;
@@ -497,7 +497,7 @@ fn stop_tapping(app: &mut VizxApp) {
         return;
     };
     if let Some(open) = tapping.open_clip {
-        let now = app.session.playhead_seconds();
+        let now = app.transport.heard_seconds(&app.session);
         let style = app.lyrics.style.clone();
         app.session.end_lyric_line(open, now, &style);
     }

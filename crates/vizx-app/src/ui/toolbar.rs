@@ -33,18 +33,18 @@ pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
             ui,
             app,
             "\u{23F9}",
-            "Stop and return to start",
+            "Stop",
             AppCommand::StopPlayback,
         );
         command_button(ui, app, "\u{23ED}", "Go to end (End)", AppCommand::GoToEnd);
         let looping = app.session.is_looping();
         let loop_tooltip = match app.session.loop_region() {
             Some((start, end)) => format!(
-                "Loop {} - {} (L). Shift+drag on the ruler to mark another stretch; I / O set its start / end at the playhead",
+                "Loop (L)\n{} - {}\nSet range: Shift+drag on the ruler, or I / O",
                 format_timecode(start),
                 format_timecode(end)
             ),
-            None => "Loop (L): play a stretch over and over. Shift+drag on the ruler to mark it".to_owned(),
+            None => "Loop (L)\nSet range: Shift+drag on the ruler, or I / O".to_owned(),
         };
         if ui
             .selectable_label(looping, "\u{1F501}")
@@ -66,7 +66,22 @@ pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
                 .monospace()
                 .color(time_color),
         )
-        .on_hover_text("Playhead position (hours:minutes:seconds.milliseconds)");
+        .on_hover_text("hh:mm:ss.ms");
+
+        ui.separator();
+        // Playback volume; the export is not affected.
+        let mut volume = app.transport.volume() * 100.0;
+        let symbol = if volume <= 0.0 { "\u{1F507}" } else { "\u{1F50A}" };
+        ui.label(symbol);
+        let slider = egui::Slider::new(&mut volume, 0.0..=100.0)
+            .show_value(false)
+            .trailing_fill(true);
+        let response = ui
+            .add_sized([90.0, ui.spacing().interact_size.y], slider)
+            .on_hover_text(format!("Volume {volume:.0}%"));
+        if response.changed() {
+            app.transport.set_volume(volume / 100.0);
+        }
     });
 }
 

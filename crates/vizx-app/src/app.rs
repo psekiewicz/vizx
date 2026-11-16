@@ -144,7 +144,7 @@ pub struct VizxApp {
     audio_store: AudioStore,
     /// Decoded images of the project's files, loaded in the background.
     image_store: ImageStore,
-    transport: Transport,
+    pub transport: Transport,
     visual_preview: VisualPreview,
     /// Folder of the presets that ship with VizX, if there is one.
     bundled_presets: Option<PathBuf>,
@@ -246,6 +246,7 @@ impl VizxApp {
         if let Some(layout) = app.settings.panel_layout.clone() {
             app.workspace.restore_layout(&layout);
         }
+        app.transport.set_volume(app.settings.volume);
         // Like Blender's splash screen; not over the offer to recover work.
         app.is_welcome_open = app.settings.show_welcome && app.recoveries.is_empty();
         app
@@ -699,8 +700,9 @@ impl VizxApp {
                 };
             }
             AppCommand::TapBeat => {
-                if let Err(reason) = self.session.tap_beat() {
-                    self.status_message = format!("Cannot tap a beat: {reason}");
+                let heard = self.transport.heard_seconds(&self.session);
+                if let Err(reason) = self.session.tap_beat_at(heard) {
+                    self.status_message = format!("Can't add beat: {reason}");
                 }
             }
             AppCommand::Undo => {
@@ -1288,6 +1290,7 @@ impl eframe::App for VizxApp {
         self.forget_autosave();
         // The panel arrangement is kept for the next run.
         self.settings.panel_layout = self.workspace.layout();
+        self.settings.volume = self.transport.volume();
         if let Some(folder) = &self.app_data {
             let _ = self.settings.save(folder);
         }
@@ -1303,7 +1306,8 @@ impl eframe::App for VizxApp {
 
         self.maximize_on_startup(&ctx);
         self.handle_window_close_request(&ctx);
-        self.transport.begin_frame(&mut self.session, &ctx);
+        self.transport
+            .begin_frame(&mut self.session, &self.audio_store, &ctx);
         self.handle_keyboard_shortcuts(&ctx);
         self.load_project_audio(&ctx);
         self.load_project_images(&ctx);

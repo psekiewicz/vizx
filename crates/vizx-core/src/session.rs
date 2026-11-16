@@ -516,6 +516,13 @@ impl EditorSession {
     /// Adds a hand-placed beat at the playhead to the selected audio clip's
     /// file ("tapping along"). Returns why not if that is not possible.
     pub fn tap_beat(&mut self) -> Result<(), &'static str> {
+        self.tap_beat_at(self.playhead_seconds)
+    }
+
+    /// Like [`Self::tap_beat`], at `seconds` of the project instead of the
+    /// playhead (the moment actually heard, which lags the playhead a
+    /// little during playback).
+    pub fn tap_beat_at(&mut self, seconds: f64) -> Result<(), &'static str> {
         let (_, clip) = self
             .selected_clip_id()
             .and_then(|id| self.project.clip(id))
@@ -528,7 +535,7 @@ impl EditorSession {
         if source.manual_beats.is_none() {
             return Err("switch the clip to beats drawn by hand first (Properties > Beats)");
         }
-        let playhead = (self.playhead_seconds * 1000.0).round() as u64;
+        let playhead = (seconds.max(0.0) * 1000.0).round() as u64;
         if playhead < clip.start_milliseconds || playhead > clip.end_milliseconds() {
             return Err("the playhead is not inside the selected clip");
         }
