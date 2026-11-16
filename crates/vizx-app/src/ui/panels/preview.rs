@@ -112,14 +112,22 @@ pub fn show(
         // around while the music plays.
         draw_layer_state(&layer_painter, layer_rect, &layer.state);
 
-        // A turned element is grabbed anywhere within the box around it.
+        // A turned element takes the mouse only inside its own outline, so
+        // the corners of the box around it do not hide the layers below.
         let corners = turned_corners(layer_rect, rotation);
         let reach = Rect::from_points(&corners);
-        let response = ui.interact(
-            reach.intersect(panel_rect),
-            ui.id().with(("preview_layer", layer.clip_id)),
-            egui::Sense::click_and_drag(),
-        );
+        let id = ui.id().with(("preview_layer", layer.clip_id));
+        let is_over_it = ui
+            .ctx()
+            .pointer_latest_pos()
+            .is_some_and(|pointer| is_inside_turned(layer_rect, rotation, pointer));
+        let is_held = ui.ctx().is_being_dragged(id) || drag.is_some_and(|drag| drag.clip == layer.clip_id);
+        let sense = if is_over_it || is_held {
+            egui::Sense::click_and_drag()
+        } else {
+            egui::Sense::hover()
+        };
+        let response = ui.interact(reach.intersect(panel_rect), id, sense);
         if response.clicked() || response.drag_started() {
             session.select(Selection::Clip(layer.clip_id));
         }
@@ -444,6 +452,13 @@ fn turned_corners(rect: Rect, degrees: f64) -> [egui::Pos2; 4] {
     .map(|corner| center + turned(corner - center, degrees))
 }
 
+/// Whether `point` lies inside `rect` turned by `degrees` around its middle.
+fn is_inside_turned(rect: Rect, degrees: f64, point: egui::Pos2) -> bool {
+    let center = rect.center();
+    let unturned = center + turned(point - center, -degrees);
+    rect.contains(unturned)
+}
+
 /// The placement that results from dragging the grabbed edges of `start`
 /// by `offset` screen points. With `snap`, edges jump onto the frame's
 /// edges and middle when they come close.
@@ -666,6 +681,17 @@ mod tests {
         for (a, e) in values(actual).into_iter().zip(values(expected)) {
             assert!((a - e).abs() < 1e-6, "{actual:?} != {expected:?}");
         }
+    }
+
+    #[test]
+    fn a_turned_element_is_hit_only_inside_its_outline() {
+        let rect = Rect::from_center_size(egui::pos2(100.0, 100.0), egui::vec2(100.0, 20.0));
+        // Turned a quarter: now tall and thin.
+        assert!(is_inside_turned(rect, 90.0, egui::pos2(100.0, 140.0)));
+        assert!(!is_inside_turned(rect, 90.0, egui::pos2(140.0, 100.0)));
+        // At 45 degrees the corner of the box around it is empty.
+        assert!(!is_inside_turned(rect, 45.0, egui::pos2(60.0, 60.0)));
+        assert!(is_inside_turned(rect, 45.0, egui::pos2(120.0, 120.0)));
     }
 
     #[test]

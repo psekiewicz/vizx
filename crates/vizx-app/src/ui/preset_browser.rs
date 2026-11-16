@@ -168,12 +168,37 @@ fn browse(
     const CATEGORY_LIST_WIDTH: f32 = 150.0;
     let mut preset_to_add = None;
 
+    // The search field keeps the keyboard focus, so arrows and Enter are
+    // taken before it sees them: Up / Down walk the list, Enter adds.
+    let search_id = ui.id().with("preset_search");
+    let mut step = 0_i64;
+    let mut wants_add = false;
+    if ui.memory(|memory| memory.has_focus(search_id)) {
+        ui.input_mut(|input| {
+            use egui::{Key, Modifiers};
+            if input.consume_key(Modifiers::NONE, Key::ArrowDown) {
+                step = 1;
+            }
+            if input.consume_key(Modifiers::NONE, Key::ArrowUp) {
+                step = -1;
+            }
+            if input.consume_key(Modifiers::NONE, Key::PageDown) {
+                step = 10;
+            }
+            if input.consume_key(Modifiers::NONE, Key::PageUp) {
+                step = -10;
+            }
+            wants_add = input.consume_key(Modifiers::NONE, Key::Enter);
+        });
+    }
+
     ui.horizontal(|ui| {
         let search_width =
             ui.available_width() - CATEGORY_LIST_WIDTH - ui.spacing().item_spacing.x * 3.0;
         let search_field = ui.add(
             egui::TextEdit::singleline(query)
-                .hint_text("Search by name or folder")
+                .id(search_id)
+                .hint_text("Search")
                 .desired_width(search_width.max(80.0)),
         );
         if *should_focus_search {
@@ -198,10 +223,39 @@ fn browse(
     // Leave room below the list for the separator and the button row.
     let spacing = ui.spacing();
     let row_height = spacing.interact_size.y;
+    let row_pitch = row_height + spacing.item_spacing.y;
     let footer_height = row_height + spacing.item_spacing.y * 3.0 + 6.0;
-    egui::ScrollArea::vertical()
+    let list_height = (ui.available_height() - footer_height).max(row_height);
+
+    let mut scroll_area = egui::ScrollArea::vertical()
         .auto_shrink(false)
-        .max_height((ui.available_height() - footer_height).max(row_height))
+        .max_height(list_height);
+    if step != 0 && !results.is_empty() {
+        let current = selected
+            .as_ref()
+            .and_then(|entry| results.iter().position(|result| *result == entry));
+        let index = match current {
+            Some(index) => (index as i64 + step).clamp(0, results.len() as i64 - 1) as usize,
+            None => 0,
+        };
+        *selected = Some(PresetEntry::clone(results[index]));
+        // Scroll just enough to show the row.
+        let offset_id = ui.id().with("preset_list_offset");
+        let offset: f32 = ui.data(|data| data.get_temp(offset_id)).unwrap_or(0.0);
+        let top = index as f32 * row_pitch;
+        let new_offset = if top < offset {
+            top
+        } else if top + row_pitch > offset + list_height {
+            top + row_pitch - list_height
+        } else {
+            offset
+        };
+        scroll_area = scroll_area.vertical_scroll_offset(new_offset);
+    }
+    if wants_add {
+        preset_to_add = selected.clone();
+    }
+    let output = scroll_area
         // Only the rows inside the visible range are laid out, which keeps
         // a list of thousands of presets as cheap as a short one.
         .show_rows(ui, row_height, results.len(), |ui, visible_rows| {
@@ -220,6 +274,8 @@ fn browse(
                     let row = row.on_hover_text(entry.name.as_str());
                     if row.clicked() {
                         *selected = Some(entry.clone());
+                        // Back to the search field, so the keys keep working.
+                        ui.memory_mut(|memory| memory.request_focus(search_id));
                     }
                     if row.double_clicked() {
                         preset_to_add = Some(entry.clone());
@@ -227,6 +283,8 @@ fn browse(
                 }
             });
         });
+    let offset_id = ui.id().with("preset_list_offset");
+    ui.data_mut(|data| data.insert_temp(offset_id, output.state.offset.y));
 
     ui.separator();
     ui.horizontal(|ui| {
@@ -242,7 +300,7 @@ fn browse(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let add_button = ui
                 .add_enabled(selected.is_some(), egui::Button::new("Add to Project"))
-                .on_hover_text("Adds the selected preset to the timeline (or double-click it)");
+                .on_hover_text("Enter or double-click");
             if add_button.clicked() {
                 preset_to_add = selected.clone();
             }

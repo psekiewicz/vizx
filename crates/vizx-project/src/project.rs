@@ -1274,6 +1274,34 @@ impl Project {
         }
     }
 
+    /// Moves the hand-placed beat number `index` of an audio file to
+    /// `seconds`. It stays between its neighbours (it cannot jump over
+    /// them), so the beats keep their order. Returns `true` only if it moved.
+    pub fn move_manual_beat(&mut self, media_id: MediaId, index: usize, seconds: f64) -> bool {
+        let Some(beats) = self.manual_beats_mut(media_id) else {
+            return false;
+        };
+        if index >= beats.len() || !seconds.is_finite() {
+            return false;
+        }
+        let lowest = match index.checked_sub(1) {
+            Some(before) => beats[before] + MANUAL_BEAT_MERGE_SECONDS,
+            None => 0.0,
+        };
+        let highest = beats
+            .get(index + 1)
+            .map_or(f64::INFINITY, |after| after - MANUAL_BEAT_MERGE_SECONDS);
+        if lowest > highest {
+            return false;
+        }
+        let seconds = seconds.clamp(lowest, highest);
+        if beats[index] == seconds {
+            return false;
+        }
+        beats[index] = seconds;
+        true
+    }
+
     /// Sets the tempo of an audio file, in beats per minute (`None`: the
     /// tempo found automatically). Returns `true` only if this changed
     /// something.
@@ -2419,6 +2447,15 @@ mod tests {
         assert!(project.remove_manual_beat_near(song, 1.97, 0.05));
         assert!(!project.remove_manual_beat_near(song, 3.0, 0.05));
         assert_eq!(manual(&project), Some(vec![1.0, 1.5]));
+
+        // A dragged beat moves, but not past its neighbour.
+        assert!(project.move_manual_beat(song, 1, 1.75));
+        assert_eq!(manual(&project), Some(vec![1.0, 1.75]));
+        assert!(project.move_manual_beat(song, 1, 0.5));
+        let beats = manual(&project).unwrap();
+        assert!(beats[1] > beats[0]);
+        assert!(!project.move_manual_beat(song, 5, 1.0));
+        assert!(project.move_manual_beat(song, 1, 1.5));
 
         // Only audio has beats.
         assert!(!project.use_manual_beats(preset, Vec::new()));

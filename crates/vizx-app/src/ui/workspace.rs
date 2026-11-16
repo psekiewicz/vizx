@@ -220,6 +220,7 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
                     self.timeline_view,
                     self.audio_store,
                     self.thumbnails,
+                    self.visualizer_catalog,
                     self.requested_command,
                 );
             }

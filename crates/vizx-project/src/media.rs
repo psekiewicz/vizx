@@ -93,7 +93,6 @@ impl MediaSource {
         }
     }
 
-    /// The picture properties, if this is a video file.
     /// The frame animation, if this is an image sequence or a sprite sheet.
     pub fn animation(&self) -> Option<&FrameAnimation> {
         match &self.content {
@@ -102,6 +101,7 @@ impl MediaSource {
         }
     }
 
+    /// The picture properties, if this is a video file.
     pub fn video(&self) -> Option<&ImageProperties> {
         match &self.content {
             MediaContent::Video(video) => Some(video),

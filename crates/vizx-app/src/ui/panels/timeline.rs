@@ -9,9 +9,11 @@
 //!   scroll; the ruler and the track names stay in place and follow along.
 //! - Ruler marks get denser or sparser with the zoom level.
 
+use std::collections::HashMap;
+
 use eframe::egui::{self, Align2, Color32, CursorIcon, FontId, Rect, Sense, Stroke};
 use vizx_audio::WaveformPeaks;
-use vizx_core::{AudioState, AudioStore, EditorSession, Selection};
+use vizx_core::{AudioState, AudioStore, EditorSession, Selection, VisualizerCatalog};
 use vizx_project::{ClipId, LayerMove, MediaId, Track, TrackId, TrackKind};
 
 use crate::app::AppCommand;
@@ -86,8 +88,21 @@ pub fn show(
     view: &mut TimelineView,
     audio_store: &AudioStore,
     thumbnails: &mut Thumbnails,
+    catalog: &mut VisualizerCatalog,
     requested_command: &mut Option<AppCommand>,
 ) {
+    // Visualizer plugins are labelled with the name from their manifest,
+    // not with their folder name.
+    let plugin_names: HashMap<MediaId, String> = session
+        .project()
+        .media()
+        .iter()
+        .filter(|source| source.is_visualizer_plugin())
+        .filter_map(|source| {
+            let manifest = catalog.plugin(&source.path).manifest.as_ref().ok()?;
+            Some((source.id, manifest.name.clone()))
+        })
+        .collect();
     let panel_rect = ui.available_rect_before_wrap();
     ui.painter_at(panel_rect)
         .rect_filled(panel_rect, 0.0, theme::CANVAS_BACKGROUND);
@@ -117,7 +132,7 @@ pub fn show(
         ui,
         session,
         view,
-        (audio_store, thumbnails),
+        (audio_store, thumbnails, &plugin_names),
         requested_command,
         &scale,
         lanes_rect,
@@ -285,8 +300,12 @@ fn show_lanes(
     ui: &mut egui::Ui,
     session: &mut EditorSession,
     view: &mut TimelineView,
-    // What clips show: waveforms and thumbnails.
-    (audio_store, thumbnails): (&AudioStore, &mut Thumbnails),
+    // What clips show: waveforms, thumbnails and plugin names.
+    (audio_store, thumbnails, plugin_names): (
+        &AudioStore,
+        &mut Thumbnails,
+        &HashMap<MediaId, String>,
+    ),
     requested_command: &mut Option<AppCommand>,
     scale: &TimeScale,
     lanes_rect: Rect,
@@ -486,7 +505,12 @@ fn show_lanes(
 
                 // The label stays readable at the left edge of the view when
                 // the clip starts off-screen.
-                let file_name = source.map_or("Missing media", |source| source.display_name());
+                let file_name = match source {
+                    Some(source) => plugin_names
+                        .get(&source.id)
+                        .map_or(source.display_name(), String::as_str),
+                    None => "Missing media",
+                };
                 // On a dark backing, so it stays readable over thumbnails.
                 let label = clip_painter.layout_no_wrap(
                     format!("{file_name}{status}"),
@@ -741,6 +765,9 @@ fn show_lanes(
         // Placing beats by hand: on the selected audio clip whose file uses
         // hand-placed beats, the strip along its bottom takes clicks.
         let mut beat_edit: Option<(MediaId, f64, bool)> = None;
+        // A hand-placed beat being dragged: (file, beat number, new time).
+        let beat_drag_id = ui.id().with("beat_drag");
+        let mut beat_move: Option<(MediaId, usize, f64)> = None;
         if let Some(selected) = session.selected_clip_id()
             && let Some((track, clip)) = session.project().clip(selected)
             && let Some(source) = session.project().media_source(clip.media)
@@ -765,21 +792,46 @@ fn show_lanes(
                 .interact(
                     strip,
                     ui.id().with(("beat_strip", selected)),
-                    Sense::click(),
+                    Sense::click_and_drag(),
                 )
                 .on_hover_cursor(CursorIcon::PointingHand)
-                .on_hover_text("Click to add a beat; click a beat to remove it");
+                .on_hover_text("Click: add beat\nClick a beat: remove it\nDrag a beat: move it");
+            let offset = clip.source_offset_milliseconds as f64 / 1000.0;
+            let reach = f64::from(BEAT_REMOVE_REACH / scale.pixels_per_second);
+            let seconds_at = |x: f32| offset + f64::from((x - left) / scale.pixels_per_second);
             if response.clicked()
                 && let Some(pointer) = response.interact_pointer_pos()
             {
-                let offset = clip.source_offset_milliseconds as f64 / 1000.0;
-                let seconds_in_file =
-                    offset + f64::from((pointer.x - left) / scale.pixels_per_second);
-                let reach = f64::from(BEAT_REMOVE_REACH / scale.pixels_per_second);
+                let seconds_in_file = seconds_at(pointer.x);
                 let is_on_a_beat = manual
                     .iter()
                     .any(|beat| (beat - seconds_in_file).abs() <= reach);
                 beat_edit = Some((source.id, seconds_in_file, is_on_a_beat));
+            }
+            if response.drag_started()
+                && let Some(pointer) = response.interact_pointer_pos()
+            {
+                let seconds_in_file = seconds_at(pointer.x);
+                let nearest = (0..manual.len())
+                    .filter(|index| (manual[*index] - seconds_in_file).abs() <= reach)
+                    .min_by(|a, b| {
+                        (manual[*a] - seconds_in_file)
+                            .abs()
+                            .total_cmp(&(manual[*b] - seconds_in_file).abs())
+                    });
+                if let Some(index) = nearest {
+                    ui.data_mut(|data| data.insert_temp(beat_drag_id, index));
+                }
+            }
+            let dragged_beat: Option<usize> = ui.data(|data| data.get_temp(beat_drag_id));
+            if let Some(index) = dragged_beat
+                && response.dragged()
+                && let Some(pointer) = response.interact_pointer_pos()
+            {
+                beat_move = Some((source.id, index, seconds_at(pointer.x)));
+            }
+            if response.drag_stopped() {
+                ui.data_mut(|data| data.remove::<usize>(beat_drag_id));
             }
         }
 
@@ -810,6 +862,9 @@ fn show_lanes(
                     project.add_manual_beat(media_id, seconds)
                 }
             });
+        }
+        if let Some((media_id, index, seconds)) = beat_move {
+            session.edit_project(|project| project.move_manual_beat(media_id, index, seconds));
         }
         if let Some((clip_id, seconds)) = jump_to_keyframe {
             session.select(Selection::Clip(clip_id));
