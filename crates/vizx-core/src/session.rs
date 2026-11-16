@@ -889,6 +889,43 @@ impl EditorSession {
         Ok(track_id)
     }
 
+    /// Adds the sound of a video file (written next to it, or into the
+    /// folder named by `VIZX_STEMS_DIR`, as `<video> sound.wav`) on an
+    /// audio track of its own. A background video's sound comes in muted,
+    /// since it is usually not wanted. Returns `Ok(None)` if the video has
+    /// no sound.
+    pub fn import_video_sound(
+        &mut self,
+        path: &Path,
+        ffmpeg: &Path,
+        muted: bool,
+    ) -> Result<Option<TrackId>, String> {
+        let folder = std::env::var_os(crate::STEMS_DIR_VARIABLE)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| path.parent().unwrap_or(Path::new(".")).to_path_buf());
+        let name = path.file_stem().map_or_else(
+            || "video".to_owned(),
+            |stem| stem.to_string_lossy().into_owned(),
+        );
+        let _ = std::fs::create_dir_all(&folder);
+        let sound = folder.join(format!("{name} sound.wav"));
+        if !crate::extract_video_sound(ffmpeg, path, &sound)? {
+            return Ok(None);
+        }
+        let selection = self.selection;
+        let track_id = self
+            .import_audio(&sound)
+            .map_err(|error| format!("{}: {error}", sound.display()))?;
+        if muted {
+            self.project.set_track_muted(track_id, true);
+        }
+        self.project
+            .rename_track(track_id, &format!("{name} (sound)"));
+        // The video stays selected.
+        self.set_selection(selection);
+        Ok(Some(track_id))
+    }
+
     /// Adds a text element in the middle of the picture, on a visual layer,
     /// which becomes selected.
     pub fn add_text(&mut self) -> Result<TrackId, String> {

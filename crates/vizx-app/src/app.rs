@@ -302,9 +302,21 @@ impl VizxApp {
             return; // dialog cancelled
         };
 
-        self.status_message = match self.session.import_video(&path, &ffmpeg, as_background) {
-            Ok(_) => format!("Added video {}", path.display()),
-            Err(problem) => format!("Could not import {}: {problem}", path.display()),
+        if let Err(problem) = self.session.import_video(&path, &ffmpeg, as_background) {
+            self.status_message = format!("Could not import {}: {problem}", path.display());
+            return;
+        }
+        // The sound comes along on its own track; a background video's muted.
+        self.status_message = match self
+            .session
+            .import_video_sound(&path, &ffmpeg, as_background)
+        {
+            Ok(Some(_)) if as_background => {
+                format!("Added video {} (sound on a muted track)", path.display())
+            }
+            Ok(Some(_)) => format!("Added video {} with its sound", path.display()),
+            Ok(None) => format!("Added video {}", path.display()),
+            Err(problem) => format!("Added video {} without sound: {problem}", path.display()),
         };
     }
 

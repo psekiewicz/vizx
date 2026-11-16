@@ -594,6 +594,30 @@ for every step is expensive.
   `thumbnails.rs`): the image, the first frame of an animation or a video
   (through FFmpeg) or the text, made once in the background and repeated
   along the clip like a film strip.
+- **No overlapping clips** (`vizx-project/src/overlap.rs`): moving a clip
+  or a group stops at the neighbours on its track (`free_shift`; a place
+  past a neighbour is taken once it is free), trimming stops at the next
+  clip (`trim_room`), a clip moves to another track only if it fits there
+  (`fits_on_tracks`), and pasted or duplicated clips go to the next free
+  place (`first_free_shift_forward`). The session applies these
+  (`EditorSession::move_clip`, `trim_clip_start`, ...) unless Edit > Allow
+  Clip Overlap is on.
+- **Panels reopen where they were** (`Workspace::reopen`): back into the
+  tab group they shared, or on their side of the default layout.
+- **Blend modes** (`Clip::blend_mode`, `vizx_render::LayerBlend`): Normal,
+  Add, Screen, Multiply and Lighten are fixed-function blend states on
+  premultiplied colors, one render pipeline each, shared by the preview and
+  the export.
+- **Export settings** (`ExportSettings`, remembered in `AppSettings`):
+  format (MP4 H.264 / H.265, WebM VP9, MOV ProRes 422, GIF with a palette
+  made from its own colors), quality (CRF or ProRes profile per format),
+  height (width in the project's shape) and range (whole project or the
+  loop). A clip that starts before the range is drawn from its start and
+  the frames before the range are dropped, so it looks as in a full export.
+- **Sound of videos** (`extract_video_sound`): importing a video also
+  writes its sound as `<video> sound.wav` (next to it, or in
+  `VIZX_STEMS_DIR`) and adds it on an audio track; a background video's
+  sound is added muted.
 ### Visualizer plugins
 
 Visualizers other than MilkDrop presets are **plugins**: a folder with a

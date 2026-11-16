@@ -97,6 +97,55 @@ pub fn probe_video(ffmpeg: &Path, file: &Path) -> Result<(u32, u32), String> {
     })
 }
 
+/// Writes the sound of a video file as a WAV file at `output`. Returns
+/// `Ok(false)` (and writes nothing) if the video has no sound.
+///
+/// A WAV file that is already there and newer than the video is kept: it
+/// was made from this video before.
+pub fn extract_video_sound(ffmpeg: &Path, video: &Path, output: &Path) -> Result<bool, String> {
+    let description = quiet_command(ffmpeg)
+        .arg("-hide_banner")
+        .arg("-i")
+        .arg(video)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("could not start FFmpeg: {error}"))?;
+    let has_sound = String::from_utf8_lossy(&description.stderr)
+        .lines()
+        .any(|line| line.contains("Stream #") && line.contains("Audio:"));
+    if !has_sound {
+        return Ok(false);
+    }
+    let modified = |path: &Path| {
+        std::fs::metadata(path)
+            .and_then(|data| data.modified())
+            .ok()
+    };
+    if let (Some(made), Some(source)) = (modified(output), modified(video))
+        && made >= source
+    {
+        return Ok(true);
+    }
+    let result = quiet_command(ffmpeg)
+        .args(["-y", "-v", "error", "-i"])
+        .arg(video)
+        // The first sound track, as plain 16-bit samples.
+        .args(["-vn", "-map", "0:a:0", "-c:a", "pcm_s16le"])
+        .arg(output)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("could not start FFmpeg: {error}"))?;
+    if result.status.success() {
+        Ok(true)
+    } else {
+        let _ = std::fs::remove_file(output);
+        Err(format!(
+            "could not read the sound: {}",
+            String::from_utf8_lossy(&result.stderr).trim()
+        ))
+    }
+}
+
 /// Finds the picture size in FFmpeg's description of a file, in a line such
 /// as `Stream #0:0: Video: h264 (High), yuv420p(tv), 1920x1080 [SAR 1:1], 30 fps`.
 fn parse_video_size(description: &str) -> Option<(u32, u32)> {
@@ -456,6 +505,52 @@ mod tests {
         assert!(is_blue([pixels[0], pixels[1], pixels[2], pixels[3]]));
         drop(late);
         let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
+    fn the_sound_of_a_video_is_written_as_wav() {
+        let Some(ffmpeg) = find_ffmpeg() else {
+            eprintln!("FFmpeg not found: skipping");
+            return;
+        };
+        let folder = std::env::temp_dir().join(format!("vizx-video-sound-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let with_sound = folder.join("with.mp4");
+        let silent = folder.join("silent.mp4");
+        let make = |file: &Path, sound: bool| {
+            let mut command = quiet_command(&ffmpeg);
+            command.args([
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=32x32:r=10:d=1",
+            ]);
+            if sound {
+                command.args(["-f", "lavfi", "-i", "sine=frequency=440:duration=1"]);
+            }
+            command.args(["-pix_fmt", "yuv420p"]).arg(file);
+            assert!(command.output().unwrap().status.success());
+        };
+        make(&with_sound, true);
+        make(&silent, false);
+
+        let wav = folder.join("with sound.wav");
+        assert_eq!(extract_video_sound(&ffmpeg, &with_sound, &wav), Ok(true));
+        let info = vizx_audio::probe_audio_file(&wav).unwrap();
+        assert!(
+            (900..=1100).contains(&info.duration_milliseconds),
+            "{info:?}"
+        );
+        assert_eq!(
+            extract_video_sound(&ffmpeg, &silent, &folder.join("silent sound.wav")),
+            Ok(false)
+        );
+        assert!(!folder.join("silent sound.wav").exists());
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     /// Every export format and quality makes a file FFmpeg can read back,

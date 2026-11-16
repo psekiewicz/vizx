@@ -37,8 +37,8 @@ pub use export::{
     layer_blend,
 };
 pub use ffmpeg::{
-    FFMPEG_DIR_VARIABLE, SUPPORTED_VIDEO_EXTENSIONS, VideoReader, VideoWriter, find_ffmpeg,
-    has_supported_video_extension, probe_video,
+    FFMPEG_DIR_VARIABLE, SUPPORTED_VIDEO_EXTENSIONS, VideoReader, VideoWriter, extract_video_sound,
+    find_ffmpeg, has_supported_video_extension, probe_video,
 };
 pub use image_store::{
     DecodedImage, ImageState, ImageStore, SUPPORTED_IMAGE_EXTENSIONS, has_supported_image_extension,
@@ -53,7 +53,7 @@ pub use preset_library::{
 };
 pub use selection::Selection;
 pub use session::{CopiedClip, EditorSession, UNTITLED_PROJECT_NAME};
-pub use stems::{STEM_NAMES, StemEngine, StemFiles, StemJob, stem_folder};
+pub use stems::{STEM_NAMES, STEMS_DIR_VARIABLE, StemEngine, StemFiles, StemJob, stem_folder};
 pub use text::render_text;
 pub use thumbnail::{THUMBNAIL_EDGE, make_thumbnail};
 pub use visualizer_catalog::{
