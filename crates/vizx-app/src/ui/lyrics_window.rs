@@ -19,6 +19,9 @@ enum Timing {
     Spread,
     /// One line every few beats.
     Beats,
+    /// The times written in the text, as in an .lrc file (recognized
+    /// lyrics come like this).
+    AsTimed,
 }
 
 /// Lines being tapped along with the music.
@@ -44,7 +47,9 @@ pub struct LyricsWindow {
     /// The layer new lines go to; `None` makes a new "Lyrics" layer.
     target: Option<TrackId>,
     tapping: Option<Tapping>,
-    message: String,
+    pub(crate) message: String,
+    /// Index into `RECOGNITION_LANGUAGES` for recognizing the lyrics.
+    recognition_language: usize,
 }
 
 impl Default for LyricsWindow {
@@ -61,6 +66,7 @@ impl Default for LyricsWindow {
             target: None,
             tapping: None,
             message: String::new(),
+            recognition_language: 0,
         }
     }
 }
@@ -74,6 +80,66 @@ impl LyricsWindow {
         }
         self.is_open = true;
     }
+
+    /// Shows recognized lyrics (LRC text) for checking, timed as written.
+    pub fn show_recognized(&mut self, lrc: &str) {
+        self.text = lrc.to_owned();
+        self.timing = Timing::AsTimed;
+        self.is_open = true;
+    }
+}
+
+/// Recognizing the words from the song's vocals with the Whisper model.
+fn recognition_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
+    if let Some(job) = app.lyrics_recognition() {
+        let step = match job.step() {
+            vizx_core::RecognitionStep::SeparatingVocals => "Separating the vocals",
+            vizx_core::RecognitionStep::Listening => "Listening to the vocals",
+        };
+        let progress = job.progress();
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::ProgressBar::new(progress)
+                    .desired_width(220.0)
+                    .text(format!("{step} {:.0}%", progress * 100.0)),
+            );
+            if ui.button("Stop").clicked() {
+                app.cancel_lyrics_recognition();
+            }
+        });
+        return;
+    }
+    ui.horizontal(|ui| {
+        let languages = vizx_core::RECOGNITION_LANGUAGES;
+        let window = &mut app.lyrics;
+        let current = languages
+            .get(window.recognition_language)
+            .map_or("Detect", |(_, name)| *name);
+        egui::ComboBox::from_id_salt("recognition_language")
+            .selected_text(current)
+            .width(90.0)
+            .show_ui(ui, |ui| {
+                for (index, (_, name)) in languages.iter().enumerate() {
+                    ui.selectable_value(&mut window.recognition_language, index, *name);
+                }
+            })
+            .response
+            .on_hover_text("Language of the song");
+        if ui
+            .button("Recognize from Vocals")
+            .on_hover_text(
+                "Separate the vocals from the song (or use its stems), then write down the \
+                 sung words with their times. Runs on this computer and takes a few minutes.",
+            )
+            .clicked()
+        {
+            let language = languages
+                .get(app.lyrics.recognition_language)
+                .and_then(|(code, _)| code.map(str::to_owned));
+            let ctx = ui.ctx().clone();
+            app.recognize_lyrics(&ctx, language);
+        }
+    });
 }
 
 pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
@@ -113,6 +179,8 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
 
 /// The words, their look and how they are timed.
 fn setup_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
+    recognition_panel(ui, app);
+    ui.add_space(4.0);
     ui.label("One subtitle per line. Use | for a line break.");
     egui::ScrollArea::vertical()
         .max_height(200.0)
@@ -183,6 +251,8 @@ fn setup_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
             .on_hover_text("Spread the lines evenly over a time range");
         ui.selectable_value(&mut window.timing, Timing::Beats, "On Beats")
             .on_hover_text("One line every N beats");
+        ui.selectable_value(&mut window.timing, Timing::AsTimed, "As Timed")
+            .on_hover_text("Use the [mm:ss.xx] times written before the lines");
     });
 
     let lines = vizx_core::split_lyrics(&app.lyrics.text);
@@ -259,6 +329,31 @@ fn setup_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
                 }
             }
         }
+        Timing::AsTimed => match vizx_core::parse_timed_lyrics(&app.lyrics.text) {
+            Ok(timed) => {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} timed lines. Edit the words freely; keep the [mm:ss.xx] times.",
+                        timed.len()
+                    ))
+                    .small()
+                    .color(theme::TEXT_MUTED),
+                );
+                if ui.button("Add Lines").clicked() {
+                    add_timed_lines(app, &timed);
+                }
+            }
+            Err(_) => {
+                ui.label(
+                    egui::RichText::new(
+                        "No times found. Lines need a time in front, like [01:23.45], or use \
+                         Recognize from Vocals.",
+                    )
+                    .small()
+                    .color(theme::TEXT_MUTED),
+                );
+            }
+        },
     }
 
     ui.add_space(6.0);

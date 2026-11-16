@@ -544,6 +544,38 @@ the executable or `%VIZX_DEMUCS_MODEL%` (huggingface.co/StemSplitio/
 htdemucs-onnx). On the development machine both live in `D:\tools` and the
 variables are set in cargo's `config.toml`. `cargo run --release -p vizx-ml
 --example demucs -- <song> <folder>` separates a file without the window.
+
+### Recognizing lyrics: vocals first, then Whisper
+
+The Lyrics window's **Recognize from Vocals** writes down the sung words
+with their times (`vizx_core::LyricsRecognition`, in a background thread):
+
+1. **Vocals.** The song's stems are reused when they exist; otherwise the
+   song is separated now (the best `StemEngine`, HTDemucs when installed)
+   and the stems are written, so the next time is quick. Whisper is trained
+   on speech; music under the voice makes it miss words, so it only ever
+   hears the vocals.
+2. **Words.** `vizx_ml::recognize_lyrics` runs Whisper (whisper.cpp through
+   `whisper-rs`) on the vocals at 16 kHz mono, with token timestamps; tokens
+   are joined into words (a token starting with a space starts a word).
+   Lines whose vocals are nearly silent (below 8 % of the song's typical
+   vocal loudness) are dropped, since Whisper makes up words on silence.
+3. **Timeline.** The lines are moved from the audio's time to the
+   timeline's (the clip's start and trimmed beginning), and shown in the
+   Lyrics window as LRC text (`recognized_lyrics_to_lrc`), timed "As Timed".
+   The user corrects the words and adds them as subtitles; each word's time
+   is kept in `RecognizedLyric::words` for word-by-word text later.
+
+**Model and build.** The model is a whisper.cpp `ggml-*.bin`
+(`ggml-large-v3-turbo-q5_0.bin`, 574 MB, from huggingface.co/ggerganov/
+whisper.cpp), in `models/` next to the executable or at
+`%VIZX_WHISPER_MODEL%`; nothing is downloaded by the build or the app.
+`whisper-rs` builds whisper.cpp from source with CMake (`CMAKE`) and
+generates its bindings with bindgen, which needs libclang
+(`LIBCLANG_PATH`; the `libclang` wheel from PyPI has the DLL). MSVC 2017
+needs `CFLAGS`/`CXXFLAGS` `/D_USE_MATH_DEFINES` for `M_PI`. On the
+development machine all of this is set in cargo's `config.toml`.
+
 ### Long sessions: autosave, recent projects, clipboard, shortcuts
 
 VizX is used for hours at a time, so losing work or reaching for the mouse

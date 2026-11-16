@@ -55,6 +55,10 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 # is loaded at run time from a folder (load-dynamic), never downloaded by the
 # build.
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
+# Whisper (whisper.cpp, built from source with CMake; generating its
+# bindings needs libclang, see "Recognizing lyrics" in docs/architecture.md)
+# for recognizing lyrics.
+whisper-rs = "0.16"
 # Loads a dynamic library (DLL / .so) at run time; used for projectM.
 libloading = "0.8"
 # Raw Windows API, used only to create the off-screen OpenGL context for
@@ -111,4 +115,8 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.vizx-render]
+opt-level = 2
+
+# Stem separation and lyrics recognition loop over millions of samples.
+[profile.dev.package.vizx-ml]
 opt-level = 2

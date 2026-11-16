@@ -14,6 +14,7 @@ mod ffmpeg;
 mod history;
 mod image_store;
 mod lyrics;
+mod lyrics_recognition;
 mod prerender;
 mod preset_library;
 mod selection;
@@ -46,6 +47,10 @@ pub use image_store::{
 pub use lyrics::{
     LyricLine, LyricsStyle, lines_on_beats, lyric_keyframes, parse_timed_lyrics, split_lyrics,
     spread_lines,
+};
+pub use lyrics_recognition::{
+    LyricsRecognition, RECOGNITION_LANGUAGES, RecognitionStep, RecognizedLyric, SongPlacement,
+    recognized_lyrics_to_lrc,
 };
 pub use prerender::{FrameSource, Prerender, PrerenderJob, PrerenderedFrame};
 pub use preset_library::{

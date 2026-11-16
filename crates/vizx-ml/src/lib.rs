@@ -1,11 +1,18 @@
 //! Local machine learning for VizX: splitting a song into stems (vocals,
-//! drums, bass, other) with the HTDemucs model.
+//! drums, bass, other) with the HTDemucs model, and recognizing the sung
+//! words with the Whisper model (see [`transcribe`]).
 //!
 //! Everything runs on this computer. The model is an ONNX file and runs in
 //! ONNX Runtime, a library that is loaded when it is first needed (it is not
 //! linked into VizX and not downloaded by the build). Both are found in
 //! folders that can be configured, see [`find_ml_setup`]. Without them, VizX
 //! falls back to its built-in separation (`vizx_audio::separate_stems`).
+
+pub mod transcribe;
+
+pub use transcribe::{
+    RecognizedLine, RecognizedWord, WHISPER_MODEL_VARIABLE, find_whisper_model, recognize_lyrics,
+};
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

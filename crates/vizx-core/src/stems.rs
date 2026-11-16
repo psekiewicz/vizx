@@ -51,7 +51,7 @@ impl StemEngine {
         }
     }
 
-    fn separate(
+    pub(crate) fn separate(
         &self,
         audio: &DecodedAudio,
         cancel: &AtomicBool,
@@ -189,7 +189,7 @@ pub fn stem_folder(song_path: &Path, engine: &StemEngine) -> PathBuf {
     folder.join(format!("{} {kind}", song_name(song_path)))
 }
 
-fn song_name(song_path: &Path) -> String {
+pub(crate) fn song_name(song_path: &Path) -> String {
     song_path.file_stem().map_or_else(
         || "song".to_owned(),
         |name| name.to_string_lossy().into_owned(),
@@ -197,7 +197,7 @@ fn song_name(song_path: &Path) -> String {
 }
 
 /// The stem files in `folder` if all of them are there already.
-fn existing_stems(folder: &Path, song_name: &str) -> Option<StemFiles> {
+pub(crate) fn existing_stems(folder: &Path, song_name: &str) -> Option<StemFiles> {
     STEM_NAMES
         .iter()
         .map(|name| {

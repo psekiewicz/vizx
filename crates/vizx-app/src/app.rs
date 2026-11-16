@@ -186,6 +186,8 @@ pub struct VizxApp {
     thumbnails: crate::thumbnails::Thumbnails,
     /// The stem separation running in the background, if any.
     stem_job: Option<vizx_core::StemJob>,
+    /// Lyrics being recognized from the song's vocals.
+    lyrics_recognition: Option<vizx_core::LyricsRecognition>,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
     pub graphics_summary: String,
     /// Result of the last command, shown in the status bar.
@@ -229,6 +231,7 @@ impl VizxApp {
             is_project_settings_open: false,
             lyrics: LyricsWindow::default(),
             stem_job: None,
+            lyrics_recognition: None,
             thumbnails,
             settings: app_data
                 .as_deref()
@@ -439,6 +442,109 @@ impl VizxApp {
             job.engine_label()
         );
         self.stem_job = Some(job);
+    }
+
+    /// Starts recognizing the words of the song: the selected audio clip,
+    /// or the first one of the project. `language` is a code such as "en",
+    /// or `None` to detect it.
+    pub fn recognize_lyrics(&mut self, ctx: &egui::Context, language: Option<String>) {
+        if let Some(job) = &self.lyrics_recognition {
+            self.lyrics.message = format!("Already recognizing {}", job.song_name());
+            return;
+        }
+        let project = self.session.project();
+        let is_audio = |clip: &vizx_project::Clip| {
+            project
+                .media_source(clip.media)
+                .is_some_and(|source| source.audio().is_some())
+        };
+        let selected = self
+            .session
+            .selected_clip_id()
+            .and_then(|id| project.clip(id))
+            .map(|(_, clip)| clip)
+            .filter(|clip| is_audio(clip));
+        let first = project
+            .tracks()
+            .iter()
+            .filter(|track| track.kind == vizx_project::TrackKind::Audio)
+            .flat_map(|track| &track.clips)
+            .find(|clip| is_audio(clip));
+        let Some(clip) = selected.or(first) else {
+            self.lyrics.message = "Add the song first".to_owned();
+            return;
+        };
+        let Some(source) = project.media_source(clip.media) else {
+            return;
+        };
+        let Some(loaded) = self.audio_store.loaded(&source.path) else {
+            self.lyrics.message = "The song is still loading".to_owned();
+            return;
+        };
+        let placement = vizx_core::SongPlacement {
+            clip_start_seconds: clip.start_milliseconds as f64 / 1000.0,
+            source_offset_seconds: clip.source_offset_milliseconds as f64 / 1000.0,
+            clip_duration_seconds: clip.duration_milliseconds as f64 / 1000.0,
+        };
+        let ctx = ctx.clone();
+        match vizx_core::LyricsRecognition::start(
+            std::sync::Arc::clone(&loaded.audio),
+            Path::new(&source.path),
+            placement,
+            language,
+            move || ctx.request_repaint(),
+        ) {
+            Ok(job) => {
+                self.lyrics.message = format!("Recognizing the lyrics of {}...", job.song_name());
+                self.lyrics_recognition = Some(job);
+            }
+            Err(problem) => self.lyrics.message = format!("Cannot recognize lyrics: {problem}"),
+        }
+    }
+
+    /// Stops a running lyrics recognition.
+    pub fn cancel_lyrics_recognition(&mut self) {
+        if self.lyrics_recognition.take().is_some() {
+            self.lyrics.message = "Recognition stopped".to_owned();
+        }
+    }
+
+    /// The running lyrics recognition, if any.
+    pub fn lyrics_recognition(&self) -> Option<&vizx_core::LyricsRecognition> {
+        self.lyrics_recognition.as_ref()
+    }
+
+    /// Puts the recognized lyrics into the Lyrics window once ready.
+    fn collect_lyrics_recognition(&mut self) {
+        let Some(outcome) = self
+            .lyrics_recognition
+            .as_ref()
+            .and_then(vizx_core::LyricsRecognition::finished)
+        else {
+            return;
+        };
+        let song = self
+            .lyrics_recognition
+            .take()
+            .map(|job| job.song_name().to_owned())
+            .unwrap_or_default();
+        match outcome {
+            Ok(lyrics) if lyrics.is_empty() => {
+                self.lyrics.message = format!("No words were recognized in {song}");
+            }
+            Ok(lyrics) => {
+                self.lyrics
+                    .show_recognized(&vizx_core::recognized_lyrics_to_lrc(&lyrics));
+                self.lyrics.message = format!(
+                    "{} lines recognized. Check the words, then Add Lines.",
+                    lyrics.len()
+                );
+                self.status_message = format!("Lyrics of {song} recognized");
+            }
+            Err(problem) => {
+                self.lyrics.message = format!("Recognition failed: {problem}");
+            }
+        }
     }
 
     /// Adds the stems once their separation has finished.
@@ -1404,6 +1510,7 @@ impl eframe::App for VizxApp {
         self.load_project_audio(&ctx);
         self.load_project_images(&ctx);
         self.collect_stems();
+        self.collect_lyrics_recognition();
         self.autosave();
         self.visual_preview.update(
             &ctx,
