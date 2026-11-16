@@ -83,13 +83,13 @@ pub fn show(
         draw_message(
             &painter,
             composition_rect,
-            format!("The picture could not be drawn: {problem}"),
+            format!("Render error: {problem}"),
         );
     } else if layers.is_empty() {
         draw_message(
             &painter,
             composition_rect,
-            "Nothing to show at this time".to_owned(),
+            "No visual clips at the playhead".to_owned(),
         );
     }
 
@@ -121,7 +121,8 @@ pub fn show(
             .ctx()
             .pointer_latest_pos()
             .is_some_and(|pointer| is_inside_turned(layer_rect, rotation, pointer));
-        let is_held = ui.ctx().is_being_dragged(id) || drag.is_some_and(|drag| drag.clip == layer.clip_id);
+        let is_held =
+            ui.ctx().is_being_dragged(id) || drag.is_some_and(|drag| drag.clip == layer.clip_id);
         let sense = if is_over_it || is_held {
             egui::Sense::click_and_drag()
         } else {
@@ -179,7 +180,7 @@ pub fn show(
                 egui::Sense::drag(),
             )
             .on_hover_cursor(CursorIcon::Crosshair)
-            .on_hover_text("Drag to turn. Hold Shift for steps of 15\u{b0}.");
+            .on_hover_text("Rotate (Shift: 15\u{b0} steps)");
         follow_drag(
             &response,
             layer.clip_id,
@@ -617,8 +618,8 @@ fn draw_layer_state(painter: &egui::Painter, layer_rect: Rect, state: &LayerStat
             "Pre-rendering: {}%\n({finished} of {total} frames)",
             u64::from(*finished) * 100 / u64::from(*total)
         ),
-        LayerState::Rendering { .. } => "Waiting to pre-render...".to_owned(),
-        LayerState::WaitingForAudio => "Loading audio before pre-rendering...".to_owned(),
+        LayerState::Rendering { .. } => "Queued for pre-render...".to_owned(),
+        LayerState::WaitingForAudio => "Loading audio...".to_owned(),
         LayerState::LoadingImage => "Loading image...".to_owned(),
         LayerState::Failed(reason) => reason.clone(),
     };

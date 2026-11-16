@@ -526,18 +526,18 @@ impl EditorSession {
         let (_, clip) = self
             .selected_clip_id()
             .and_then(|id| self.project.clip(id))
-            .ok_or("select an audio clip to tap its beats")?;
+            .ok_or("select an audio clip")?;
         let source = self
             .project
             .media_source(clip.media)
             .filter(|source| source.audio().is_some())
-            .ok_or("select an audio clip to tap its beats")?;
+            .ok_or("select an audio clip")?;
         if source.manual_beats.is_none() {
-            return Err("switch the clip to beats drawn by hand first (Properties > Beats)");
+            return Err("turn on manual beats first (Properties > Beats > Edit Beats)");
         }
         let playhead = (seconds.max(0.0) * 1000.0).round() as u64;
         if playhead < clip.start_milliseconds || playhead > clip.end_milliseconds() {
-            return Err("the playhead is not inside the selected clip");
+            return Err("the playhead is outside the selected clip");
         }
         let seconds_in_file =
             (playhead - clip.start_milliseconds + clip.source_offset_milliseconds) as f64 / 1000.0;
@@ -1290,7 +1290,13 @@ mod tests {
             .collect();
         assert_eq!(visual.len(), 3);
         let clip_on = |session: &EditorSession, track: TrackId| {
-            session.project().track(track).unwrap().clips.first().map(|clip| clip.id)
+            session
+                .project()
+                .track(track)
+                .unwrap()
+                .clips
+                .first()
+                .map(|clip| clip.id)
         };
         let (a, b) = (
             clip_on(&session, visual[1]).unwrap(),
@@ -1443,7 +1449,7 @@ mod tests {
 
         assert!(session.tap_beat().is_err()); // nothing selected
         session.select(Selection::Clip(clip));
-        assert!(session.tap_beat().unwrap_err().contains("by hand"));
+        assert!(session.tap_beat().unwrap_err().contains("manual beats"));
 
         session.edit_project(|project| project.use_manual_beats(song, Vec::new()));
         session.tap_beat().unwrap();
@@ -1453,7 +1459,7 @@ mod tests {
             Some(vec![4.5])
         );
         session.set_playhead_seconds(0.5);
-        assert!(session.tap_beat().unwrap_err().contains("not inside"));
+        assert!(session.tap_beat().unwrap_err().contains("outside"));
     }
 
     #[test]

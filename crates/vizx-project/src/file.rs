@@ -102,7 +102,9 @@ impl Project {
         let mut project = Self::from_vzx_str(&fs::read_to_string(path)?)?;
         if let Some(folder) = path.parent() {
             for media in &mut project.media {
-                if let Some(found) = moved_location(folder, &media.path, media.relative_path.as_deref()) {
+                if let Some(found) =
+                    moved_location(folder, &media.path, media.relative_path.as_deref())
+                {
                     media.path = found;
                 }
             }
@@ -114,11 +116,18 @@ impl Project {
     /// `old_folder` (the folder of a file the user just located again) to
     /// the same name in `new_folder`, if a file is there. Returns how many
     /// were found this way.
-    pub fn relink_missing_media_in_folder(&mut self, old_folder: &Path, new_folder: &Path) -> usize {
+    pub fn relink_missing_media_in_folder(
+        &mut self,
+        old_folder: &Path,
+        new_folder: &Path,
+    ) -> usize {
         let mut found = 0;
         for media in &mut self.media {
             let old_path = Path::new(&media.path);
-            if !is_file_reference(&media.path) || old_path.exists() || old_path.parent() != Some(old_folder) {
+            if !is_file_reference(&media.path)
+                || old_path.exists()
+                || old_path.parent() != Some(old_folder)
+            {
                 continue;
             }
             if let Some(name) = old_path.file_name() {
@@ -176,11 +185,7 @@ fn relative_location(folder: &Path, file: &Path) -> Option<String> {
     if folder.first() != file.first() {
         return None;
     }
-    let common = folder
-        .iter()
-        .zip(&file)
-        .take_while(|(a, b)| a == b)
-        .count();
+    let common = folder.iter().zip(&file).take_while(|(a, b)| a == b).count();
     let mut parts: Vec<String> = vec!["..".to_owned(); folder.len() - common];
     parts.extend(
         file[common..]
@@ -198,9 +203,7 @@ fn moved_location(folder: &Path, path: &str, relative: Option<&str>) -> Option<S
         return None;
     }
     let by_relative = relative.map(|relative| folder.join(relative));
-    let by_name = Path::new(path)
-        .file_name()
-        .map(|name| folder.join(name));
+    let by_name = Path::new(path).file_name().map(|name| folder.join(name));
     by_relative
         .into_iter()
         .chain(by_name)

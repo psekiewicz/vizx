@@ -106,7 +106,7 @@ impl ExportJob {
         let (audio, clips_still_loading) =
             audio_sources(project, audio_store, vizx_project::AudioInput::Mix);
         if clips_still_loading > 0 {
-            return Err("the audio is still being loaded; try again in a moment".to_owned());
+            return Err("audio is still loading".to_owned());
         }
 
         let mut layers = Vec::new();

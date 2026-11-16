@@ -91,8 +91,7 @@ impl PresetBrowser {
 
 /// Runs on the background thread.
 fn load_library(bundled_presets: Option<PathBuf>) -> Result<PresetLibrary, String> {
-    let folder = bundled_presets
-        .ok_or("The presets that ship with VizX were not found on this computer.")?;
+    let folder = bundled_presets.ok_or("Bundled presets not found.")?;
     let library = PresetLibrary::scan(&folder)
         .map_err(|error| format!("Could not read {}: {error}", folder.display()))?;
 
@@ -131,9 +130,7 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
                 LibraryState::Unavailable(reason) => {
                     ui.label(egui::RichText::new(reason).color(theme::TEXT_MUTED));
                     ui.add_space(4.0);
-                    ui.label(
-                        "A preset file of your own can be added with Add > MilkDrop Preset File.",
-                    );
+                    ui.label("To load a .milk file, use Add > MilkDrop Preset File...");
                 }
                 LibraryState::Ready(library) => {
                     preset_to_add = browse(

@@ -118,11 +118,7 @@ impl VisualizerCatalog {
                 }
                 _ => match &folder {
                     Some(folder) => VisualizerPlugin::load_manifest(folder),
-                    None => Err(
-                        "This visualizer ships with VizX, but the bundled visualizers were not \
-                         found on this computer."
-                            .to_owned(),
-                    ),
+                    None => Err("Bundled visualizers not found.".to_owned()),
                 },
             };
             self.plugins.insert(
@@ -232,7 +228,7 @@ mod tests {
                 .manifest
                 .as_ref()
                 .unwrap_err()
-                .contains("ships with VizX")
+                .contains("Bundled visualizers")
         );
     }
 

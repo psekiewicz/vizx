@@ -318,7 +318,7 @@ impl VizxApp {
             })
         });
         let Some((media_id, mut text)) = selected_text else {
-            self.status_message = "Select a layer with a text first".to_owned();
+            self.status_message = "Select a text layer first".to_owned();
             return;
         };
         let Some(path) = rfd::FileDialog::new()
@@ -331,7 +331,7 @@ impl VizxApp {
 
         text.font_path = path.to_string_lossy().into_owned();
         self.status_message = match self.session.set_text(media_id, text) {
-            Ok(()) => format!("Using font {}", path.display()),
+            Ok(()) => format!("Font: {}", path.display()),
             Err(problem) => format!("Could not use that font: {problem}"),
         };
     }
@@ -383,14 +383,11 @@ impl VizxApp {
     /// Starts separating the selected song clip into stems.
     fn separate_stems(&mut self, ctx: &egui::Context) {
         if let Some(job) = &self.stem_job {
-            self.status_message = format!(
-                "Still separating {}; wait for it to finish",
-                job.song_name()
-            );
+            self.status_message = format!("Already separating {}", job.song_name());
             return;
         }
         let Some(clip_id) = self.session.selected_clip_id() else {
-            self.status_message = "Select a song clip to separate".to_owned();
+            self.status_message = "Select an audio clip first".to_owned();
             return;
         };
         let Some((_, clip)) = self.session.project().clip(clip_id) else {
@@ -402,11 +399,11 @@ impl VizxApp {
             .media_source(clip.media)
             .filter(|source| source.audio().is_some())
         else {
-            self.status_message = "Only audio can be separated into stems".to_owned();
+            self.status_message = "Stems can only be separated from audio".to_owned();
             return;
         };
         let Some(loaded) = self.audio_store.loaded(&source.path) else {
-            self.status_message = "The song is still loading; try again in a moment".to_owned();
+            self.status_message = "Audio is still loading".to_owned();
             return;
         };
         let ctx = ctx.clone();
@@ -418,7 +415,7 @@ impl VizxApp {
             move || ctx.request_repaint(),
         );
         self.status_message = format!(
-            "Separating {} into stems with {}...",
+            "Separating stems: {} ({})...",
             job.song_name(),
             job.engine_label()
         );
@@ -432,7 +429,7 @@ impl VizxApp {
         };
         let Some(outcome) = job.finished() else {
             self.status_message = format!(
-                "Separating {} into stems with {}: {:.0} %",
+                "Separating stems: {} ({}) {:.0}%",
                 job.song_name(),
                 job.engine_label(),
                 job.progress() * 100.0
@@ -441,15 +438,11 @@ impl VizxApp {
         };
         let (clip_id, song) = (job.clip_id(), job.song_name().to_owned());
         self.stem_job = None;
-        self.status_message = match outcome
-            .and_then(|stems| self.session.add_stems(clip_id, &stems))
-        {
-            Ok(tracks) => format!(
-                "Separated {song} into {} stems on muted tracks; choose one under \"Reacts to\" of a visualizer",
-                tracks.len()
-            ),
-            Err(problem) => format!("Could not separate {song}: {problem}"),
-        };
+        self.status_message =
+            match outcome.and_then(|stems| self.session.add_stems(clip_id, &stems)) {
+                Ok(tracks) => format!("{song}: {} stems added on muted tracks", tracks.len()),
+                Err(problem) => format!("Stem separation failed ({song}): {problem}"),
+            };
     }
 
     /// The beats of all the project's audio, in seconds of project time.
@@ -477,7 +470,7 @@ impl VizxApp {
         match lines {
             Ok(lines) => {
                 lyrics_window::add_timed_lines(self, &lines);
-                self.status_message = format!("Added the lyrics of {}", path.display());
+                self.status_message = format!("Lyrics imported: {}", path.display());
             }
             Err(problem) => {
                 self.status_message = format!("Could not read {}: {problem}", path.display());
@@ -490,9 +483,9 @@ impl VizxApp {
     fn import_animation(&mut self, frame: &eframe::Frame, is_sequence: bool) {
         let Some(path) = rfd::FileDialog::new()
             .set_title(if is_sequence {
-                "Pick any frame of the image sequence"
+                "Select any frame of the sequence"
             } else {
-                "Pick the sprite sheet"
+                "Select a sprite sheet"
             })
             .add_filter("Image", &vizx_core::SUPPORTED_IMAGE_EXTENSIONS)
             .set_parent(frame)
@@ -508,7 +501,7 @@ impl VizxApp {
         self.status_message = match result {
             Ok(_) if is_sequence => format!("Added image sequence {}", path.display()),
             Ok(_) => format!(
-                "Added sprite sheet {}; set its grid in Properties",
+                "Sprite sheet added: {} (set the grid in Properties)",
                 path.display()
             ),
             Err(problem) => format!("Could not import {}: {problem}", path.display()),
@@ -522,7 +515,7 @@ impl VizxApp {
             .as_ref()
             .is_some_and(|export| export.result().is_none())
         {
-            self.status_message = "An export is already running".to_owned();
+            self.status_message = "Export already in progress".to_owned();
             return;
         }
         let Some(ffmpeg) = self.require_ffmpeg("Export") else {
@@ -555,7 +548,7 @@ impl VizxApp {
                 self.export = Some(Export::start(job, move || ctx.request_repaint()));
                 self.status_message = format!("Exporting {}", output.display());
             }
-            Err(problem) => self.status_message = format!("Cannot export: {problem}"),
+            Err(problem) => self.status_message = format!("Export failed: {problem}"),
         }
     }
 
@@ -571,7 +564,7 @@ impl VizxApp {
         }
         self.status_message = match self.transport.play(&mut self.session, &self.audio_store) {
             Ok(note) => note,
-            Err(error) => format!("Cannot play: {error}"),
+            Err(error) => format!("Playback error: {error}"),
         };
     }
 
@@ -627,7 +620,7 @@ impl VizxApp {
                 self.transport.pause();
                 self.forget_autosave();
                 self.session = EditorSession::new_untitled();
-                self.status_message = "New project created".to_owned();
+                self.status_message = "New project".to_owned();
             }
             AppCommand::OpenProject => self.open_project(frame),
             AppCommand::OpenRecent(index) => {
@@ -638,30 +631,30 @@ impl VizxApp {
             AppCommand::CopyClip => {
                 self.clipboard = self.session.copy_selected_clips();
                 self.status_message = if !self.clipboard.is_empty() {
-                    "Clip copied; paste it with Ctrl+V at the playhead".to_owned()
+                    "Clip copied".to_owned()
                 } else {
-                    "Select a clip to copy it".to_owned()
+                    "No clip selected".to_owned()
                 };
             }
             AppCommand::CutClip => {
                 let copied = self.session.copy_selected_clips();
                 if copied.is_empty() {
-                    self.status_message = "Select a clip to cut it".to_owned();
+                    self.status_message = "No clip selected".to_owned();
                 } else {
                     self.clipboard = copied;
                     self.session.delete_selection();
-                    self.status_message = "Cut; paste with Ctrl+V at the playhead".to_owned();
+                    self.status_message = "Clip cut".to_owned();
                 }
             }
             AppCommand::PasteClip => {
                 self.status_message = if self.clipboard.is_empty() {
-                    "Nothing to paste; copy a clip first (Ctrl+C)".to_owned()
+                    "Clipboard is empty".to_owned()
                 } else {
                     let clipboard = self.clipboard.clone();
                     match self.session.paste_clips(&clipboard).len() {
-                        0 => "Could not paste there".to_owned(),
-                        1 => "Clip pasted at the playhead".to_owned(),
-                        count => format!("{count} clips pasted at the playhead"),
+                        0 => "Can't paste here".to_owned(),
+                        1 => "Clip pasted".to_owned(),
+                        count => format!("{count} clips pasted"),
                     }
                 };
             }
@@ -693,8 +686,7 @@ impl VizxApp {
             AppCommand::LoopEndHere => self.session.set_loop_end_at_playhead(),
             AppCommand::AddMarker => {
                 self.session.add_marker_at_playhead();
-                self.status_message =
-                    "Marker added; right-click it on the ruler to rename it".to_owned();
+                self.status_message = "Marker added".to_owned();
             }
             AppCommand::PreviousMarker => {
                 self.session.jump_to_marker(false);
@@ -720,7 +712,7 @@ impl VizxApp {
             AppCommand::ExportVideo => self.export_video(ctx, frame),
             AppCommand::AddText => {
                 self.status_message = match self.session.add_text() {
-                    Ok(_) => "Added text; edit it in Properties".to_owned(),
+                    Ok(_) => "Text added".to_owned(),
                     Err(problem) => format!("Could not add text: {problem}"),
                 };
             }
@@ -734,16 +726,16 @@ impl VizxApp {
             AppCommand::LocateMedia(media_id) => self.locate_media(media_id, frame),
             AppCommand::SplitClip => {
                 self.status_message = if self.session.split_selected_clip() {
-                    "Clip split at the playhead".to_owned()
+                    "Clip split".to_owned()
                 } else {
-                    "To split, select a clip and put the playhead inside it".to_owned()
+                    "The playhead must be inside the selected clip".to_owned()
                 };
             }
             AppCommand::DuplicateClip => {
                 self.status_message = if self.session.duplicate_selected_clip() {
                     "Clip duplicated".to_owned()
                 } else {
-                    "Select a clip to duplicate it".to_owned()
+                    "No clip selected".to_owned()
                 };
             }
             AppCommand::TapBeat => {
@@ -769,7 +761,7 @@ impl VizxApp {
             AppCommand::DeleteSelection => {
                 self.status_message = match self.session.delete_selection() {
                     Some(what) => format!("Deleted the {what}"),
-                    None => "Nothing is selected".to_owned(),
+                    None => "Nothing selected".to_owned(),
                 };
             }
             AppCommand::BrowseMilkdropPresets => self.preset_browser.open(ctx),
@@ -821,7 +813,7 @@ impl VizxApp {
                     format!("Opened {}", path.display())
                 } else {
                     format!(
-                        "Opened {}. {missing} file(s) not found - select the clip and click Locate in Properties",
+                        "Opened {}. Missing files: {missing} (use Locate in Properties)",
                         path.display()
                     )
                 };
@@ -999,7 +991,7 @@ impl VizxApp {
         self.forget_autosave();
         self.session = EditorSession::new_untitled();
         if template == Template::Empty {
-            self.status_message = "New project created".to_owned();
+            self.status_message = "New project".to_owned();
             return;
         }
 
@@ -1010,8 +1002,7 @@ impl VizxApp {
             .audio_tracks()
             .any(|track| !track.clips.is_empty());
         if !has_song {
-            self.status_message =
-                "New project created; add a song with right-click on the timeline > Add".to_owned();
+            self.status_message = "New project".to_owned();
             return;
         }
         match template {
@@ -1019,21 +1010,18 @@ impl VizxApp {
             Template::MusicVisualizer => {
                 self.session
                     .add_visualizer_plugin("bundled-visualizers:/spectrum-bars");
-                self.status_message =
-                    "Press Space to play; change the visualizer's look in Properties".to_owned();
+                self.status_message = "New project: Music Visualizer".to_owned();
             }
             Template::LyricsVideo => {
                 let project_seconds = self.session.project().settings.duration_seconds();
                 self.lyrics.open(project_seconds);
-                self.status_message = "Paste the lyrics into the Lyrics window".to_owned();
+                self.status_message = "New project: Lyrics Video".to_owned();
             }
             Template::CoverArtVideo => {
                 self.import_background_image(frame);
                 self.session
                     .add_visualizer_plugin("bundled-visualizers:/core");
-                self.status_message =
-                    "Resize the ring in the preview so the cover shows through its middle"
-                        .to_owned();
+                self.status_message = "New project: Cover Art Video".to_owned();
             }
         }
     }
@@ -1076,7 +1064,7 @@ impl VizxApp {
                 self.session = session;
                 recovery.discard();
                 self.status_message =
-                    format!("Recovered {}; save it to keep it", recovery.project_name);
+                    format!("Recovered {} (not saved yet)", recovery.project_name);
             }
             Err(error) => {
                 self.status_message =

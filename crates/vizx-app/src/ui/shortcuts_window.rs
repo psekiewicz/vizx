@@ -21,18 +21,18 @@ const GROUPS: [(&str, &[(&str, &str)]); 5] = [
         ],
     ),
     (
-        "Playback and moving around",
+        "Playback & navigation",
         &[
             ("Space", "Play / pause"),
-            ("Home / End", "Go to the start / end"),
+            ("Home / End", "Go to start / end"),
             ("Left / Right", "One frame back / forward"),
             ("Shift+Left / Right", "One second back / forward"),
-            ("Up / Down", "Previous / next clip start or end, or marker"),
+            ("Up / Down", "Previous / next edit point"),
             ("Ctrl+Left / Right", "Previous / next marker"),
-            ("M", "Add a marker at the playhead"),
+            ("M", "Add marker"),
             ("L", "Loop on / off"),
-            ("I / O", "Loop starts / ends at the playhead"),
-            ("Shift+drag on the ruler", "Mark the stretch to loop"),
+            ("I / O", "Set loop in / out"),
+            ("Shift+drag on the ruler", "Set loop range"),
         ],
     ),
     (
@@ -40,18 +40,15 @@ const GROUPS: [(&str, &[(&str, &str)]); 5] = [
         &[
             ("Ctrl+Z", "Undo"),
             ("Ctrl+Shift+Z or Ctrl+Y", "Redo"),
-            (
-                "Ctrl+click a clip",
-                "Add it to the selection, or take it out",
-            ),
-            ("Drag over empty lanes", "Select the clips in the rectangle"),
+            ("Ctrl+click a clip", "Add to / remove from selection"),
+            ("Drag on an empty area", "Box select"),
             ("Ctrl+A", "Select all clips"),
-            ("Ctrl+C / Ctrl+X", "Copy / cut the selected clips"),
-            ("Ctrl+V", "Paste at the playhead (distances kept)"),
-            ("Ctrl+K", "Split the selected clip at the playhead"),
-            ("Ctrl+D", "Duplicate the selected clip"),
-            ("Delete", "Delete the selected clip or track"),
-            ("B", "Place a beat at the playhead (selected song)"),
+            ("Ctrl+C / Ctrl+X", "Copy / cut"),
+            ("Ctrl+V", "Paste at playhead"),
+            ("Ctrl+K", "Split at playhead"),
+            ("Ctrl+D", "Duplicate"),
+            ("Delete", "Delete"),
+            ("B", "Tap a beat (selected audio clip)"),
         ],
     ),
     (
@@ -67,10 +64,10 @@ const GROUPS: [(&str, &[(&str, &str)]); 5] = [
         ],
     ),
     (
-        "Lyrics window, while tapping",
+        "Lyrics tapping",
         &[
-            ("Enter", "Next line starts now"),
-            ("Backspace", "End the line now (a pause)"),
+            ("Enter", "Next line"),
+            ("Backspace", "End line"),
             ("Esc", "Stop tapping"),
         ],
     ),
@@ -84,7 +81,7 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
         .default_pos(ctx.content_rect().center() - egui::vec2(220.0, 260.0))
         .show(ctx, |ui| {
             ui.label(
-                egui::RichText::new("Single keys work while no text field is being typed into.")
+                egui::RichText::new("Single-key shortcuts are off while typing in a text field.")
                     .small()
                     .color(theme::TEXT_MUTED),
             );

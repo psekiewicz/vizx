@@ -222,10 +222,7 @@ pub fn frame_source(
         // A broken `visualizer.json` is reported here; a broken shader is
         // reported by the render itself.
         plugin.manifest.as_ref().map_err(Clone::clone)?;
-        let folder = plugin
-            .folder
-            .clone()
-            .ok_or("The visualizer's folder was not found.")?;
+        let folder = plugin.folder.clone().ok_or("Visualizer folder not found")?;
         return Ok(FrameSource::Plugin {
             folder,
             parameters: clip.parameters.clone(),

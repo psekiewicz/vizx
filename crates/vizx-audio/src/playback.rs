@@ -159,7 +159,11 @@ impl AudioPlayer {
 
     /// Sets how loud playback is: 0 is silent, 1 is as mixed.
     pub fn set_volume(&self, volume: f32) {
-        let volume = if volume.is_finite() { volume.clamp(0.0, 1.0) } else { 1.0 };
+        let volume = if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
         self.shared
             .volume_bits
             .store(volume.to_bits(), Ordering::Relaxed);
@@ -414,10 +418,15 @@ mod tests {
             duration_seconds: None,
         };
         let state = shared(vec![source], 0, u64::MAX);
-        state.volume_bits.store(0.5_f32.to_bits(), Ordering::Relaxed);
+        state
+            .volume_bits
+            .store(0.5_f32.to_bits(), Ordering::Relaxed);
         let mut output = vec![0.0; 10];
         fill_from_shared(&mut output, 1, 100, &state);
-        assert!(output.iter().all(|sample| (sample - 0.4).abs() < 1e-6), "{output:?}");
+        assert!(
+            output.iter().all(|sample| (sample - 0.4).abs() < 1e-6),
+            "{output:?}"
+        );
     }
 
     #[test]

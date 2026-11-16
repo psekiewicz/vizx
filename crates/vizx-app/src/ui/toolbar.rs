@@ -29,13 +29,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
             play_tooltip,
             AppCommand::TogglePlayback,
         );
-        command_button(
-            ui,
-            app,
-            "\u{23F9}",
-            "Stop",
-            AppCommand::StopPlayback,
-        );
+        command_button(ui, app, "\u{23F9}", "Stop", AppCommand::StopPlayback);
         command_button(ui, app, "\u{23ED}", "Go to end (End)", AppCommand::GoToEnd);
         let looping = app.session.is_looping();
         let loop_tooltip = match app.session.loop_region() {
@@ -71,7 +65,11 @@ pub fn show(ui: &mut egui::Ui, app: &mut VizxApp) {
         ui.separator();
         // Playback volume; the export is not affected.
         let mut volume = app.transport.volume() * 100.0;
-        let symbol = if volume <= 0.0 { "\u{1F507}" } else { "\u{1F50A}" };
+        let symbol = if volume <= 0.0 {
+            "\u{1F507}"
+        } else {
+            "\u{1F50A}"
+        };
         ui.label(symbol);
         let slider = egui::Slider::new(&mut volume, 0.0..=100.0)
             .show_value(false)

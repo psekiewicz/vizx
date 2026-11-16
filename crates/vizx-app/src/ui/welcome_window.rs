@@ -40,10 +40,10 @@ impl Template {
 
     fn description(self) -> &'static str {
         match self {
-            Self::Empty => "Start from nothing",
-            Self::MusicVisualizer => "Pick a song; a spectrum visualizer follows it",
-            Self::LyricsVideo => "Pick a song, then paste and time its lyrics",
-            Self::CoverArtVideo => "Pick a song and a cover; a ring pulses around it",
+            Self::Empty => "Blank project",
+            Self::MusicVisualizer => "Song + spectrum visualizer",
+            Self::LyricsVideo => "Song + timed lyrics",
+            Self::CoverArtVideo => "Song + cover art with a reactive ring",
         }
     }
 
@@ -82,11 +82,9 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new(
-                        "F1: keyboard shortcuts  |  right-click the timeline to add",
-                    )
-                    .small()
-                    .color(theme::TEXT_MUTED),
+                    egui::RichText::new("F1  Keyboard shortcuts")
+                        .small()
+                        .color(theme::TEXT_MUTED),
                 );
             });
         });
@@ -142,7 +140,7 @@ fn banner(ui: &mut egui::Ui) {
     painter.text(
         rect.left_top() + Vec2::new(27.0, 86.0),
         egui::Align2::LEFT_TOP,
-        "Music-driven visuals, lyrics and animation",
+        "Music visualizer & lyric video editor",
         FontId::proportional(15.0),
         Color32::from_gray(200),
     );
@@ -202,7 +200,7 @@ fn recent_column(ui: &mut egui::Ui, app: &VizxApp, chosen: &mut Option<AppComman
     let recent = &app.settings.recent_projects;
     if recent.is_empty() {
         ui.label(
-            egui::RichText::new("Projects you open or save will be listed here.")
+            egui::RichText::new("No recent projects")
                 .small()
                 .color(theme::TEXT_MUTED),
         );
@@ -219,7 +217,7 @@ fn recent_column(ui: &mut egui::Ui, app: &VizxApp, chosen: &mut Option<AppComman
         let response = ui
             .add_enabled(exists, button)
             .on_hover_text(path.display().to_string())
-            .on_disabled_hover_text("This file no longer exists");
+            .on_disabled_hover_text("File not found");
         if response.clicked() {
             *chosen = Some(AppCommand::OpenRecent(index));
         }

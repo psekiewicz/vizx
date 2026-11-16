@@ -157,11 +157,12 @@ fn track_properties(
                 if is_picture {
                     let mut sharp = session.project().clip_sharp_pixels(clip);
                     if ui
-                        .checkbox(&mut sharp, "Sharp pixels when enlarged")
-                        .on_hover_text("Show pixel art as crisp squares instead of smoothing it; on by default for PNG files")
+                        .checkbox(&mut sharp, "Pixel art (no smoothing)")
+                        .on_hover_text("Nearest-neighbor scaling. On by default for PNG files.")
                         .changed()
                     {
-                        session.edit_project(|project| project.set_clip_sharp_pixels(clip.id, sharp));
+                        session
+                            .edit_project(|project| project.set_clip_sharp_pixels(clip.id, sharp));
                     }
                 }
                 opacity_and_reaction_editor(ui, session, clip, is_visualizer);
@@ -196,8 +197,7 @@ fn audio_input_selector(ui: &mut egui::Ui, session: &mut EditorSession, clip: &C
 
     let mut chosen = clip.audio_input;
     ui.horizontal(|ui| {
-        ui.label("Reacts to")
-            .on_hover_text("The audio this visualizer follows");
+        ui.label("Reacts to").on_hover_text("Audio source");
         egui::ComboBox::from_id_salt(("audio_input", clip.id))
             .selected_text(current_label)
             .show_ui(ui, |ui| {
@@ -251,17 +251,13 @@ fn transform_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
     ui.label(egui::RichText::new("Transform").strong());
     ui.separator();
     let hint = match (clip.keyframes.is_empty(), is_playhead_inside) {
-        (true, _) => "No keyframes: these values hold for the whole clip.".to_owned(),
-        (false, true) if keyframe_here.is_some() => {
-            "Values of the keyframe at the playhead.".to_owned()
-        }
+        (true, _) => "No keyframes (static values)".to_owned(),
+        (false, true) if keyframe_here.is_some() => "Keyframe at playhead".to_owned(),
         (false, true) => format!(
-            "{} keyframes. Changing a value adds one at the playhead.",
+            "{} keyframes. Editing a value adds a keyframe at the playhead.",
             clip.keyframes.len()
         ),
-        (false, false) => {
-            "The playhead is outside this clip; values at its nearest edge.".to_owned()
-        }
+        (false, false) => "Playhead outside the clip (showing the nearest edge)".to_owned(),
     };
     ui.label(egui::RichText::new(hint).small().color(theme::TEXT_MUTED));
 
@@ -302,7 +298,7 @@ fn transform_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
             edited.placement != Placement::FULL,
             egui::Button::new("Fill Frame"),
         )
-        .on_hover_text("Make the element cover the whole picture")
+        .on_hover_text("Fit to frame")
         .clicked()
     {
         edited.placement = Placement::FULL;
@@ -350,7 +346,7 @@ fn transform_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
                         }
                     })
                     .response
-                    .on_hover_text("How the element travels to this keyframe from the one before");
+                    .on_hover_text("Interpolation from the previous keyframe");
                 if easing != keyframe.easing {
                     session.edit_project(|project| {
                         project.set_keyframe_easing(clip.id, playhead_milliseconds, easing)
@@ -360,7 +356,7 @@ fn transform_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
             None => {
                 let add = ui
                     .add_enabled(is_playhead_inside, egui::Button::new("Add Keyframe"))
-                    .on_hover_text("Remember the values above at the playhead");
+                    .on_hover_text("Add a keyframe at the playhead");
                 if add.clicked() {
                     session.edit_project(|project| {
                         project.add_keyframe(clip.id, playhead_milliseconds)
@@ -404,7 +400,7 @@ fn transform_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
         if !clip.keyframes.is_empty()
             && ui
                 .button("Clear")
-                .on_hover_text("Remove all keyframes; the element keeps the values at the playhead")
+                .on_hover_text("Remove all keyframes (keeps the current values)")
                 .clicked()
         {
             session.edit_project(|project| project.clear_keyframes(clip.id, playhead_milliseconds));
@@ -415,7 +411,7 @@ fn transform_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
     let mut spin = clip.spin_degrees_per_second;
     ui.horizontal(|ui| {
         ui.label("Spin")
-            .on_hover_text("Keeps the element turning at a steady speed");
+            .on_hover_text("Constant rotation in degrees per second");
         ui.add(
             egui::DragValue::new(&mut spin)
                 .speed(1.0)
@@ -449,10 +445,10 @@ fn beats_editor(
             let found = loaded.map(|loaded| loaded.beats_at(source.tempo_bpm));
             let summary = match &found {
                 Some((beats, _)) if source.tempo_bpm.is_some() => {
-                    format!("{} beats at the tempo you chose", beats.len())
+                    format!("{} beats (manual tempo)", beats.len())
                 }
-                Some((beats, _)) => format!("Found automatically: {} beats", beats.len()),
-                None => "Reading the file...".to_owned(),
+                Some((beats, _)) => format!("Detected: {} beats", beats.len()),
+                None => "Analyzing...".to_owned(),
             };
             ui.label(summary);
 
@@ -490,7 +486,7 @@ fn beats_editor(
                     if source.tempo_bpm.is_some()
                         && ui
                             .button("Auto")
-                            .on_hover_text("Use the tempo found automatically")
+                            .on_hover_text("Use the detected tempo")
                             .clicked()
                     {
                         session.edit_project(|project| project.set_audio_tempo(media_id, None));
@@ -503,8 +499,8 @@ fn beats_editor(
 
             ui.horizontal(|ui| {
                 let edit = ui
-                    .add_enabled(found.is_some(), egui::Button::new("Edit These Beats"))
-                    .on_hover_text("Start from these beats and correct them by hand");
+                    .add_enabled(found.is_some(), egui::Button::new("Edit Beats"))
+                    .on_hover_text("Copy the detected beats for manual editing");
                 if edit.clicked()
                     && let Some((beats, _)) = &found
                 {
@@ -512,8 +508,8 @@ fn beats_editor(
                     session.edit_project(|project| project.use_manual_beats(media_id, seconds));
                 }
                 if ui
-                    .button("Draw My Own")
-                    .on_hover_text("Start with no beats and place every beat yourself")
+                    .button("Start Empty")
+                    .on_hover_text("Place every beat manually")
                     .clicked()
                 {
                     session.edit_project(|project| project.use_manual_beats(media_id, Vec::new()));
@@ -523,7 +519,7 @@ fn beats_editor(
         Some(beats) => {
             let tempo = vizx_core::tempo_of(beats)
                 .map_or(String::new(), |tempo| format!(", about {tempo:.0} BPM"));
-            ui.label(format!("Drawn by hand: {} beats{tempo}", beats.len()));
+            ui.label(format!("Manual: {} beats{tempo}", beats.len()));
             ui.label(
                 egui::RichText::new(
                     "Click the strip along the bottom of the selected clip to add a beat, \
@@ -540,10 +536,8 @@ fn beats_editor(
                     session.edit_project(|project| project.use_manual_beats(media_id, Vec::new()));
                 }
                 if ui
-                    .button("Back to Automatic")
-                    .on_hover_text(
-                        "Forget the beats drawn by hand and use the ones found automatically",
-                    )
+                    .button("Use Detected")
+                    .on_hover_text("Discard the manual beats")
                     .clicked()
                 {
                     session.edit_project(|project| project.use_automatic_beats(media_id));
@@ -594,9 +588,8 @@ fn animation_editor(
                 ui.label("Rows");
                 ui.add(egui::DragValue::new(rows).range(1..=256));
                 ui.end_row();
-                ui.label("Frames").on_hover_text(
-                    "How many cells hold a frame, counted left to right, top to bottom",
-                );
+                ui.label("Frames")
+                    .on_hover_text("Number of used cells (left to right, top to bottom)");
                 // With rows of their own lengths, those set the count.
                 ui.add_enabled(
                     row_lengths.is_empty(),
@@ -616,7 +609,7 @@ fn animation_editor(
             );
             ui.end_row();
             ui.label("On beats")
-                .on_hover_text("Step one frame on every beat instead of at a steady speed");
+                .on_hover_text("Advance one frame per beat");
             ui.checkbox(&mut edited.on_beat, "");
             ui.end_row();
         });
@@ -692,11 +685,11 @@ fn row_lengths_editor(
                 .filter(|part| !part.trim().is_empty())
                 .map(|part| part.trim().parse::<u32>())
                 .collect();
-            found = Some(parsed.map_err(|_| "Type whole numbers, like 5, 4, 6".to_owned()));
+            found = Some(parsed.map_err(|_| "Enter whole numbers, e.g. 5, 4, 6".to_owned()));
         }
         if ui
             .button("Find")
-            .on_hover_text("Look at the sheet and end each row after its last non-empty cell")
+            .on_hover_text("Detect from empty cells")
             .clicked()
         {
             let mut grid = animation.clone();
@@ -782,7 +775,7 @@ fn text_editor(
         .num_columns(2)
         .show(ui, |ui| {
             ui.label("Size")
-                .on_hover_text("Height of the letters, in percent of the picture's height");
+                .on_hover_text("Font size, % of frame height");
             let (smallest, _) = TextProperties::SIZE_RANGE;
             let mut percent = edited.size * 100.0;
             ui.add(egui::Slider::new(&mut percent, smallest * 100.0..=50.0).suffix(" %"));
@@ -800,8 +793,7 @@ fn text_editor(
             }
             ui.end_row();
 
-            ui.label("Align")
-                .on_hover_text("How lines of different length are lined up");
+            ui.label("Align").on_hover_text("Text alignment");
             egui::ComboBox::from_id_salt(("text_alignment", media_id))
                 .selected_text(edited.alignment.label())
                 .show_ui(ui, |ui| {
@@ -825,7 +817,7 @@ fn text_editor(
                 ui.label(font_name).on_hover_text(&edited.font_path);
                 if ui
                     .button("Choose...")
-                    .on_hover_text("Use a font file (TrueType or OpenType) from this computer")
+                    .on_hover_text("Load a TTF / OTF font file")
                     .clicked()
                 {
                     // Opening a file dialog is an application command.
@@ -867,8 +859,8 @@ fn opacity_and_reaction_editor(
     has_audio_input_above: bool,
 ) {
     ui.add_space(6.0);
-    ui.label(egui::RichText::new("Animation to Sound").strong())
-        .on_hover_text("Makes this element grow, move, turn or appear with the music");
+    ui.label(egui::RichText::new("Audio Reactivity").strong())
+        .on_hover_text("Scale, move, rotate or fade with the audio");
     ui.separator();
     if !has_audio_input_above {
         audio_input_selector(ui, session, clip);
@@ -894,13 +886,11 @@ fn opacity_and_reaction_editor(
                 });
             ui.end_row();
 
-            ui.label("Pulse")
-                .on_hover_text("How much larger the element gets when the sound is loud");
+            ui.label("Pulse").on_hover_text("Scale up on loud parts");
             percent_slider(ui, &mut edited.scale, 0.0, 100.0);
             ui.end_row();
 
-            ui.label("Fade")
-                .on_hover_text("How much of the element disappears when the sound is quiet");
+            ui.label("Fade").on_hover_text("Fade out on quiet parts");
             percent_slider(ui, &mut edited.fade, 0.0, 100.0);
             ui.end_row();
 
@@ -918,8 +908,7 @@ fn opacity_and_reaction_editor(
             percent_slider(ui, &mut edited.move_y, -50.0, 50.0);
             ui.end_row();
 
-            ui.label("Rotate")
-                .on_hover_text("How far the element turns when the sound is loud");
+            ui.label("Rotate").on_hover_text("Rotate on loud parts");
             ui.add(egui::Slider::new(&mut edited.rotate_degrees, -180.0..=180.0).suffix("\u{b0}"));
             ui.end_row();
 
@@ -1045,7 +1034,7 @@ fn nothing_selected(ui: &mut egui::Ui) {
     ui.label(egui::RichText::new("Nothing selected").color(theme::TEXT_MUTED));
     ui.add_space(4.0);
     ui.label(
-        egui::RichText::new("Select a track in the timeline to edit it here.")
+        egui::RichText::new("Select a clip or track")
             .small()
             .color(theme::TEXT_MUTED),
     );

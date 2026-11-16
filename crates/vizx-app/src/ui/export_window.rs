@@ -44,12 +44,12 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
                     }
                 }
                 Some(Ok(())) => {
-                    ui.label(format!("Done: {total} frames written."));
+                    ui.label(format!("Done ({total} frames)"));
                     ui.add_space(6.0);
                     wants_close = ui.button("Close").clicked();
                 }
                 Some(Err(problem)) => {
-                    ui.colored_label(ui.visuals().error_fg_color, "The video was not written.");
+                    ui.colored_label(ui.visuals().error_fg_color, "Export failed");
                     ui.label(problem);
                     ui.add_space(6.0);
                     wants_close = ui.button("Close").clicked();

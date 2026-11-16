@@ -369,9 +369,9 @@ impl Prerender {
             && let Some(frames) = read_index(&folder, name, &prerender)
         {
             if let Ok(mut state) = prerender.state.lock() {
-                state.stored_bytes = frames
-                    .last()
-                    .map_or(0, |last| last.offset + u64::from(last.length + last.opacity_length));
+                state.stored_bytes = frames.last().map_or(0, |last| {
+                    last.offset + u64::from(last.length + last.opacity_length)
+                });
                 state.frames = frames;
             }
             prerender.is_kept.store(true, Ordering::Relaxed);
@@ -595,9 +595,9 @@ fn read_index(folder: &Path, name: &str, prerender: &Prerender) -> Option<Vec<Fr
             opacity_length: u32::from_le_bytes(record[12..16].try_into().unwrap_or_default()),
         })
         .collect();
-    let needed = frames
-        .last()
-        .map_or(0, |last| last.offset + u64::from(last.length + last.opacity_length));
+    let needed = frames.last().map_or(0, |last| {
+        last.offset + u64::from(last.length + last.opacity_length)
+    });
     let file_length = fs::metadata(&prerender.frame_file_path).ok()?.len();
     if file_length < needed {
         return None;
@@ -624,10 +624,15 @@ fn trim_cache(folder: &Path) {
     let mut kept: Vec<(std::time::SystemTime, u64, String)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        let Some(stem) = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()) else {
+        let Some(stem) = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+        else {
             continue;
         };
-        let extension = path.extension().map(|extension| extension.to_string_lossy().into_owned());
+        let extension = path
+            .extension()
+            .map(|extension| extension.to_string_lossy().into_owned());
         let Ok(metadata) = entry.metadata() else {
             continue;
         };

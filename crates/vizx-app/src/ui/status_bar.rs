@@ -13,7 +13,7 @@ pub fn show(ui: &mut egui::Ui, app: &VizxApp) {
 
     let file_location = match app.session.file_path() {
         Some(path) => path.display().to_string(),
-        None => "Not saved to a file yet".to_owned(),
+        None => "Not saved".to_owned(),
     };
 
     ui.horizontal(|ui| {
@@ -40,13 +40,13 @@ pub fn show(ui: &mut egui::Ui, app: &VizxApp) {
                     format!("Pre-render ready ({megabytes:.0} MB)")
                 };
                 ui.label(muted(&text)).on_hover_text(format!(
-                    "{} of {} frames pre-rendered, using {megabytes:.0} MB of temporary disk space",
+                    "Pre-render: {} / {} frames, {megabytes:.0} MB on disk",
                     progress.finished_frames, progress.total_frames
                 ));
             }
             ui.separator();
             ui.label(muted(&app.graphics_summary))
-                .on_hover_text("Graphics backend and adapter selected by wgpu");
+                .on_hover_text("Graphics backend / GPU");
             ui.separator();
             ui.label(muted(&format!(
                 "{} x {} @ {:.2} fps",

@@ -33,7 +33,7 @@ fn file_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
                 let button = ui
                     .add_enabled(path.is_file(), egui::Button::new(name))
                     .on_hover_text(path.display().to_string())
-                    .on_disabled_hover_text("This file no longer exists");
+                    .on_disabled_hover_text("File not found");
                 if button.clicked() {
                     app.request(AppCommand::OpenRecent(index));
                 }

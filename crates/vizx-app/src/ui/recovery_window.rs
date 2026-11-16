@@ -18,7 +18,7 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .show(ctx, |ui| {
-            ui.label("VizX did not close properly last time. Your work was autosaved:");
+            ui.label("VizX didn't shut down properly. Autosaved projects:");
             ui.add_space(6.0);
             egui::Grid::new("recoveries")
                 .num_columns(3)
@@ -45,7 +45,7 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
                         if ui
                             .add_enabled(can_recover, egui::Button::new("Recover"))
                             .on_disabled_hover_text(
-                                "Save the open project first; recovering replaces it",
+                                "Save the current project first (it will be replaced)",
                             )
                             .clicked()
                         {
@@ -53,7 +53,7 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
                         }
                         if ui
                             .button("Discard")
-                            .on_hover_text("Delete this autosaved copy")
+                            .on_hover_text("Delete the autosave")
                             .clicked()
                         {
                             chosen = Some((index, false));

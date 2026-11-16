@@ -380,11 +380,13 @@ tracked again at that tempo (`BeatAnalysis::beats_at_tempo`, a few
 milliseconds, from the kept change envelope); "Auto" goes back.
 **Beats drawn by hand.** An audio file can use beats placed by hand
 instead (`MediaSource::manual_beats`, seconds in the file, saved with the
-project). In the Properties panel of an audio clip, "Edit These Beats"
-starts from a copy of the found ones and "Draw My Own" from none; "Back to
-Automatic" forgets them. With the clip selected, a strip along its bottom
-on the timeline adds a beat where it is clicked and removes one that is
-clicked on, and B places a beat at the playhead (tapping along while the
+project). In the Properties panel of an audio clip, "Edit Beats" starts
+from a copy of the found ones and "Start Empty" from none; "Use Detected"
+forgets them. With the clip selected, a strip along its bottom on the
+timeline adds a beat where it is clicked, removes one that is clicked on
+and moves one that is dragged (it stays between its neighbours,
+`move_manual_beat`), and B places a beat at the moment heard, which is the
+playhead minus the sound card's delay (`Transport::heard_seconds`; tapping along while the
 song plays). Hand-placed beats have full strength, their tempo is worked
 out from the typical gap between them (`vizx_core::tempo_of`), and they
 replace the found ones everywhere: animations, visualizer plugins and the

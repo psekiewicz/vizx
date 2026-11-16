@@ -14,7 +14,7 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
             ui.heading(vizx_core::APP_NAME);
             ui.label(format!("Version {}", vizx_core::APP_VERSION));
             ui.add_space(6.0);
-            ui.label("Music-driven audiovisual composition editor.");
+            ui.label("Music visualizer and lyric video editor");
             ui.add_space(6.0);
             ui.label(format!("Graphics: {}", app.graphics_summary));
         });

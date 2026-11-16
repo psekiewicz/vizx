@@ -113,7 +113,7 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
 
 /// The words, their look and how they are timed.
 fn setup_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
-    ui.label("One subtitle per line. A | in a line splits it in two rows.");
+    ui.label("One subtitle per line. Use | for a line break.");
     egui::ScrollArea::vertical()
         .max_height(200.0)
         .show(ui, |ui| {
@@ -162,11 +162,11 @@ fn setup_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
         if let Some(track_id) = app.lyrics.target
             && ui
                 .button("Restyle Layer")
-                .on_hover_text("Give every text on this layer the look above")
+                .on_hover_text("Apply this style to every text on the layer")
                 .clicked()
         {
             app.lyrics.message = match app.session.restyle_lyrics(track_id, &app.lyrics.style) {
-                Ok(count) => format!("Restyled {count} texts"),
+                Ok(count) => format!("{count} texts updated"),
                 Err(problem) => format!("Could not restyle: {problem}"),
             };
         }
@@ -178,11 +178,11 @@ fn setup_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
     ui.horizontal(|ui| {
         let window = &mut app.lyrics;
         ui.selectable_value(&mut window.timing, Timing::Tap, "Tap Along")
-            .on_hover_text("Play the song and press Enter as each line starts");
+            .on_hover_text("Press Enter at each line while the song plays");
         ui.selectable_value(&mut window.timing, Timing::Spread, "Spread")
-            .on_hover_text("Spread the lines over a stretch of time");
+            .on_hover_text("Spread the lines evenly over a time range");
         ui.selectable_value(&mut window.timing, Timing::Beats, "On Beats")
-            .on_hover_text("One line every few beats");
+            .on_hover_text("One line every N beats");
     });
 
     let lines = vizx_core::split_lyrics(&app.lyrics.text);
@@ -213,7 +213,7 @@ fn setup_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
                 ui.add(seconds_field(&mut window.spread_to, project_seconds));
                 if ui
                     .small_button("Playhead")
-                    .on_hover_text("Start at the playhead")
+                    .on_hover_text("Start at playhead")
                     .clicked()
                 {
                     window.spread_from = app.session.playhead_seconds();
@@ -253,8 +253,7 @@ fn setup_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
                 );
                 if timed.is_empty() {
                     app.lyrics.message =
-                        "No beats found there; add audio first, or wait until it is loaded"
-                            .to_owned();
+                        "No beats in this range (no audio, or still loading)".to_owned();
                 } else {
                     add_lines(app, &timed);
                 }
@@ -265,7 +264,7 @@ fn setup_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
     ui.add_space(6.0);
     if ui
         .button("Import .lrc or .srt File...")
-        .on_hover_text("Lyrics or subtitles that already carry their times")
+        .on_hover_text("Timed lyrics (LRC) or subtitles (SRT)")
         .clicked()
     {
         app.request(AppCommand::ImportLyricsFile);
@@ -341,7 +340,7 @@ fn style_editor(ui: &mut egui::Ui, style: &mut LyricsStyle) {
                         .speed(0.01)
                         .max_decimals(2),
                 )
-                .on_hover_text("Height of the middle of a line: 0 is the top, 1 the bottom");
+                .on_hover_text("Vertical position (0 = top, 1 = bottom)");
             });
             ui.end_row();
 
@@ -353,12 +352,12 @@ fn style_editor(ui: &mut egui::Ui, style: &mut LyricsStyle) {
                     .max_decimals(2)
                     .suffix(" s"),
             )
-            .on_hover_text("How long a line takes to appear and to disappear");
+            .on_hover_text("Fade in / out duration");
             ui.end_row();
 
             ui.label("Pop in");
             ui.checkbox(&mut style.pop, "")
-                .on_hover_text("Lines also grow into their size as they fade in");
+                .on_hover_text("Scale up while fading in");
             ui.end_row();
         });
 }
@@ -390,7 +389,7 @@ fn tapping_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
             ui.label(egui::RichText::new(line).size(18.0).strong());
         }
         None => {
-            ui.label("All lines are placed. Press Enter or Backspace to end the last one.");
+            ui.label("All lines placed. Enter or Backspace ends the last one.");
         }
     }
     ui.add_space(6.0);
@@ -441,7 +440,7 @@ fn start_tapping(app: &mut VizxApp, lines: Vec<String>) {
         next_line: 0,
         open_clip: None,
     });
-    app.lyrics.message = "Tapping: press Enter as each line starts".to_owned();
+    app.lyrics.message = "Tapping: Enter = next line".to_owned();
     if !app.is_playing() {
         app.request(AppCommand::TogglePlayback);
     }
@@ -505,7 +504,7 @@ fn stop_tapping(app: &mut VizxApp) {
         app.request(AppCommand::TogglePlayback);
     }
     app.lyrics.message = format!(
-        "Placed {} of {} lines. Move or trim them on the timeline; edit one in Properties.",
+        "Placed {} of {} lines",
         tapping.next_line,
         tapping.lines.len()
     );

@@ -95,9 +95,7 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
                         .find(|plugin| selected.as_deref() == Some(&plugin.reference));
                     let add_button = ui
                         .add_enabled(chosen.is_some(), egui::Button::new("Add to Project"))
-                        .on_hover_text(
-                            "Adds the selected visualizer to the timeline (or double-click it)",
-                        );
+                        .on_hover_text("Enter or double-click");
                     if add_button.clicked()
                         && let Some(plugin) = chosen
                     {

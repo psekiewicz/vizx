@@ -1183,7 +1183,7 @@ fn show_markers(
                 Sense::click_and_drag(),
             )
             .on_hover_text(format!(
-                "{}: click to go there, drag to move, right-click to rename",
+                "{} (drag to move, right-click to rename)",
                 marker.name
             ));
         if response.clicked() {
@@ -1470,7 +1470,7 @@ fn show_corner(ui: &mut egui::Ui, view: &mut TimelineView, scale: &TimeScale, co
     );
     let response = ui
         .put(button_rect, button)
-        .on_hover_text("Fit the whole project to the panel width.\nCtrl + mouse wheel zooms.");
+        .on_hover_text("Zoom to fit (Ctrl+wheel to zoom)");
     if response.clicked() {
         view.zoom = Zoom::FitProject;
         view.pending_horizontal_scroll = Some(0.0);
