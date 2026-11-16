@@ -16,11 +16,14 @@ pub struct MediaId(pub(crate) u64);
 pub struct MediaSource {
     pub id: MediaId,
     /// Location of the file, as text so it is stored identically on every
-    /// operating system.
-    ///
-    /// For now this is the path the file was imported from. Storing it
-    /// relative to the project file, and re-linking moved files, is planned.
+    /// operating system: the full path it was imported from.
     pub path: String,
+    /// The same location relative to the folder of the project file, with
+    /// `/` between folders. Written when the project is saved; when the full
+    /// path no longer exists on opening (the project was moved together with
+    /// its files, or opened on another computer), this one is tried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_path: Option<String>,
     pub content: MediaContent,
     /// For an audio file: beats placed by hand, in seconds from the start
     /// of the file and in order. They replace the beats VizX finds by

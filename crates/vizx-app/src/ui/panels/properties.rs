@@ -122,6 +122,16 @@ fn track_properties(
             // Cloned, so the session is free to be modified by the editor.
             let text = source.text().cloned().map(|text| (source.id, text));
             ui.label(source.display_name()).on_hover_text(&source.path);
+            let is_missing = session.project().missing_media().contains(&source.id);
+            if is_missing {
+                let media_id = source.id;
+                ui.horizontal(|ui| {
+                    ui.colored_label(theme::ERROR, "File not found");
+                    if ui.button("Locate...").clicked() {
+                        *requested_command = Some(AppCommand::LocateMedia(media_id));
+                    }
+                });
+            }
             ui.label(
                 egui::RichText::new(details)
                     .small()

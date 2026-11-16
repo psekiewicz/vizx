@@ -75,4 +75,6 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 /// - 19: timeline `markers`, muted audio tracks (`muted`), a clip's
 ///   `sharp_pixels` and sprite sheet rows of their own length
 ///   (`row_lengths`). Older files load without them.
-pub const CURRENT_FORMAT_VERSION: u32 = 19;
+/// - 20: a media file's `relative_path` (relative to the project file), used
+///   when its full path is gone. Older files load without it.
+pub const CURRENT_FORMAT_VERSION: u32 = 20;

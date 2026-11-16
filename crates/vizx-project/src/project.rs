@@ -33,7 +33,7 @@ pub struct Project {
     next_track_id: u64,
     /// Files used by the project (the "media library").
     #[serde(default)]
-    media: Vec<MediaSource>,
+    pub(crate) media: Vec<MediaSource>,
     #[serde(default)]
     next_media_id: u64,
     #[serde(default)]
@@ -615,6 +615,7 @@ impl Project {
         self.next_media_id += 1;
         self.media.push(MediaSource {
             id: media_id,
+            relative_path: None,
             path: path.into(),
             content: MediaContent::Audio(properties),
             manual_beats: None,
@@ -683,6 +684,7 @@ impl Project {
         self.next_media_id += 1;
         self.media.push(MediaSource {
             id: media_id,
+            relative_path: None,
             path: path.into(),
             content: MediaContent::Audio(properties),
             manual_beats: None,
@@ -850,6 +852,7 @@ impl Project {
         self.next_media_id += 1;
         self.media.push(MediaSource {
             id: media_id,
+            relative_path: None,
             path,
             content,
             manual_beats: None,
@@ -891,6 +894,7 @@ impl Project {
         self.next_media_id += 1;
         self.media.push(MediaSource {
             id: media_id,
+            relative_path: None,
             path,
             content,
             manual_beats: None,
@@ -1024,6 +1028,7 @@ impl Project {
         self.next_media_id += 1;
         self.media.push(MediaSource {
             id: media_id,
+            relative_path: None,
             path: String::new(),
             content: MediaContent::Text(properties.sanitized()),
             manual_beats: None,

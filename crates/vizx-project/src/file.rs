@@ -81,14 +81,147 @@ impl Project {
         Ok(project)
     }
 
+    /// Writes the project to `path`. Every file it uses is also noted
+    /// relative to the project's folder, so the project still finds its
+    /// files after being moved together with them.
     pub fn save_to_file(&self, path: &Path) -> Result<(), ProjectFileError> {
-        fs::write(path, self.to_vzx_string()?)?;
+        let mut stored = self.clone();
+        if let Some(folder) = path.parent() {
+            for media in &mut stored.media {
+                media.relative_path = relative_location(folder, Path::new(&media.path));
+            }
+        }
+        fs::write(path, stored.to_vzx_string()?)?;
         Ok(())
     }
 
+    /// Reads the project in `path`. A file that is no longer at its full
+    /// path, but is at its place relative to the project, is used from
+    /// there.
     pub fn load_from_file(path: &Path) -> Result<Self, ProjectFileError> {
-        Self::from_vzx_str(&fs::read_to_string(path)?)
+        let mut project = Self::from_vzx_str(&fs::read_to_string(path)?)?;
+        if let Some(folder) = path.parent() {
+            for media in &mut project.media {
+                if let Some(found) = moved_location(folder, &media.path, media.relative_path.as_deref()) {
+                    media.path = found;
+                }
+            }
+        }
+        Ok(project)
     }
+
+    /// Points every media file whose file is missing and that lies in
+    /// `old_folder` (the folder of a file the user just located again) to
+    /// the same name in `new_folder`, if a file is there. Returns how many
+    /// were found this way.
+    pub fn relink_missing_media_in_folder(&mut self, old_folder: &Path, new_folder: &Path) -> usize {
+        let mut found = 0;
+        for media in &mut self.media {
+            let old_path = Path::new(&media.path);
+            if !is_file_reference(&media.path) || old_path.exists() || old_path.parent() != Some(old_folder) {
+                continue;
+            }
+            if let Some(name) = old_path.file_name() {
+                let candidate = new_folder.join(name);
+                if candidate.exists() {
+                    media.path = candidate.to_string_lossy().into_owned();
+                    found += 1;
+                }
+            }
+        }
+        found
+    }
+
+    /// The media sources whose file (or plugin folder) is not where the
+    /// project says.
+    pub fn missing_media(&self) -> Vec<crate::MediaId> {
+        self.media
+            .iter()
+            .filter(|media| is_file_reference(&media.path) && !Path::new(&media.path).exists())
+            .map(|media| media.id)
+            .collect()
+    }
+
+    /// Changes the file of one media source (after the user located a
+    /// moved file). Returns `true` if it changed.
+    pub fn relink_media(&mut self, id: crate::MediaId, path: &Path) -> bool {
+        match self.media.iter_mut().find(|media| media.id == id) {
+            Some(media) => {
+                let path = path.to_string_lossy().into_owned();
+                let has_changed = media.path != path;
+                media.path = path;
+                has_changed
+            }
+            None => false,
+        }
+    }
+}
+
+/// Whether a stored path names a file on disk (rather than something that
+/// ships with VizX, like `bundled-presets:/...`, or nothing, like a text).
+fn is_file_reference(path: &str) -> bool {
+    !path.is_empty() && !path.starts_with("bundled-")
+}
+
+/// `file` relative to `folder`, with `/` between parts; `None` if there is
+/// no such path (another drive) or `file` is not a file reference.
+fn relative_location(folder: &Path, file: &Path) -> Option<String> {
+    use std::path::Component;
+    if !is_file_reference(&file.to_string_lossy()) || !file.is_absolute() {
+        return None;
+    }
+    let folder: Vec<Component> = folder.components().collect();
+    let file: Vec<Component> = file.components().collect();
+    // Different drives (C: and D:) share no path.
+    if folder.first() != file.first() {
+        return None;
+    }
+    let common = folder
+        .iter()
+        .zip(&file)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut parts: Vec<String> = vec!["..".to_owned(); folder.len() - common];
+    parts.extend(
+        file[common..]
+            .iter()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned()),
+    );
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// Where a moved file is now: `None` if it is still at `path` (or cannot
+/// be found anywhere). Tried in order: its place relative to the project,
+/// then its name in the project's folder.
+fn moved_location(folder: &Path, path: &str, relative: Option<&str>) -> Option<String> {
+    if !is_file_reference(path) || Path::new(path).exists() {
+        return None;
+    }
+    let by_relative = relative.map(|relative| folder.join(relative));
+    let by_name = Path::new(path)
+        .file_name()
+        .map(|name| folder.join(name));
+    by_relative
+        .into_iter()
+        .chain(by_name)
+        .find(|candidate| candidate.exists())
+        .map(|found| normalized(&found).to_string_lossy().into_owned())
+}
+
+/// `path` with `.` and `..` parts worked out, without touching the disk.
+fn normalized(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut result = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                result.pop();
+            }
+            other => result.push(other.as_os_str()),
+        }
+    }
+    result
 }
 
 /// Returns `path` with the `.vzx` extension, appending it if it is missing.
@@ -119,6 +252,45 @@ struct FormatHeader {
 mod tests {
     use super::*;
     use crate::TrackKind;
+
+    #[test]
+    fn a_project_moved_with_its_files_finds_them_again() {
+        let root = std::env::temp_dir().join(format!("vizx-moved-project-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let before = root.join("before");
+        fs::create_dir_all(before.join("music")).unwrap();
+        fs::write(before.join("music").join("song.wav"), b"x").unwrap();
+        fs::write(before.join("cover.png"), b"x").unwrap();
+
+        let mut project = Project::new();
+        let audio = crate::AudioProperties {
+            duration_milliseconds: 1000,
+            sample_rate: 44_100,
+            channel_count: 2,
+        };
+        let song = before.join("music").join("song.wav");
+        let (song_id, _) = project.import_audio(song.to_string_lossy(), audio);
+        project.save_to_file(&before.join("song.vzx")).unwrap();
+
+        // The whole folder moves elsewhere.
+        let after = root.join("after");
+        fs::rename(&before, &after).unwrap();
+        let mut moved = Project::load_from_file(&after.join("song.vzx")).unwrap();
+        let found = PathBuf::from(&moved.media_source(song_id).unwrap().path);
+        assert_eq!(found, after.join("music").join("song.wav"));
+
+        // A file located again by hand brings its neighbours along.
+        moved.media[0].path = before.join("cover.png").to_string_lossy().into_owned();
+        moved.media[0].relative_path = None;
+        assert_eq!(moved.relink_missing_media_in_folder(&before, &after), 1);
+        assert_eq!(PathBuf::from(&moved.media[0].path), after.join("cover.png"));
+
+        assert_eq!(
+            relative_location(Path::new("C:/a/b"), Path::new("C:/a/c/d.wav")).as_deref(),
+            Some("../c/d.wav")
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn project_round_trips_through_vzx_text() {

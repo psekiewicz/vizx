@@ -19,6 +19,8 @@ pub const ACCENT: Color32 = Color32::from_rgb(0, 168, 150);
 pub const PLAYHEAD: Color32 = Color32::from_rgb(255, 92, 92);
 /// Secondary text such as hints and placeholders.
 pub const TEXT_MUTED: Color32 = Color32::from_rgb(128, 132, 142);
+/// Text that reports a problem.
+pub const ERROR: Color32 = Color32::from_rgb(235, 110, 100);
 
 const CORNER_RADIUS: CornerRadius = CornerRadius::same(2);
 

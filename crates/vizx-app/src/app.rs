@@ -61,6 +61,8 @@ pub enum AppCommand {
     SeparateStems,
     /// Pick a font file for the text on the selected layer.
     ChooseTextFont,
+    /// Point a media source whose file was moved to where it is now.
+    LocateMedia(vizx_project::MediaId),
     /// Cut the selected clip in two at the playhead.
     SplitClip,
     /// Put a copy of the selected clip right after it.
@@ -331,6 +333,50 @@ impl VizxApp {
         self.status_message = match self.session.set_text(media_id, text) {
             Ok(()) => format!("Using font {}", path.display()),
             Err(problem) => format!("Could not use that font: {problem}"),
+        };
+    }
+
+    /// Lets the user show where a moved file is now. Other missing files
+    /// from the same folder are looked for next to it.
+    fn locate_media(&mut self, media_id: vizx_project::MediaId, frame: &eframe::Frame) {
+        let Some(source) = self.session.project().media_source(media_id) else {
+            return;
+        };
+        let old_path = PathBuf::from(&source.path);
+        let is_folder = source.is_visualizer_plugin();
+        let name = source.file_name().to_owned();
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(format!("Locate {name}"))
+            .set_parent(frame);
+        if let Some(extension) = old_path.extension().filter(|_| !is_folder) {
+            let extension = extension.to_string_lossy().into_owned();
+            dialog = dialog.add_filter(extension.to_uppercase(), &[extension.as_str()]);
+        }
+        let picked = if is_folder {
+            dialog.pick_folder()
+        } else {
+            dialog.pick_file()
+        };
+        let Some(new_path) = picked else {
+            return; // dialog cancelled
+        };
+
+        let mut others = 0;
+        self.session.edit_project(|project| {
+            let changed = project.relink_media(media_id, &new_path);
+            if let (Some(old_folder), Some(new_folder)) = (old_path.parent(), new_path.parent()) {
+                others = project.relink_missing_media_in_folder(old_folder, new_folder);
+            }
+            changed || others > 0
+        });
+        let still_missing = self.session.project().missing_media().len();
+        self.status_message = match (others, still_missing) {
+            (0, 0) => format!("Found {name}"),
+            (0, missing) => format!("Found {name}. {missing} file(s) still missing"),
+            (others, 0) => format!("Found {name} and {others} more in the same folder"),
+            (others, missing) => format!(
+                "Found {name} and {others} more in the same folder. {missing} file(s) still missing"
+            ),
         };
     }
 
@@ -685,6 +731,7 @@ impl VizxApp {
             AppCommand::ImportLyricsFile => self.import_lyrics_file(frame),
             AppCommand::SeparateStems => self.separate_stems(ctx),
             AppCommand::ChooseTextFont => self.choose_text_font(frame),
+            AppCommand::LocateMedia(media_id) => self.locate_media(media_id, frame),
             AppCommand::SplitClip => {
                 self.status_message = if self.session.split_selected_clip() {
                     "Clip split at the playhead".to_owned()
@@ -769,7 +816,15 @@ impl VizxApp {
                 self.forget_autosave();
                 self.session = session;
                 self.remember_recent_project(path);
-                self.status_message = format!("Opened {}", path.display());
+                let missing = self.session.project().missing_media().len();
+                self.status_message = if missing == 0 {
+                    format!("Opened {}", path.display())
+                } else {
+                    format!(
+                        "Opened {}. {missing} file(s) not found - select the clip and click Locate in Properties",
+                        path.display()
+                    )
+                };
             }
             Err(error) => {
                 self.status_message = format!("Could not open {}: {error}", path.display());
