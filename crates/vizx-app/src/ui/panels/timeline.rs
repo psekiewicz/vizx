@@ -381,7 +381,6 @@ fn show_lanes(
         let mut clicked_clip: Option<(ClipId, ClipClick)> = None;
         // Where each clip is drawn, for selecting with a rectangle.
         let mut clip_rects: Vec<(ClipId, Rect)> = Vec::new();
-        let is_group = session.selected_clip_ids().len() > 1;
         let mut edit: Option<(ClipId, ClipGrab, u64)> = None;
         // The track a moved clip was dragged onto, if it is another one.
         let mut new_track: Option<(ClipId, TrackId)> = None;
@@ -629,7 +628,6 @@ fn show_lanes(
                             .index_at(pointer.y - content_rect.top())
                             .and_then(|index| session.project().tracks().get(index));
                         if grab == ClipGrab::Move
-                            && !(is_group && is_selected)
                             && let Some(target_track) = track_under_pointer
                             && target_track.id != track.id
                             && target_track.kind == track.kind
@@ -861,7 +859,13 @@ fn show_lanes(
             ui.data_mut(|data| data.remove::<egui::Pos2>(marquee_id));
         }
         if let Some((clip_id, track_id)) = new_track {
-            session.edit_project(|project| project.move_clip_to_track(clip_id, track_id));
+            let moves_group = session.selected_clip_ids().len() > 1
+                && session.selected_clip_ids().contains(&clip_id);
+            if moves_group {
+                session.move_selected_clips_to_track(clip_id, track_id);
+            } else {
+                session.edit_project(|project| project.move_clip_to_track(clip_id, track_id));
+            }
         }
         if let Some((clip_id, grab, target)) = edit {
             let moves_group = grab == ClipGrab::Move

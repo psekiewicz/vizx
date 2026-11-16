@@ -583,8 +583,11 @@ for every step is expensive.
   right-click to rename or delete. Ctrl+Left/Right jump between them.
 - **Several clips** can be selected: Ctrl+click, a rectangle dragged over
   empty lanes, or Ctrl+A. The session keeps them next to the main
-  selection (`selected_clip_ids`); dragging one moves all, Delete removes
-  all, and copy/paste keeps their distances.
+  selection (`selected_clip_ids`); dragging one moves all, in time and up
+  or down (`move_selected_clips_to_track`: clips of the dragged clip's kind
+  shift by the same number of tracks, or none moves if one would fall off
+  the first or last track), Delete removes all, and copy/paste keeps their
+  distances.
 - **Thumbnails** on visual clips (`vizx_core::make_thumbnail`,
   `thumbnails.rs`): the image, the first frame of an animation or a video
   (through FFmpeg) or the text, made once in the background and repeated

@@ -404,6 +404,55 @@ impl EditorSession {
         true
     }
 
+    /// Moves the selected clips up or down together, so that `anchor` (the
+    /// one being dragged) lands on `target_track`. Every selected clip on a
+    /// track of the same kind as the anchor's moves by the same number of
+    /// tracks of that kind; clips on tracks of another kind stay where they
+    /// are. Nothing moves if any clip would go past the first or last track
+    /// of its kind. Returns `true` if anything moved.
+    pub fn move_selected_clips_to_track(&mut self, anchor: ClipId, target_track: TrackId) -> bool {
+        let tracks = self.project.tracks();
+        let Some((anchor_track, _)) = self.project.clip(anchor) else {
+            return false;
+        };
+        let kind = anchor_track.kind;
+        let same_kind: Vec<TrackId> = tracks
+            .iter()
+            .filter(|track| track.kind == kind)
+            .map(|track| track.id)
+            .collect();
+        let position = |id: TrackId| same_kind.iter().position(|track| *track == id);
+        let (Some(from), Some(to)) = (position(anchor_track.id), position(target_track)) else {
+            return false;
+        };
+        let shift = to as i64 - from as i64;
+        if shift == 0 {
+            return false;
+        }
+        let mut moves = Vec::new();
+        for id in self.selected_clip_ids() {
+            let Some((track, _)) = self.project.clip(id) else {
+                continue;
+            };
+            if track.kind != kind {
+                continue;
+            }
+            let Some(index) = position(track.id) else {
+                continue;
+            };
+            let new_index = index as i64 + shift;
+            if new_index < 0 || new_index >= same_kind.len() as i64 {
+                return false;
+            }
+            moves.push((id, same_kind[new_index as usize]));
+        }
+        for (id, track) in moves {
+            self.project.move_clip_to_track(id, track);
+        }
+        self.has_unsaved_changes = true;
+        true
+    }
+
     /// The selected track, or the track of the selected clip, if it still
     /// exists.
     pub fn selected_track(&self) -> Option<&Track> {
@@ -1217,6 +1266,41 @@ mod tests {
         // Without a region, the whole project loops.
         assert!(session.toggle_looping());
         assert_eq!(session.loop_region().unwrap().0, 0.0);
+    }
+
+    #[test]
+    fn selected_clips_move_to_other_tracks_together() {
+        let mut session = EditorSession::new_untitled();
+        session.add_text().unwrap();
+        session.add_text().unwrap();
+        session.add_track(TrackKind::Visual);
+        let visual: Vec<TrackId> = session
+            .project()
+            .tracks()
+            .iter()
+            .filter(|track| track.kind == TrackKind::Visual)
+            .map(|track| track.id)
+            .collect();
+        assert_eq!(visual.len(), 3);
+        let clip_on = |session: &EditorSession, track: TrackId| {
+            session.project().track(track).unwrap().clips.first().map(|clip| clip.id)
+        };
+        let (a, b) = (
+            clip_on(&session, visual[1]).unwrap(),
+            clip_on(&session, visual[2]).unwrap(),
+        );
+        let track_of = |session: &EditorSession, id| session.project().clip(id).unwrap().0.id;
+
+        session.select_clips(&[a, b]);
+        // Dragging the lower clip up one track takes the other one along.
+        assert!(session.move_selected_clips_to_track(b, visual[1]));
+        assert_eq!(
+            (track_of(&session, a), track_of(&session, b)),
+            (visual[0], visual[1])
+        );
+        // The top clip cannot go higher, so nothing moves.
+        assert!(!session.move_selected_clips_to_track(b, visual[0]));
+        assert_eq!(track_of(&session, a), visual[0]);
     }
 
     #[test]
