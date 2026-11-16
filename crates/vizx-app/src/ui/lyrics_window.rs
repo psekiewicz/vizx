@@ -50,6 +50,7 @@ pub struct LyricsWindow {
     pub(crate) message: String,
     /// Index into `RECOGNITION_LANGUAGES` for recognizing the lyrics.
     recognition_language: usize,
+    recognition_quality: vizx_core::RecognitionQuality,
 }
 
 impl Default for LyricsWindow {
@@ -67,6 +68,7 @@ impl Default for LyricsWindow {
             tapping: None,
             message: String::new(),
             recognition_language: 0,
+            recognition_quality: vizx_core::RecognitionQuality::default(),
         }
     }
 }
@@ -125,6 +127,17 @@ fn recognition_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
             })
             .response
             .on_hover_text("Language of the song");
+        egui::ComboBox::from_id_salt("recognition_quality")
+            .selected_text(window.recognition_quality.label())
+            .width(80.0)
+            .show_ui(ui, |ui| {
+                for quality in vizx_core::RecognitionQuality::ALL {
+                    ui.selectable_value(&mut window.recognition_quality, quality, quality.label())
+                        .on_hover_text(quality_hint(quality));
+                }
+            })
+            .response
+            .on_hover_text("Faster, or more accurate on unclear singing");
         if ui
             .button("Recognize from Vocals")
             .on_hover_text(
@@ -137,9 +150,27 @@ fn recognition_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
                 .get(app.lyrics.recognition_language)
                 .and_then(|(code, _)| code.map(str::to_owned));
             let ctx = ui.ctx().clone();
-            app.recognize_lyrics(&ctx, language);
+            let quality = app.lyrics.recognition_quality;
+            app.recognize_lyrics(&ctx, language, quality);
         }
     });
+}
+
+/// What a recognition quality means, with its time measured on a 4-core
+/// laptop (i7-4720HQ) for a four-minute song whose vocals were already
+/// separated. Most of the time goes to listening, which all three share.
+fn quality_hint(quality: vizx_core::RecognitionQuality) -> &'static str {
+    match quality {
+        vizx_core::RecognitionQuality::Fast => {
+            "The most likely words, no second tries.\nAbout 3.4 x the song's length."
+        }
+        vizx_core::RecognitionQuality::Balanced => {
+            "Unclear parts are tried again.\nAbout as fast as Fast; slower on very unclear singing."
+        }
+        vizx_core::RecognitionQuality::Accurate => {
+            "Several candidate lines are weighed (beam search).\nAbout 3.5 x the song's length."
+        }
+    }
 }
 
 pub fn show(ctx: &egui::Context, app: &mut VizxApp) {

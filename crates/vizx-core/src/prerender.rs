@@ -545,11 +545,14 @@ impl Prerender {
     }
 }
 
-/// Where pre-rendered frames are kept: `vizx-prerender` in the system's
-/// temporary folder, or in the folder named by [`CACHE_DIR_VARIABLE`].
+/// Where pre-rendered frames are kept: `vizx-prerender` in the folder named
+/// by [`CACHE_DIR_VARIABLE`], in a portable VizX's `data` folder (see
+/// [`crate::portable_data_folder`]), or in the system's temporary folder.
 fn cache_folder() -> PathBuf {
     let folder = std::env::var_os(CACHE_DIR_VARIABLE)
-        .map_or_else(std::env::temp_dir, PathBuf::from)
+        .map(PathBuf::from)
+        .or_else(crate::portable_data_folder)
+        .unwrap_or_else(std::env::temp_dir)
         .join("vizx-prerender");
     let _ = fs::create_dir_all(&folder);
     folder

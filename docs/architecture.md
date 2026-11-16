@@ -558,8 +558,26 @@ with their times (`vizx_core::LyricsRecognition`, in a background thread):
 2. **Words.** `vizx_ml::recognize_lyrics` runs Whisper (whisper.cpp through
    `whisper-rs`) on the vocals at 16 kHz mono, with token timestamps; tokens
    are joined into words (a token starting with a space starts a word).
-   Lines whose vocals are nearly silent (below 8 % of the song's typical
-   vocal loudness) are dropped, since Whisper makes up words on silence.
+   - Only the sung stretches go in (`sung_stretches`, `pack`): louder than
+     8 % of the typical vocal loudness, widened by 0.5 s, gaps under 1.5 s
+     kept, joined with 0.4 s pauses; times are moved back afterwards
+     (`original_time`). Whisper makes up words on silence, and silence
+     costs as much to listen to as singing.
+   - The packed vocals are cut into pieces of at most 28 s at their
+     quietest moment (`window_pieces`), and each piece is decoded on its
+     own. Whisper's encoder costs the same for every 30-second window;
+     left to itself, Whisper starts a new window after each line it finds,
+     which on ANTIVILLAIN meant about 13 windows instead of 9.
+   - Every piece is decoded without the text of the one before
+     (`no_context`): with it, Whisper merged and dropped lines on songs.
+   - A line's times are those of its first and last word (segment times
+     are coarse), and lines of more than 11 words are split at punctuation
+     or the longest pause (`split_long_line`).
+   - **Quality** (`RecognitionQuality`): Fast decodes greedily with no
+     retries, Balanced retries unclear pieces at a higher temperature,
+     Accurate uses a beam search of 5. The encoder dominates, so they cost
+     about the same.
+   Lines whose vocals are nearly silent are dropped as well.
 3. **Timeline.** The lines are moved from the audio's time to the
    timeline's (the clip's start and trimmed beginning), and shown in the
    Lyrics window as LRC text (`recognized_lyrics_to_lrc`), timed "As Timed".
@@ -572,9 +590,51 @@ whisper.cpp), in `models/` next to the executable or at
 `%VIZX_WHISPER_MODEL%`; nothing is downloaded by the build or the app.
 `whisper-rs` builds whisper.cpp from source with CMake (`CMAKE`) and
 generates its bindings with bindgen, which needs libclang
-(`LIBCLANG_PATH`; the `libclang` wheel from PyPI has the DLL). MSVC 2017
-needs `CFLAGS`/`CXXFLAGS` `/D_USE_MATH_DEFINES` for `M_PI`. On the
-development machine all of this is set in cargo's `config.toml`.
+(`LIBCLANG_PATH`; the `libclang` wheel from PyPI has the DLL). With MSVC,
+`CL = "/O2 /D_USE_MATH_DEFINES"` must be set: MSVC 2017 needs the define for
+`M_PI`, and the `cmake` crate leaves `/O2` out of the Release flags it hands
+to CMake on MSVC (flags in `CFLAGS` lose it too), which made whisper.cpp
+about ten times slower. `cl.exe` reads `CL` itself. On the development
+machine all of this is set in cargo's `config.toml`.
+
+**Measured speed** (i7-4720HQ, 4 cores, 8 threads; large-v3-turbo q5_0):
+one 30-second encoder window takes about 83 s (100 s with 4 threads; flash
+attention made it slower). ANTIVILLAIN (251 s, vocals already separated):
+Fast 841 s (3.4 x its length), Accurate 873 s (3.5 x). The words came out
+nearly all right in both; Accurate split lines more finely.
+`cargo run --release -p vizx-ml --example lyrics -- <vocals> [fast|balanced|accurate] [language]`
+measures a file without the window.
+
+### Speed measurements
+
+On the development laptop (i7-4720HQ, Intel HD Graphics 4600), release
+build; `cargo run --release -p vizx-render --example bench_compositor`
+and the plugin/MilkDrop examples reproduce them.
+
+| What | Speed |
+|---|---|
+| Compositor, 3 layers, 960x540 / 1080p | 1.9 / 5.2 ms per frame |
+| ... with light effects (tint, vignette, grain) | 1.9 / 5.7 ms |
+| ... with heavy effects on each (blur + split + glow) | 7.3 / 23.6 ms |
+| ... plain layers plus a heavy effects layer | 3.8 / 14.1 ms |
+| Visualizer plugins, 640x360 | 170 to 380 frames per second |
+| MilkDrop presets, 640x360 | 54 to 190 frames per second |
+| HTDemucs stem separation | about 2.3 x the song's length |
+| Whisper lyrics recognition | about 3.4 x the song's length |
+
+Everything drawn is faster than playback; separation and recognition are
+the slow steps and run once per song (their results are kept).
+
+### Portable prototype
+
+`scripts\package-prototype.ps1` builds the release version and gathers it
+into one folder (default `D:\VizX-prototype`) that runs without cargo or
+environment variables: `vizx.exe`, `ffmpeg.exe`, projectM and GLEW, ONNX
+Runtime, `models\` (hard-linked when on the same drive), the bundled
+`visualizers\` and `presets\`, and an empty `data\`. A `data` folder next
+to the executable switches on portable mode (`portable_data_folder`):
+pre-rendered frames and stems go there instead of the system's temporary
+folder and next to the songs.
 
 ### Long sessions: autosave, recent projects, clipboard, shortcuts
 

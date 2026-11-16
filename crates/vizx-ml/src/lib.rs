@@ -11,7 +11,8 @@
 pub mod transcribe;
 
 pub use transcribe::{
-    RecognizedLine, RecognizedWord, WHISPER_MODEL_VARIABLE, find_whisper_model, recognize_lyrics,
+    RecognitionQuality, RecognizedLine, RecognizedWord, WHISPER_MODEL_VARIABLE, find_whisper_model,
+    recognize_lyrics,
 };
 
 use std::path::{Path, PathBuf};

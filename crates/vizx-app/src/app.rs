@@ -447,7 +447,12 @@ impl VizxApp {
     /// Starts recognizing the words of the song: the selected audio clip,
     /// or the first one of the project. `language` is a code such as "en",
     /// or `None` to detect it.
-    pub fn recognize_lyrics(&mut self, ctx: &egui::Context, language: Option<String>) {
+    pub fn recognize_lyrics(
+        &mut self,
+        ctx: &egui::Context,
+        language: Option<String>,
+        quality: vizx_core::RecognitionQuality,
+    ) {
         if let Some(job) = &self.lyrics_recognition {
             self.lyrics.message = format!("Already recognizing {}", job.song_name());
             return;
@@ -492,6 +497,7 @@ impl VizxApp {
             Path::new(&source.path),
             placement,
             language,
+            quality,
             move || ctx.request_repaint(),
         ) {
             Ok(job) => {

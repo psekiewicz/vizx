@@ -64,6 +64,7 @@ pub use thumbnail::{THUMBNAIL_EDGE, make_thumbnail};
 pub use visualizer_catalog::{
     BUNDLED_VISUALIZER_PREFIX, BundledVisualizer, PluginState, VisualizerCatalog,
 };
+pub use vizx_ml::RecognitionQuality;
 // The plugin description types, so the user interface can show a plugin's
 // parameters without depending on the rendering crate itself.
 pub use vizx_visualizer::{Manifest, ParameterKind, ParameterSpec, ParameterValues};
@@ -76,3 +77,13 @@ pub const APP_NAME: &str = "VizX (Prototype)";
 
 /// Version of the application, taken from the workspace `Cargo.toml`.
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The `data` folder next to the VizX executable, if there is one: a
+/// portable VizX (a folder that can live on any drive) keeps its large
+/// files there, the pre-rendered frames in `vizx-prerender` and the stems
+/// in `stems`, instead of in the system's temporary folder and next to the
+/// songs.
+pub fn portable_data_folder() -> Option<std::path::PathBuf> {
+    let folder = std::env::current_exe().ok()?.parent()?.join("data");
+    folder.is_dir().then_some(folder)
+}

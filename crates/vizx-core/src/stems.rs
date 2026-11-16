@@ -173,14 +173,16 @@ impl Drop for StemJob {
     }
 }
 
-/// The folder a song's stems are written to: next to the song, named after
-/// it (`Song stems` from the model, `Song quick stems` from the built-in
-/// separation), or in the folder [`STEMS_DIR_VARIABLE`] names.
+/// The folder a song's stems are written to, named after it (`Song stems`
+/// from the model, `Song quick stems` from the built-in separation): in the
+/// folder [`STEMS_DIR_VARIABLE`] names, in `stems` of a portable VizX's
+/// `data` folder, or next to the song.
 pub fn stem_folder(song_path: &Path, engine: &StemEngine) -> PathBuf {
     // Stems are large (about 40 MB per stem for four minutes), so they can
     // be sent to another drive.
     let folder = std::env::var_os(STEMS_DIR_VARIABLE)
         .map(PathBuf::from)
+        .or_else(|| crate::portable_data_folder().map(|data| data.join("stems")))
         .unwrap_or_else(|| song_path.parent().unwrap_or(Path::new(".")).to_path_buf());
     let kind = match engine {
         StemEngine::Model(_) => "stems",

@@ -75,6 +75,7 @@ impl LyricsRecognition {
         song_path: &Path,
         placement: SongPlacement,
         language: Option<String>,
+        quality: vizx_ml::RecognitionQuality,
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Result<Self, String> {
         let model = vizx_ml::find_whisper_model()?;
@@ -111,6 +112,7 @@ impl LyricsRecognition {
                     &model,
                     &vocals,
                     language.as_deref(),
+                    quality,
                     &cancel,
                     &report(0.5, 0.5),
                 )?;
