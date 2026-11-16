@@ -1,5 +1,5 @@
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::MilkdropError;
 use crate::ffi::{self, Api};
@@ -98,13 +98,22 @@ impl MilkdropRenderer {
     }
 
     /// Loads a `.milk` preset file and switches to it immediately.
-    pub fn load_preset(&mut self, path: &Path) -> Result<(), MilkdropError> {
+    ///
+    /// Presets that use image textures find them in the preset's own folder
+    /// and the folders above it (up to three levels), and in
+    /// `texture_folders`.
+    pub fn load_preset(
+        &mut self,
+        path: &Path,
+        texture_folders: &[PathBuf],
+    ) -> Result<(), MilkdropError> {
         if !path.is_file() {
             return Err(MilkdropError::new(format!(
                 "preset file not found: {}",
                 path.display()
             )));
         }
+        self.set_texture_folders(path, texture_folders);
         let path_text = CString::new(path.to_string_lossy().as_bytes())
             .map_err(|_| MilkdropError::new("preset path contains a zero byte"))?;
 
@@ -120,6 +129,25 @@ impl MilkdropRenderer {
                 path.display()
             ))),
             None => Ok(()),
+        }
+    }
+
+    fn set_texture_folders(&mut self, preset: &Path, extra: &[PathBuf]) {
+        let folders: Vec<CString> = preset
+            .ancestors()
+            .skip(1)
+            .take(3)
+            .map(Path::to_path_buf)
+            .chain(extra.iter().cloned())
+            .filter(|folder| folder.is_dir())
+            .filter_map(|folder| CString::new(folder.to_string_lossy().as_bytes()).ok())
+            .collect();
+        let pointers: Vec<*const c_char> = folders.iter().map(|folder| folder.as_ptr()).collect();
+        // SAFETY: the instance is valid; `pointers` holds `pointers.len()`
+        // zero-terminated strings, which projectM copies, and which outlive
+        // the call.
+        unsafe {
+            (self.api.set_texture_search_paths)(self.instance, pointers.as_ptr(), pointers.len());
         }
     }
 

@@ -71,6 +71,9 @@ pub struct Api {
     /// is added by the patch in `patches/`. `None` if the loaded library
     /// does not have it.
     pub set_frame_time: Option<unsafe extern "C" fn(*mut ProjectM, c_double)>,
+    /// `projectm_set_texture_search_paths`: folders where presets find their
+    /// image textures.
+    pub set_texture_search_paths: unsafe extern "C" fn(*mut ProjectM, *const *const c_char, usize),
     /// GLEW, the helper library projectM uses on Windows to reach OpenGL.
     /// `None` on systems where projectM does not need it.
     glew: Option<Glew>,
@@ -136,6 +139,7 @@ impl Api {
             pcm_get_max_samples: function!("projectm_pcm_get_max_samples"),
             pcm_add_float: function!("projectm_pcm_add_float"),
             opengl_render_frame: function!("projectm_opengl_render_frame"),
+            set_texture_search_paths: function!("projectm_set_texture_search_paths"),
             // SAFETY: the signature matches the declaration added by the patch.
             set_frame_time: unsafe { library.get(b"projectm_set_frame_time\0") }
                 .ok()

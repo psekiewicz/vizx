@@ -29,8 +29,11 @@ const JPEG_QUALITY: u8 = 80;
 const PROGRESS_INTERVAL: u32 = 15;
 /// How many drawn frames may wait to be compressed.
 const PENDING_FRAME_LIMIT: usize = 4;
-/// Frame files older than this are leftovers of earlier runs.
+/// Unfinished frame files older than this are leftovers of earlier runs.
 const OLD_FRAME_FILE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// Finished frames are kept between runs up to this total size; beyond it,
+/// the ones used least recently are deleted.
+const CACHE_LIMIT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// What draws the frames of a clip.
 #[derive(Clone)]
@@ -79,9 +82,13 @@ impl FrameSource {
         }
     }
     /// A text that is equal exactly when two sources draw the same frames.
+    /// Files are named with their size and modification time, so an edited
+    /// file is rendered again.
     fn description(&self) -> String {
         match self {
-            Self::Milkdrop { preset_path } => preset_path.clone(),
+            Self::Milkdrop { preset_path } => {
+                format!("{preset_path} {}", file_stamp(Path::new(preset_path)))
+            }
             Self::Plugin {
                 folder,
                 parameters,
@@ -91,9 +98,84 @@ impl FrameSource {
                 file,
                 start_offset_seconds,
                 ..
-            } => format!("video {} from {start_offset_seconds:.3}s", file.display()),
+            } => format!(
+                "video {} {} from {start_offset_seconds:.3}s",
+                file.display(),
+                file_stamp(file)
+            ),
         }
     }
+}
+
+/// Size and modification time of a file, as text (empty if unknown).
+fn file_stamp(path: &Path) -> String {
+    fs::metadata(path)
+        .ok()
+        .map(|metadata| {
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |since| since.as_nanos());
+            format!("{}b@{modified}", metadata.len())
+        })
+        .unwrap_or_default()
+}
+
+/// FNV-1a: a small, fast hash that gives the same number in every run
+/// (unlike the standard library's, which is seeded randomly).
+#[derive(Clone, Copy)]
+struct StableHash(u64);
+
+impl StableHash {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn add(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn add_u64(&mut self, value: u64) {
+        self.add(&value.to_le_bytes());
+    }
+}
+
+/// A number that identifies decoded audio across runs: its format, length
+/// and a sample of its values (every value would be slow for a whole song).
+fn audio_fingerprint(audio: &vizx_audio::DecodedAudio) -> u64 {
+    // Keys are compared every frame, so the result for audio that is still
+    // loaded (same address, same length) is remembered.
+    static KNOWN: Mutex<Vec<((usize, usize), u64)>> = Mutex::new(Vec::new());
+    let identity = (std::ptr::from_ref(audio) as usize, audio.samples.len());
+    if let Ok(known) = KNOWN.lock()
+        && let Some((_, fingerprint)) = known.iter().find(|(seen, _)| *seen == identity)
+    {
+        return *fingerprint;
+    }
+    let fingerprint = compute_audio_fingerprint(audio);
+    if let Ok(mut known) = KNOWN.lock() {
+        if known.len() >= 64 {
+            known.remove(0);
+        }
+        known.push((identity, fingerprint));
+    }
+    fingerprint
+}
+
+fn compute_audio_fingerprint(audio: &vizx_audio::DecodedAudio) -> u64 {
+    const STRIDE: usize = 997;
+    let mut hash = StableHash::new();
+    hash.add_u64(u64::from(audio.sample_rate));
+    hash.add_u64(audio.channel_count as u64);
+    hash.add_u64(audio.samples.len() as u64);
+    for sample in audio.samples.iter().step_by(STRIDE) {
+        hash.add(&sample.to_bits().to_le_bytes());
+    }
+    hash.0
 }
 
 /// Everything that determines the frames of one visual clip.
@@ -112,8 +194,7 @@ pub struct PrerenderJob {
     /// sensitivity). 1 leaves it unchanged.
     pub audio_gain: f32,
     /// The beats of that audio, in project time, and its tempo (0 if not
-    /// known). They come from the same audio, so they are not part of the
-    /// key.
+    /// known). They can be set by hand, so they are part of the key.
     pub beats: Arc<Vec<Beat>>,
     pub tempo_bpm: f64,
 }
@@ -134,18 +215,35 @@ impl PrerenderJob {
             self.start_seconds
         );
         for source in &self.audio_sources {
-            // The address of the shared samples identifies the audio file
-            // for as long as it stays loaded.
+            // The audio itself is identified, not the file it came from, so
+            // the key stays the same in the next run of VizX.
             key.push_str(&format!(
-                "|audio {:p} at {:.3}s from {:.3}s for {:?}",
-                Arc::as_ptr(&source.audio),
+                "|audio {:016x} at {:.3}s from {:.3}s for {:?}",
+                audio_fingerprint(&source.audio),
                 source.start_seconds,
                 source.offset_seconds,
                 source.duration_seconds
             ));
         }
         key.push_str(&format!("|gain {}", self.audio_gain));
+        // Only plugins see the beats; MilkDrop finds its own.
+        if matches!(self.source, FrameSource::Plugin { .. }) {
+            let mut beats = StableHash::new();
+            for beat in self.beats.iter() {
+                beats.add_u64(beat.seconds.to_bits());
+                beats.add_u64(u64::from(beat.strength.to_bits()));
+            }
+            key.push_str(&format!("|beats {:016x} at {}", beats.0, self.tempo_bpm));
+        }
         key
+    }
+
+    /// Name of the stored frames of this job in the cache folder: the same
+    /// in every run for the same key.
+    fn cache_name(&self) -> String {
+        let mut hash = StableHash::new();
+        hash.add(self.key().as_bytes());
+        format!("{:016x}", hash.0)
     }
 }
 
@@ -217,24 +315,71 @@ pub struct Prerender {
     frame_file_path: PathBuf,
     /// Opened the first time a frame is read, then kept open.
     frame_reader: Mutex<Option<File>>,
+    /// The name in the cache folder, while this pre-render owns it.
+    cache_name: Option<String>,
+    /// Set once all frames are stored together with their index, so the
+    /// next run of VizX can use them: then the file is kept.
+    is_kept: Arc<AtomicBool>,
 }
+
+/// Cache names of the pre-renders currently writing or reading their files,
+/// so two of them never write the same file.
+static CACHE_NAMES_IN_USE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 impl Prerender {
     /// Starts rendering `job` in the background. `on_progress` runs on a
     /// background thread from time to time and when rendering ends; the UI
     /// uses it to ask for a repaint.
+    ///
+    /// Frames rendered completely before, also in an earlier run of VizX,
+    /// are used straight away from the cache folder.
     pub fn start(job: PrerenderJob, on_progress: impl Fn() + Send + Sync + 'static) -> Self {
+        let key = job.key();
+        let folder = cache_folder();
+        let wanted_name = job.cache_name();
+        let cache_name = CACHE_NAMES_IN_USE.lock().ok().and_then(|mut names| {
+            if names.contains(&wanted_name) {
+                None
+            } else {
+                names.push(wanted_name.clone());
+                Some(wanted_name)
+            }
+        });
+        let frame_file_path = match &cache_name {
+            Some(name) => folder.join(format!("{name}.frames")),
+            None => unique_frame_file_path(&folder),
+        };
+
         let prerender = Self {
-            key: job.key(),
+            key,
             width: job.width,
             height: job.height,
             frame_count: job.frame_count,
             opacity: job.source.opacity(),
             state: Arc::new(Mutex::new(State::default())),
             is_cancelled: Arc::new(AtomicBool::new(false)),
-            frame_file_path: new_frame_file_path(),
+            frame_file_path,
             frame_reader: Mutex::new(None),
+            cache_name,
+            is_kept: Arc::new(AtomicBool::new(false)),
         };
+
+        // Rendered before: nothing to do.
+        if let Some(name) = &prerender.cache_name
+            && let Some(frames) = read_index(&folder, name, &prerender)
+        {
+            if let Ok(mut state) = prerender.state.lock() {
+                state.stored_bytes = frames
+                    .last()
+                    .map_or(0, |last| last.offset + u64::from(last.length + last.opacity_length));
+                state.frames = frames;
+            }
+            prerender.is_kept.store(true, Ordering::Relaxed);
+            on_progress();
+            return prerender;
+        }
+        // Make room before adding more.
+        trim_cache(&folder);
 
         let on_progress = Arc::new(on_progress);
         // A small buffer between the threads: the drawing thread waits when
@@ -248,9 +393,16 @@ impl Prerender {
             let path = prerender.frame_file_path.clone();
             let (width, height) = (job.width, job.height);
             let stores_opacity = prerender.opacity == Opacity::Stored;
+            let is_cancelled = Arc::clone(&prerender.is_cancelled);
+            let is_kept = Arc::clone(&prerender.is_kept);
+            let index = prerender
+                .cache_name
+                .as_ref()
+                .map(|name| (folder.clone(), name.clone(), prerender.index_header()));
+            let frame_count = job.frame_count;
             thread::spawn(move || {
                 let size = (width, height);
-                if let Err(message) = store_frames(
+                match store_frames(
                     &pixel_receiver,
                     &path,
                     size,
@@ -258,7 +410,20 @@ impl Prerender {
                     &state,
                     &*on_progress,
                 ) {
-                    set_error(&state, message);
+                    Err(message) => set_error(&state, message),
+                    // All frames are there: write down where each one is,
+                    // which makes them usable in the next run.
+                    Ok(()) if !is_cancelled.load(Ordering::Relaxed) => {
+                        if let Some((folder, name, header)) = index
+                            && let Ok(state) = state.lock()
+                            && state.error.is_none()
+                            && state.frames.len() as u32 == frame_count
+                            && write_index(&folder, &name, &header, &state.frames).is_ok()
+                        {
+                            is_kept.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    Ok(()) => {}
                 }
                 on_progress();
             });
@@ -350,14 +515,155 @@ impl Prerender {
 }
 
 impl Drop for Prerender {
-    /// Frames nobody will look at are not worth rendering or keeping:
-    /// dropping the handle stops the threads and deletes the frame file.
+    /// Frames nobody will look at are not worth rendering: dropping the
+    /// handle stops the threads. Unfinished frames are deleted; finished
+    /// ones stay in the cache for the next time.
     fn drop(&mut self) {
         self.is_cancelled.store(true, Ordering::Relaxed);
         if let Ok(mut reader) = self.frame_reader.lock() {
             *reader = None;
         }
-        let _ = fs::remove_file(&self.frame_file_path);
+        if !self.is_kept.load(Ordering::Relaxed) {
+            let _ = fs::remove_file(&self.frame_file_path);
+        }
+        if let Some(name) = &self.cache_name
+            && let Ok(mut names) = CACHE_NAMES_IN_USE.lock()
+        {
+            names.retain(|other| other != name);
+        }
+    }
+}
+
+impl Prerender {
+    /// What the index file starts with: enough to tell that it belongs to
+    /// these frames (the cache name is only a hash of the key).
+    fn index_header(&self) -> String {
+        format!(
+            "VizX frames 1\n{}x{} {} frames\n{}\n",
+            self.width, self.height, self.frame_count, self.key
+        )
+    }
+}
+
+/// Where pre-rendered frames are kept: `vizx-prerender` in the system's
+/// temporary folder, or in the folder named by [`CACHE_DIR_VARIABLE`].
+fn cache_folder() -> PathBuf {
+    let folder = std::env::var_os(CACHE_DIR_VARIABLE)
+        .map_or_else(std::env::temp_dir, PathBuf::from)
+        .join("vizx-prerender");
+    let _ = fs::create_dir_all(&folder);
+    folder
+}
+
+/// Writes where every frame lies in the frame file `<name>.frames`.
+fn write_index(
+    folder: &Path,
+    name: &str,
+    header: &str,
+    frames: &[FrameLocation],
+) -> std::io::Result<()> {
+    let mut bytes = header.as_bytes().to_vec();
+    bytes.push(0);
+    for frame in frames {
+        bytes.extend(frame.offset.to_le_bytes());
+        bytes.extend(frame.length.to_le_bytes());
+        bytes.extend(frame.opacity_length.to_le_bytes());
+    }
+    // Written under another name first, so a half-written index is never
+    // taken for a whole one.
+    let unfinished = folder.join(format!("{name}.index-unfinished"));
+    fs::write(&unfinished, bytes)?;
+    fs::rename(&unfinished, folder.join(format!("{name}.index")))
+}
+
+/// The frame locations stored for `prerender` in an earlier run, if they
+/// are complete and their frame file is all there.
+fn read_index(folder: &Path, name: &str, prerender: &Prerender) -> Option<Vec<FrameLocation>> {
+    let index_path = folder.join(format!("{name}.index"));
+    let bytes = fs::read(&index_path).ok()?;
+    let header = prerender.index_header();
+    let rest = bytes.strip_prefix(header.as_bytes())?.strip_prefix(&[0])?;
+    let (records, leftover) = rest.as_chunks::<16>();
+    if !leftover.is_empty() || records.len() as u32 != prerender.frame_count {
+        return None;
+    }
+    let frames: Vec<FrameLocation> = records
+        .iter()
+        .map(|record| FrameLocation {
+            offset: u64::from_le_bytes(record[0..8].try_into().unwrap_or_default()),
+            length: u32::from_le_bytes(record[8..12].try_into().unwrap_or_default()),
+            opacity_length: u32::from_le_bytes(record[12..16].try_into().unwrap_or_default()),
+        })
+        .collect();
+    let needed = frames
+        .last()
+        .map_or(0, |last| last.offset + u64::from(last.length + last.opacity_length));
+    let file_length = fs::metadata(&prerender.frame_file_path).ok()?.len();
+    if file_length < needed {
+        return None;
+    }
+    // Marks it as recently used, so trimming the cache spares it.
+    if let Ok(file) = File::options().write(true).open(&index_path) {
+        let _ = file.set_modified(std::time::SystemTime::now());
+    }
+    Some(frames)
+}
+
+/// Keeps the cache folder within [`CACHE_LIMIT_BYTES`]: kept frames used
+/// least recently go first. Leftovers of unfinished renders older than a
+/// day (from a crash, say) are deleted too.
+fn trim_cache(folder: &Path) {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return;
+    };
+    let in_use = CACHE_NAMES_IN_USE
+        .lock()
+        .map(|names| names.clone())
+        .unwrap_or_default();
+    // (last used, total size, name) of every kept set of frames.
+    let mut kept: Vec<(std::time::SystemTime, u64, String)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(stem) = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let extension = path.extension().map(|extension| extension.to_string_lossy().into_owned());
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let is_old = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > OLD_FRAME_FILE_AGE);
+        let has_index = folder.join(format!("{stem}.index")).is_file();
+        match extension.as_deref() {
+            Some("index") => {
+                let frames_size = fs::metadata(folder.join(format!("{stem}.frames")))
+                    .map_or(0, |frames| frames.len());
+                if let Ok(used) = metadata.modified() {
+                    kept.push((used, frames_size + metadata.len(), stem));
+                }
+            }
+            Some("frames") if has_index => {}
+            _ if is_old && !in_use.contains(&stem) => {
+                let _ = fs::remove_file(&path);
+            }
+            _ => {}
+        }
+    }
+    kept.sort();
+    let mut total: u64 = kept.iter().map(|(_, size, _)| size).sum();
+    for (_, size, name) in kept {
+        if total <= CACHE_LIMIT_BYTES {
+            break;
+        }
+        if in_use.contains(&name) {
+            continue;
+        }
+        let _ = fs::remove_file(folder.join(format!("{name}.index")));
+        let _ = fs::remove_file(folder.join(format!("{name}.frames")));
+        total = total.saturating_sub(size);
     }
 }
 
@@ -373,39 +679,35 @@ fn set_error(state: &Mutex<State>, message: String) {
 /// the system drive).
 pub const CACHE_DIR_VARIABLE: &str = "VIZX_CACHE_DIR";
 
-/// A new, unique file in the system's temporary folder (or the one named by
-/// [`CACHE_DIR_VARIABLE`]). Leftover files of earlier runs (for example
-/// after a crash) are removed on the way.
-fn new_frame_file_path() -> PathBuf {
-    static NEXT_FILE_NUMBER: AtomicU64 = AtomicU64::new(0);
+/// Environment variable with an extra folder of MilkDrop textures (images
+/// that some presets draw with), such as projectM's texture pack.
+pub const MILKDROP_TEXTURES_VARIABLE: &str = "VIZX_MILKDROP_TEXTURES";
 
-    let folder = std::env::var_os(CACHE_DIR_VARIABLE)
-        .map_or_else(std::env::temp_dir, PathBuf::from)
-        .join("vizx-prerender");
-    let _ = fs::create_dir_all(&folder);
-    remove_old_frame_files(&folder);
+/// Folders where MilkDrop presets look for their textures, besides their
+/// own folder: a `textures` folder shipped with VizX, one inside the
+/// bundled presets, and the one named by [`MILKDROP_TEXTURES_VARIABLE`].
+fn milkdrop_texture_folders() -> Vec<PathBuf> {
+    let bundled = crate::preset_library::find_bundled_folder("textures");
+    let in_presets = crate::preset_library::find_bundled_folder("presets")
+        .map(|presets| presets.join("textures"));
+    let from_variable = std::env::var_os(MILKDROP_TEXTURES_VARIABLE).map(PathBuf::from);
+    bundled
+        .into_iter()
+        .chain(in_presets)
+        .chain(from_variable)
+        .filter(|folder| folder.is_dir())
+        .collect()
+}
+
+/// A new, unique frame file in `folder`, for frames that are not kept
+/// (another pre-render already owns their cache name).
+fn unique_frame_file_path(folder: &Path) -> PathBuf {
+    static NEXT_FILE_NUMBER: AtomicU64 = AtomicU64::new(0);
     folder.join(format!(
         "{}-{}.frames",
         std::process::id(),
         NEXT_FILE_NUMBER.fetch_add(1, Ordering::Relaxed)
     ))
-}
-
-fn remove_old_frame_files(folder: &Path) {
-    let Ok(entries) = fs::read_dir(folder) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let is_old = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .and_then(|modified| modified.elapsed().ok())
-            .is_some_and(|age| age > OLD_FRAME_FILE_AGE);
-        if is_old {
-            let _ = fs::remove_file(entry.path());
-        }
-    }
 }
 
 /// The drawing thread: renders every frame in order and hands the pixels
@@ -472,7 +774,7 @@ impl FrameRenderer {
                     MilkdropRenderer::new(job.width, job.height, job.frames_per_second)
                         .map_err(|error| error.to_string())?;
                 renderer
-                    .load_preset(Path::new(preset_path))
+                    .load_preset(Path::new(preset_path), &milkdrop_texture_folders())
                     .map_err(|error| error.to_string())?;
                 Drawing::Milkdrop {
                     renderer,
@@ -913,6 +1215,64 @@ mod tests {
             frames[1].offset,
             u64::from(frames[0].length + frames[0].opacity_length)
         );
+    }
+
+    #[test]
+    fn finished_frames_are_used_again_by_the_next_prerender() {
+        let Some(plugins) = crate::preset_library::find_bundled_folder("visualizers") else {
+            return; // no bundled plugins in this build
+        };
+        let job = PrerenderJob {
+            source: FrameSource::Plugin {
+                folder: plugins.join("spectrum-bars"),
+                parameters: ParameterValues::new(),
+                version: 0,
+            },
+            frame_count: 5,
+            // Unlikely to match frames kept by a real project.
+            start_seconds: 1000.0 + f64::from(std::process::id() % 1000),
+            ..job("unused")
+        };
+        let wait_until_finished = |prerender: &Prerender| {
+            for _ in 0..600 {
+                if prerender.is_finished() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            panic!("the pre-render did not finish");
+        };
+
+        let first = Prerender::start(job.clone(), || {});
+        wait_until_finished(&first);
+        if let Some(error) = first.error() {
+            // No graphics card for the test: nothing to check here.
+            eprintln!("skipped: {error}");
+            return;
+        }
+        // Give the storing thread a moment to write the index.
+        for _ in 0..100 {
+            if first.is_kept.load(Ordering::Relaxed) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(first.is_kept.load(Ordering::Relaxed));
+        let path = first.frame_file_path.clone();
+        drop(first);
+        assert!(path.is_file(), "finished frames are kept");
+
+        // As in the next run of VizX: done at once, nothing rendered.
+        let again = Prerender::start(job.clone(), || {});
+        assert!(again.is_finished());
+        assert_eq!(again.finished_frame_count(), 5);
+        assert!(again.frame(4).is_some());
+        drop(again);
+
+        let name = job.cache_name();
+        let folder = cache_folder();
+        let _ = fs::remove_file(folder.join(format!("{name}.frames")));
+        let _ = fs::remove_file(folder.join(format!("{name}.index")));
     }
 
     #[test]

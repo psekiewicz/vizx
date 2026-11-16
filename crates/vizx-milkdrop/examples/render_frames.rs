@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut renderer = MilkdropRenderer::new(WIDTH, HEIGHT, FRAMES_PER_SECOND)?;
     println!("projectM {}", renderer.projectm_version());
     println!("OpenGL {}", renderer.opengl_description());
-    renderer.load_preset(Path::new(&preset))?;
+    renderer.load_preset(Path::new(&preset), &[])?;
 
     let samples_per_frame = (SAMPLE_RATE / FRAMES_PER_SECOND) as usize;
     let mut pixels = Vec::new();

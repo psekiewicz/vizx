@@ -200,12 +200,15 @@ original MilkDrop presets are a separate collection of about 550
 - **Preview resolution** is 640 pixels wide, to keep rendering and storing
   every frame affordable. Export will need its own full-size render.
 - **Disk space.** A pre-rendered clip of song length takes hundreds of
-  megabytes in the temporary folder while the project is open.
-- **Nothing is kept between sessions.** Opening a project renders its
-  MilkDrop clips again.
-- **Textures.** Presets that use image textures need projectM's texture
-  search paths, which VizX does not set yet; those presets render without
-  their textures.
+  megabytes. Finished pre-renders are kept in `vizx-prerender` (in the
+  temporary folder, or in `VIZX_CACHE_DIR`) and reused when the same clip
+  is rendered again, also in a later run; the folder is kept under 4 GB by
+  deleting the pre-renders used least recently.
+- **Textures.** A preset finds its image textures in its own folder, the
+  three folders above it, a `textures` folder next to the presets, and the
+  folder named by `VIZX_MILKDROP_TEXTURES`. VizX does not ship projectM's
+  texture pack, so presets that need its textures render without them
+  until it is placed in one of those folders.
 - **Transparency by brightness.** MilkDrop draws on black and knows no
   transparency, so VizX treats a preset's picture as light: a pixel is as
   opaque as it is bright, and black is transparent. A preset therefore lies
