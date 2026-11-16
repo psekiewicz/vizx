@@ -20,7 +20,8 @@ use vizx_render::{Compositor, LayerDraw};
 
 use crate::animation::AnimationReader;
 use crate::composition::{
-    ReactionMeter, audio_sources, beat_count, beat_times, frame_source, layer_geometry,
+    ReactionMeter, audio_sources, beat_count, beat_times, frame_source, layer_effects,
+    layer_geometry,
 };
 use crate::ffmpeg::VideoWriter;
 use crate::image_store::{DecodedImage, decode_image_file};
@@ -245,6 +246,7 @@ pub struct ExportLayer {
     pub sharp_pixels: bool,
     /// How its colors combine with the layers below.
     pub blend: vizx_render::LayerBlend,
+    pub effects: vizx_project::ClipEffects,
 }
 
 /// The compositor's blend for a clip's blend mode.
@@ -320,6 +322,7 @@ impl ExportJob {
                     reaction: clip.reaction,
                     sharp_pixels: project.clip_sharp_pixels(clip),
                     blend: layer_blend(clip.blend_mode),
+                    effects: clip.effects,
                     input_audio: audio_sources(project, audio_store, clip.audio_input).0,
                     audio_gain: clip.audio_gain,
                     beats: Arc::new(beats),
@@ -540,6 +543,7 @@ fn run(
                     &layer.reaction,
                     layer.audio_gain,
                     seconds,
+                    f64::from(job.width) / f64::from(job.height.max(1)),
                 );
                 let transform = layer.motion.animated_at(seconds - layer.start_seconds);
                 let geometry = layer_geometry(&transform, effect);
@@ -561,6 +565,7 @@ fn run(
                     opacity: geometry.opacity,
                     sharp_pixels: layer.sharp_pixels,
                     blend: layer.blend,
+                    effects: layer_effects(&layer.effects, &layer.reaction, effect, seconds),
                 });
             }
             compositor.render(&draws, &mut frame_pixels)?;
@@ -805,7 +810,75 @@ mod tests {
             tempo_bpm: 0.0,
             sharp_pixels: false,
             blend: vizx_render::LayerBlend::Normal,
+            effects: vizx_project::ClipEffects::default(),
         }
+    }
+
+    /// A red picture tinted blue by its effects, which follow the beats:
+    /// red until the beat at 0.5 s, blue on it.
+    #[test]
+    fn effects_that_follow_the_beats_appear_on_them() {
+        let (Some(ffmpeg), true) = (find_ffmpeg(), vizx_render::open_device("test").is_ok()) else {
+            eprintln!("FFmpeg or a graphics adapter is missing: skipping");
+            return;
+        };
+        let image_path = temporary_path("beat-tint.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 0, 0, 255]))
+            .save(&image_path)
+            .unwrap();
+        let output = temporary_path("beat-tint.png").with_file_name("beat-tint-out.png");
+        let mut layer = image_layer(&image_path, Placement::FULL);
+        layer.reaction = AudioReaction {
+            band: vizx_project::ReactionBand::Beat,
+            drives_effects: true,
+            release_seconds: 0.15,
+            ..AudioReaction::default()
+        };
+        layer.effects = vizx_project::ClipEffects {
+            tint: 1.0,
+            tint_color: [0.0, 0.0, 1.0],
+            ..vizx_project::ClipEffects::default()
+        };
+        layer.beats = Arc::new(vec![Beat {
+            seconds: 0.5,
+            strength: 1.0,
+        }]);
+
+        let export = Export::start(
+            ExportJob {
+                output: output.clone(),
+                ffmpeg,
+                width: 32,
+                height: 32,
+                start_seconds: 0.0,
+                frame_rate: (10, 1),
+                duration_seconds: 0.7,
+                format: VideoFormat::PngSequence,
+                quality: ExportQuality::Low,
+                audio: Vec::new(),
+                layers: vec![layer],
+            },
+            || {},
+        );
+        let result = wait_for(&export);
+        let _ = std::fs::remove_file(&image_path);
+        assert_eq!(result, Ok(()));
+        let middle = |number: u32| {
+            let frame = png_sequence_frame(&output, number);
+            let pixel = *image::open(&frame).unwrap().to_rgba8().get_pixel(16, 16);
+            pixel.0
+        };
+        let colors: Vec<[u8; 4]> = (1..=7).map(middle).collect();
+        for number in 1..=7 {
+            let _ = std::fs::remove_file(png_sequence_frame(&output, number));
+        }
+        // Frame 6 is at 0.5 s.
+        assert_eq!(colors[4], [255, 0, 0, 255], "before the beat");
+        assert!(
+            colors[5][0] < 10 && colors[5][2] > 60,
+            "on the beat: {:?}",
+            colors[5]
+        );
     }
 
     fn wait_for(export: &Export) -> Result<(), String> {

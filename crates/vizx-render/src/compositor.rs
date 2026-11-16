@@ -21,7 +21,67 @@ const FRAME_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 /// this many bytes long.
 const ROW_ALIGNMENT: u32 = 256;
 /// Size in bytes of the `Layer` struct in `compositor.wgsl`.
-const LAYER_UNIFORM_SIZE: usize = 32;
+const LAYER_UNIFORM_SIZE: usize = 80;
+
+/// Effects drawn on a layer. Every strength is 0 (off) to 1 (strong).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LayerEffects {
+    /// Soft focus.
+    pub blur: f32,
+    /// Red and blue shifted apart sideways, like a cheap lens.
+    pub color_split: f32,
+    /// Light spread around the bright parts.
+    pub glow: f32,
+    /// Moving film grain.
+    pub grain: f32,
+    /// Bands of the picture jumping sideways.
+    pub glitch: f32,
+    /// Darker edges.
+    pub vignette: f32,
+    /// Red, green and blue of a color the picture is tinted with (0 to 1).
+    pub tint_color: [f32; 3],
+    /// How much of the tint color: 0 none, 1 only the tint.
+    pub tint: f32,
+    /// The moment in seconds, which moves grain and glitches.
+    pub seconds: f32,
+}
+
+impl LayerEffects {
+    /// No effect at all.
+    pub const NONE: Self = Self {
+        blur: 0.0,
+        color_split: 0.0,
+        glow: 0.0,
+        grain: 0.0,
+        glitch: 0.0,
+        vignette: 0.0,
+        tint_color: [1.0, 1.0, 1.0],
+        tint: 0.0,
+        seconds: 0.0,
+    };
+
+    /// The values of the `Layer` struct of `compositor.wgsl` after its
+    /// placement, for a frame `frame_height` pixels high.
+    fn uniforms(&self, frame_height: f32) -> [f32; 12] {
+        let strength = |value: f32| value.clamp(0.0, 1.0);
+        [
+            // Full blur is 3 % of the frame's height, full split 1 %.
+            strength(self.blur) * 0.03 * frame_height,
+            strength(self.color_split) * 0.01 * frame_height,
+            strength(self.glow) * 1.5,
+            strength(self.grain),
+            strength(self.glitch),
+            strength(self.vignette),
+            // Kept small, so the noise in the shader stays exact.
+            self.seconds.rem_euclid(3600.0),
+            0.02 * frame_height,
+            self.tint_color[0].clamp(0.0, 1.0),
+            self.tint_color[1].clamp(0.0, 1.0),
+            self.tint_color[2].clamp(0.0, 1.0),
+            strength(self.tint),
+        ]
+    }
+}
 
 /// One picture to draw into the frame.
 pub struct LayerDraw<'a> {
@@ -49,6 +109,7 @@ pub struct LayerDraw<'a> {
     pub sharp_pixels: bool,
     /// How the layer's colors combine with what is below it.
     pub blend: LayerBlend,
+    pub effects: LayerEffects,
 }
 
 /// How a layer's colors combine with the layers below it.
@@ -394,8 +455,10 @@ impl Compositor {
             layer.rotation_degrees.to_radians(),
             layer.opacity.clamp(0.0, 1.0),
         ];
+        let effects = layer.effects.uniforms(frame_height);
         let bytes: Vec<u8> = uniforms
             .iter()
+            .chain(&effects)
             .flat_map(|value| value.to_le_bytes())
             .collect();
         self.queue.write_buffer(&uploaded.uniforms, 0, &bytes);
@@ -562,7 +625,152 @@ mod tests {
             opacity: 1.0,
             sharp_pixels: false,
             blend: LayerBlend::Normal,
+            effects: LayerEffects::NONE,
         }
+    }
+
+    /// Red on the left half of the frame, nothing on the right.
+    fn left_half_red<'a>(red: &'a [u8]) -> LayerDraw<'a> {
+        LayerDraw {
+            center: [0.25, 0.5],
+            size: [0.5, 1.0],
+            ..layer(1, red, 4, 4)
+        }
+    }
+
+    #[test]
+    fn effects_change_the_picture_as_named() {
+        let Some(mut compositor) = compositor(64, 64) else {
+            return;
+        };
+        let red = solid([255, 0, 0, 255], 4, 4);
+        let render = |compositor: &mut Compositor, effects: LayerEffects| {
+            let mut pixels = Vec::new();
+            compositor
+                .render(
+                    &[LayerDraw {
+                        effects,
+                        ..left_half_red(&red)
+                    }],
+                    &mut pixels,
+                )
+                .unwrap();
+            pixels
+        };
+
+        // Without effects the edge at x = 32 is sharp.
+        let plain = render(&mut compositor, LayerEffects::NONE);
+        assert_near(pixel(&plain, 64, 30, 32), [255, 0, 0, 255]);
+        assert_near(pixel(&plain, 64, 33, 32), [0, 0, 0, 255]);
+
+        // Blurred, the edge is a soft step.
+        let soft = render(
+            &mut compositor,
+            LayerEffects {
+                blur: 1.0,
+                ..LayerEffects::NONE
+            },
+        );
+        let edge = pixel(&soft, 64, 31, 32)[0];
+        assert!((60..=230).contains(&edge), "blurred edge: {edge}");
+        assert_near(pixel(&soft, 64, 8, 32), [255, 0, 0, 255]);
+
+        // A full tint in blue turns red into a blue of red's brightness.
+        let tinted = render(
+            &mut compositor,
+            LayerEffects {
+                tint: 1.0,
+                tint_color: [0.0, 0.0, 1.0],
+                ..LayerEffects::NONE
+            },
+        );
+        assert_near(pixel(&tinted, 64, 8, 32), [0, 0, 76, 255]);
+
+        // A vignette darkens the corners, not the middle of the layer.
+        let vignette = render(
+            &mut compositor,
+            LayerEffects {
+                vignette: 1.0,
+                ..LayerEffects::NONE
+            },
+        );
+        assert!(pixel(&vignette, 64, 1, 1)[0] < 100);
+        assert_near(pixel(&vignette, 64, 16, 32), [255, 0, 0, 255]);
+
+        // Grain changes neighbouring pixels differently.
+        let grainy = render(
+            &mut compositor,
+            LayerEffects {
+                grain: 1.0,
+                ..LayerEffects::NONE
+            },
+        );
+        let reds: std::collections::HashSet<u8> =
+            (0..16).map(|x| pixel(&grainy, 64, x, 20)[0]).collect();
+        assert!(reds.len() > 3, "grain: {reds:?}");
+
+        // Glitches move some bands of the picture sideways, at some moments.
+        let moved = (0..24).any(|moment| {
+            let glitched = render(
+                &mut compositor,
+                LayerEffects {
+                    glitch: 1.0,
+                    seconds: moment as f32 / 12.0,
+                    ..LayerEffects::NONE
+                },
+            );
+            (0..64).any(|y| pixel(&glitched, 64, 31, y)[0] < 128)
+        });
+        assert!(moved, "no band ever moved");
+    }
+
+    #[test]
+    fn color_split_and_glow_reach_past_the_edge() {
+        let Some(mut compositor) = compositor(400, 400) else {
+            return;
+        };
+        let mut pixels = Vec::new();
+        // A white square from 100 to 300 pixels, smaller than its layer, so
+        // the light has room to spread inside the layer.
+        let mut square = vec![0; 16 * 16 * 4];
+        for y in 4..12 {
+            for x in 4..12 {
+                square[(y * 16 + x) * 4..][..4].copy_from_slice(&[255, 255, 255, 255]);
+            }
+        }
+        let draw = |effects| LayerDraw {
+            effects,
+            sharp_pixels: true,
+            ..layer(1, &square, 16, 16)
+        };
+        compositor
+            .render(
+                &[draw(LayerEffects {
+                    color_split: 1.0,
+                    ..LayerEffects::NONE
+                })],
+                &mut pixels,
+            )
+            .unwrap();
+        // Red is shifted 4 pixels to the left and blue to the right: just
+        // outside the square's left edge only red is there, just outside
+        // its right edge only blue.
+        let left = pixel(&pixels, 400, 98, 200);
+        let right = pixel(&pixels, 400, 301, 200);
+        assert!(left[0] > 200 && left[2] < 50, "left: {left:?}");
+        assert!(right[2] > 200 && right[0] < 50, "right: {right:?}");
+
+        compositor
+            .render(
+                &[draw(LayerEffects {
+                    glow: 1.0,
+                    ..LayerEffects::NONE
+                })],
+                &mut pixels,
+            )
+            .unwrap();
+        let near = pixel(&pixels, 400, 304, 200);
+        assert!(near[0] > 20, "glow around the square: {near:?}");
     }
 
     #[test]

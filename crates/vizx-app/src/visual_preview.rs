@@ -79,6 +79,8 @@ pub struct LayerView {
     pub sharp_pixels: bool,
     /// How its colors combine with the layers below.
     pub blend: vizx_core::LayerBlend,
+    /// Its effects at the playhead.
+    pub effects: vizx_core::LayerEffects,
     pub state: LayerState,
 }
 
@@ -315,6 +317,7 @@ impl VisualPreview {
                     &clip.reaction,
                     clip.audio_gain,
                     playhead_seconds,
+                    f64::from(settings.width) / f64::from(settings.height.max(1)),
                 )
             } else {
                 ReactionEffect::NONE
@@ -340,6 +343,12 @@ impl VisualPreview {
                 rotation_degrees: keyed.rotation_degrees,
                 sharp_pixels: project.clip_sharp_pixels(clip),
                 blend: vizx_core::layer_blend(clip.blend_mode),
+                effects: vizx_core::layer_effects(
+                    &clip.effects,
+                    &clip.reaction,
+                    effect,
+                    playhead_seconds,
+                ),
                 state,
             });
         }
@@ -396,6 +405,7 @@ impl VisualPreview {
                     opacity: geometry.opacity,
                     sharp_pixels: layer.sharp_pixels,
                     blend: layer.blend,
+                    effects: layer.effects,
                 })
             })
             .collect();

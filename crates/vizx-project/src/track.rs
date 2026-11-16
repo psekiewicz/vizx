@@ -154,6 +154,109 @@ pub struct Clip {
     /// How a visual clip's colors combine with the layers below it.
     #[serde(default, skip_serializing_if = "BlendMode::is_normal")]
     pub blend_mode: BlendMode,
+    /// Effects drawn on a visual clip (blur, glow, glitch...).
+    #[serde(default, skip_serializing_if = "ClipEffects::is_none")]
+    pub effects: ClipEffects,
+}
+
+/// Effects drawn on a visual clip. Every strength goes from 0 (off) to 1.
+/// With [`AudioReaction::drives_effects`] the strengths are reached on
+/// loud moments and fall to nothing in silence.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClipEffects {
+    /// Soft focus.
+    pub blur: f64,
+    /// Red and blue shifted apart sideways.
+    pub color_split: f64,
+    /// Light spread around the bright parts.
+    pub glow: f64,
+    /// Moving film grain.
+    pub grain: f64,
+    /// Bands of the picture jumping sideways.
+    pub glitch: f64,
+    /// Darker edges.
+    pub vignette: f64,
+    /// How much the picture takes on `tint_color` (keeping its brightness).
+    pub tint: f64,
+    /// Red, green and blue, each from 0 to 1.
+    pub tint_color: [f64; 3],
+}
+
+impl Default for ClipEffects {
+    fn default() -> Self {
+        Self {
+            blur: 0.0,
+            color_split: 0.0,
+            glow: 0.0,
+            grain: 0.0,
+            glitch: 0.0,
+            vignette: 0.0,
+            tint: 0.0,
+            tint_color: [1.0, 0.2, 0.1],
+        }
+    }
+}
+
+impl ClipEffects {
+    /// Whether no effect is on.
+    pub fn is_none(&self) -> bool {
+        self.strengths().iter().all(|strength| *strength == 0.0)
+    }
+
+    fn strengths(&self) -> [f64; 7] {
+        [
+            self.blur,
+            self.color_split,
+            self.glow,
+            self.grain,
+            self.glitch,
+            self.vignette,
+            self.tint,
+        ]
+    }
+
+    /// The nearest valid effects: strengths from 0 to 1, values that are
+    /// not numbers turned off.
+    pub fn sanitized(self) -> Self {
+        let strength = |value: f64| {
+            if value.is_finite() {
+                value.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        Self {
+            blur: strength(self.blur),
+            color_split: strength(self.color_split),
+            glow: strength(self.glow),
+            grain: strength(self.grain),
+            glitch: strength(self.glitch),
+            vignette: strength(self.vignette),
+            tint: strength(self.tint),
+            tint_color: self.tint_color.map(strength),
+        }
+    }
+
+    /// Every strength multiplied by `factor` (0 to 1): how the effects look
+    /// at a loudness, when they follow the sound.
+    pub fn scaled(self, factor: f64) -> Self {
+        let factor = if factor.is_finite() {
+            factor.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        Self {
+            blur: self.blur * factor,
+            color_split: self.color_split * factor,
+            glow: self.glow * factor,
+            grain: self.grain * factor,
+            glitch: self.glitch * factor,
+            vignette: self.vignette * factor,
+            tint: self.tint * factor,
+            tint_color: self.tint_color,
+        }
+    }
 }
 
 /// How a visual clip's colors combine with the layers below it.
@@ -236,6 +339,12 @@ pub struct AudioReaction {
     /// seconds. It always rises at once. 0 follows the sound exactly, which
     /// can look nervous; a little release makes it look like a bounce.
     pub release_seconds: f64,
+    /// How far the element jumps around at random, as a fraction of the
+    /// frame's height (a camera shake).
+    pub shake: f64,
+    /// Whether the clip's effects follow the sound too: full on loud
+    /// moments, off in silence.
+    pub drives_effects: bool,
 }
 
 impl Default for AudioReaction {
@@ -249,6 +358,8 @@ impl Default for AudioReaction {
             rotate_degrees: 0.0,
             sensitivity: 1.0,
             release_seconds: 0.15,
+            shake: 0.0,
+            drives_effects: false,
         }
     }
 }
@@ -265,6 +376,9 @@ pub struct ReactionEffect {
     pub offset_y: f64,
     /// Turn in degrees, clockwise.
     pub rotation_degrees: f64,
+    /// The loudness it was made for, sensitivity applied, 0 to 1. Effects
+    /// that follow the sound are this strong.
+    pub level: f64,
 }
 
 impl ReactionEffect {
@@ -275,6 +389,7 @@ impl ReactionEffect {
         offset_x: 0.0,
         offset_y: 0.0,
         rotation_degrees: 0.0,
+        level: 0.0,
     };
 }
 
@@ -287,18 +402,48 @@ impl AudioReaction {
     pub const MAX_ROTATION: f64 = 360.0;
     pub const SENSITIVITY_RANGE: (f64, f64) = (0.25, 8.0);
     pub const MAX_RELEASE_SECONDS: f64 = 2.0;
+    /// Largest allowed shake.
+    pub const MAX_SHAKE: f64 = 0.2;
+    /// How many times a second a shake jumps to a new place.
+    pub const SHAKE_RATE: f64 = 24.0;
 
     /// Whether the element reacts at all.
     pub fn is_active(self) -> bool {
-        [
-            self.scale,
-            self.fade,
-            self.move_x,
-            self.move_y,
-            self.rotate_degrees,
-        ]
-        .iter()
-        .any(|amount| *amount != 0.0)
+        self.drives_effects
+            || [
+                self.scale,
+                self.fade,
+                self.move_x,
+                self.move_y,
+                self.rotate_degrees,
+                self.shake,
+            ]
+            .iter()
+            .any(|amount| *amount != 0.0)
+    }
+
+    /// Where a shake has moved the element at `seconds` for a loudness
+    /// `level` (as measured), as fractions of the frame's width and height
+    /// (`aspect` is width / height). Always the same for the same moment.
+    pub fn shake_offset(self, level: f64, seconds: f64, aspect: f64) -> (f64, f64) {
+        if self.shake == 0.0 || !seconds.is_finite() {
+            return (0.0, 0.0);
+        }
+        let level = self.effective_level(level);
+        let moment = (seconds * Self::SHAKE_RATE).floor() as i64;
+        let distance = self.shake * level;
+        let x = random_unit(moment, 0) * distance / aspect.max(0.01);
+        let y = random_unit(moment, 1) * distance;
+        (x, y)
+    }
+
+    /// The loudness with the sensitivity applied, from 0 to 1.
+    pub fn effective_level(self, level: f64) -> f64 {
+        if level.is_finite() {
+            (level * self.sensitivity).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
     }
 
     /// The nearest valid reaction; values that are not numbers become the
@@ -337,25 +482,38 @@ impl AudioReaction {
                 Self::MAX_RELEASE_SECONDS,
                 defaults.release_seconds,
             ),
+            shake: within(self.shake, 0.0, Self::MAX_SHAKE, 0.0),
+            drives_effects: self.drives_effects,
         }
     }
 
     /// What the reaction does for a loudness `level` from 0 to 1 (as
-    /// measured; the sensitivity is applied here).
+    /// measured; the sensitivity is applied here). Without the shake, which
+    /// also depends on the moment (see [`Self::shake_offset`]).
     pub fn at_level(self, level: f64) -> ReactionEffect {
-        let level = if level.is_finite() {
-            (level * self.sensitivity).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        let level = self.effective_level(level);
         ReactionEffect {
             scale: 1.0 + self.scale * level,
             opacity: 1.0 - self.fade * (1.0 - level),
             offset_x: self.move_x * level,
             offset_y: self.move_y * level,
             rotation_degrees: self.rotate_degrees * level,
+            level,
         }
     }
+}
+
+/// A number from -1 to 1 that looks random but is always the same for the
+/// same `moment` and `axis`.
+fn random_unit(moment: i64, axis: u64) -> f64 {
+    // SplitMix64: mixes the bits of its input thoroughly.
+    let mut value = (moment as u64)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(axis.wrapping_mul(0xBF58_476D_1CE4_E5B9));
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^= value >> 31;
+    (value >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
 }
 /// The part of the sound an [`AudioReaction`] follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]

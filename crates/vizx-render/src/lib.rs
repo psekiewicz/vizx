@@ -13,5 +13,5 @@
 mod compositor;
 mod gpu;
 
-pub use compositor::{Compositor, LayerBlend, LayerDraw};
+pub use compositor::{Compositor, LayerBlend, LayerDraw, LayerEffects};
 pub use gpu::{open_device, read_back_rgba};

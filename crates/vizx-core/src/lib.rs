@@ -30,7 +30,7 @@ pub use app_data::{
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
 pub use composition::{
     LayerGeometry, ReactionMeter, audio_sources, beat_count, beat_pulse, beat_times, frame_source,
-    last_beat, layer_geometry, tempo_of,
+    last_beat, layer_effects, layer_geometry, tempo_of,
 };
 pub use export::{
     Export, ExportContent, ExportJob, ExportLayer, ExportQuality, ExportSettings, VideoFormat,
@@ -64,7 +64,7 @@ pub use visualizer_catalog::{
 pub use vizx_visualizer::{Manifest, ParameterKind, ParameterSpec, ParameterValues};
 // The compositor, so the preview can use it without depending on the
 // rendering crate itself.
-pub use vizx_render::{Compositor, LayerBlend, LayerDraw};
+pub use vizx_render::{Compositor, LayerBlend, LayerDraw, LayerEffects};
 
 /// Name of the application as shown to the user.
 pub const APP_NAME: &str = "VizX (Prototype)";

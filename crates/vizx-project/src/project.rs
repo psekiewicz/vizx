@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AudioInput, AudioProperties, AudioReaction, BlendMode, CURRENT_FORMAT_VERSION, Clip, ClipId,
-    ImageProperties, MediaContent, MediaId, MediaSource, Placement, ProjectMetadata,
-    ProjectSettings, TextProperties, Track, TrackId, TrackKind, Transform,
+    AudioInput, AudioProperties, AudioReaction, BlendMode, CURRENT_FORMAT_VERSION, Clip,
+    ClipEffects, ClipId, ImageProperties, MediaContent, MediaId, MediaSource, Placement,
+    ProjectMetadata, ProjectSettings, TextProperties, Track, TrackId, TrackKind, Transform,
 };
 use crate::{Easing, FrameAnimation, Keyframe};
 
@@ -647,6 +647,7 @@ impl Project {
             keyframes: Vec::new(),
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
+            effects: ClipEffects::default(),
         };
         self.next_clip_id += 1;
         let clip_end = clip.end_milliseconds();
@@ -709,6 +710,7 @@ impl Project {
             keyframes: Vec::new(),
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
+            effects: ClipEffects::default(),
         };
         self.next_clip_id += 1;
         let track = self.tracks.iter_mut().find(|track| track.id == track_id)?;
@@ -884,6 +886,7 @@ impl Project {
             keyframes: Vec::new(),
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
+            effects: ClipEffects::default(),
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -929,6 +932,7 @@ impl Project {
             keyframes: Vec::new(),
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
+            effects: ClipEffects::default(),
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -1057,6 +1061,7 @@ impl Project {
             keyframes: Vec::new(),
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
+            effects: ClipEffects::default(),
         };
         self.tracks
             .iter_mut()
@@ -1414,6 +1419,19 @@ impl Project {
         match self.clip_mut(clip_id) {
             Some(clip) if clip.blend_mode != mode => {
                 clip.blend_mode = mode;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Sets the effects drawn on a clip. Returns `true` only if this
+    /// changed something.
+    pub fn set_clip_effects(&mut self, clip_id: ClipId, effects: ClipEffects) -> bool {
+        let effects = effects.sanitized();
+        match self.clip_mut(clip_id) {
+            Some(clip) if clip.effects != effects => {
+                clip.effects = effects;
                 true
             }
             _ => false,
@@ -2024,7 +2042,56 @@ mod tests {
         assert_eq!(sensitive.at_level(0.9), loud);
 
         // No reaction leaves the element alone at any loudness.
-        assert_eq!(AudioReaction::default().at_level(0.7), ReactionEffect::NONE);
+        assert_eq!(
+            AudioReaction::default().at_level(0.7),
+            ReactionEffect {
+                level: 0.7,
+                ..ReactionEffect::NONE
+            }
+        );
+    }
+
+    #[test]
+    fn a_shake_jumps_around_within_its_distance() {
+        let reaction = AudioReaction {
+            shake: 0.05,
+            ..AudioReaction::default()
+        };
+        assert!(reaction.is_active());
+        // Silent: still.
+        assert_eq!(reaction.shake_offset(0.0, 1.0, 16.0 / 9.0), (0.0, 0.0));
+        let offsets: Vec<(f64, f64)> = (0..48)
+            .map(|frame| reaction.shake_offset(1.0, f64::from(frame) / 24.0, 1.0))
+            .collect();
+        assert!(
+            offsets
+                .iter()
+                .all(|(x, y)| x.abs() <= 0.05 && y.abs() <= 0.05)
+        );
+        // It moves, and the same moment always gives the same place.
+        assert!(offsets.windows(2).filter(|pair| pair[0] != pair[1]).count() > 40);
+        assert_eq!(reaction.shake_offset(1.0, 0.5, 1.0), offsets[12]);
+        // Sideways it is measured in frame widths: a wide frame moves less.
+        let (wide_x, _) = reaction.shake_offset(1.0, 0.5, 2.0);
+        assert!((wide_x - offsets[12].0 / 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn effects_are_kept_valid_and_follow_loudness() {
+        let wild = ClipEffects {
+            blur: 3.0,
+            glow: f64::NAN,
+            glitch: -1.0,
+            tint_color: [2.0, 0.5, -1.0],
+            ..ClipEffects::default()
+        }
+        .sanitized();
+        assert_eq!((wild.blur, wild.glow, wild.glitch), (1.0, 0.0, 0.0));
+        assert_eq!(wild.tint_color, [1.0, 0.5, 0.0]);
+        assert!(!wild.is_none());
+        assert!(ClipEffects::default().is_none());
+        assert_eq!(wild.scaled(0.5).blur, 0.5);
+        assert!(wild.scaled(0.0).is_none());
     }
 
     #[test]

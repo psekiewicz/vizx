@@ -608,6 +608,17 @@ for every step is expensive.
   Add, Screen, Multiply and Lighten are fixed-function blend states on
   premultiplied colors, one render pipeline each, shared by the preview and
   the export.
+- **Effects** (`Clip::effects`, a `ClipEffects`; drawn as
+  `vizx_render::LayerEffects`): blur, color split, glow, glitch, grain,
+  vignette and tint, each 0 to 1. They are drawn in the compositor's layer
+  shader in one pass (blur and glow average 24 points on a spiral; glitch
+  shifts horizontal bands twelve times a second; grain and glitch take the
+  project time, so a moment always looks the same). With the reaction's
+  `drives_effects` they are as strong as the sound is loud
+  (`layer_effects`).
+- **Shake** (`AudioReaction::shake`): a random jump 24 times a second, as
+  far as the reaction's level allows; worked out from the moment only
+  (`shake_offset`), so the preview and the export agree.
 - **Export settings** (`ExportSettings`, remembered in `AppSettings`):
   format (MP4 H.264 / H.265, WebM VP9, MOV ProRes 422, GIF with a palette
   made from its own colors, and two transparent ones: MOV ProRes 4444 with

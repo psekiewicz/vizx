@@ -9,9 +9,10 @@ use std::path::Path;
 
 use vizx_audio::{ANALYSIS_WINDOW, AudioAnalyzer, Beat, PlaybackSource};
 use vizx_project::{
-    AudioInput, AudioReaction, Clip, MediaSource, Project, ReactionBand, ReactionEffect, TrackKind,
-    Transform,
+    AudioInput, AudioReaction, Clip, ClipEffects, MediaSource, Project, ReactionBand,
+    ReactionEffect, TrackKind, Transform,
 };
+use vizx_render::LayerEffects;
 
 use crate::{AudioStore, FrameSource, VisualizerCatalog, resolve_preset_path};
 
@@ -273,6 +274,32 @@ pub fn layer_geometry(transform: &Transform, effect: ReactionEffect) -> LayerGeo
     }
 }
 
+/// The effects a clip is drawn with at `seconds` into the project: as set,
+/// or, when its reaction drives them, as strong as the sound is right now.
+pub fn layer_effects(
+    effects: &ClipEffects,
+    reaction: &AudioReaction,
+    effect: ReactionEffect,
+    seconds: f64,
+) -> LayerEffects {
+    let effects = if reaction.drives_effects {
+        effects.scaled(effect.level)
+    } else {
+        *effects
+    };
+    LayerEffects {
+        blur: effects.blur as f32,
+        color_split: effects.color_split as f32,
+        glow: effects.glow as f32,
+        grain: effects.grain as f32,
+        glitch: effects.glitch as f32,
+        vignette: effects.vignette as f32,
+        tint_color: effects.tint_color.map(|part| part as f32),
+        tint: effects.tint as f32,
+        seconds: seconds as f32,
+    }
+}
+
 /// Measures how loud the sound is for clips that react to it.
 pub struct ReactionMeter {
     analyzer: AudioAnalyzer,
@@ -289,7 +316,8 @@ impl Default for ReactionMeter {
 impl ReactionMeter {
     /// What a reaction does to its element at a moment of the project.
     /// `audio_gain` is the clip's sensitivity: the sound is multiplied by it
-    /// before it is measured.
+    /// before it is measured. `aspect` is the frame's width / height (for
+    /// shaking equally far in both directions).
     pub fn effect(
         &mut self,
         sources: &[PlaybackSource],
@@ -297,12 +325,17 @@ impl ReactionMeter {
         reaction: &AudioReaction,
         audio_gain: f64,
         seconds: f64,
+        aspect: f64,
     ) -> ReactionEffect {
-        if reaction.is_active() {
-            reaction.at_level(self.level(sources, beats, reaction, audio_gain, seconds))
-        } else {
-            ReactionEffect::NONE
+        if !reaction.is_active() {
+            return ReactionEffect::NONE;
         }
+        let level = self.level(sources, beats, reaction, audio_gain, seconds);
+        let mut effect = reaction.at_level(level);
+        let (shake_x, shake_y) = reaction.shake_offset(level, seconds, aspect);
+        effect.offset_x += shake_x;
+        effect.offset_y += shake_y;
+        effect
     }
 
     /// How loud the part of the sound is that a reaction follows, at a
@@ -452,6 +485,7 @@ mod tests {
                 offset_x: 0.1,
                 offset_y: -0.1,
                 rotation_degrees: 45.0,
+                level: 1.0,
             },
         );
         assert_eq!(moved.center, [0.5, 0.3]);
@@ -568,6 +602,7 @@ mod tests {
             &AudioReaction::default(),
             1.0,
             0.5,
+            16.0 / 9.0,
         );
 
         assert_eq!(effect, ReactionEffect::NONE);

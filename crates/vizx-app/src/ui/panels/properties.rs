@@ -1,8 +1,8 @@
 use eframe::egui;
 use vizx_core::{AudioStore, EditorSession, ParameterKind, VisualizerCatalog};
 use vizx_project::{
-    AudioInput, AudioReaction, Clip, Easing, FrameAnimation, FrameLayout, MediaId, Placement,
-    ReactionBand, TextAlignment, TextProperties, Track, TrackKind,
+    AudioInput, AudioReaction, Clip, ClipEffects, Easing, FrameAnimation, FrameLayout, MediaId,
+    Placement, ReactionBand, TextAlignment, TextProperties, Track, TrackKind,
 };
 
 use crate::app::AppCommand;
@@ -186,6 +186,7 @@ fn track_properties(
                     session.edit_project(|project| project.set_clip_blend_mode(clip.id, blend));
                 }
                 opacity_and_reaction_editor(ui, session, clip, is_visualizer);
+                effects_editor(ui, session, clip);
             }
             if let Some(plugin_path) = plugin_path {
                 plugin_parameters(ui, session, catalog, clip, &plugin_path);
@@ -932,6 +933,19 @@ fn opacity_and_reaction_editor(
             ui.add(egui::Slider::new(&mut edited.rotate_degrees, -180.0..=180.0).suffix("\u{b0}"));
             ui.end_row();
 
+            ui.label("Shake").on_hover_text(
+                "Jump around at random on loud parts, like a shaken camera. In percent of the \
+                 picture's height",
+            );
+            percent_slider(ui, &mut edited.shake, 0.0, 20.0);
+            ui.end_row();
+
+            ui.label("Effects").on_hover_text(
+                "Effects (below) are at full strength on loud parts and off in silence",
+            );
+            ui.checkbox(&mut edited.drives_effects, "Follow the audio");
+            ui.end_row();
+
             ui.label("Release").on_hover_text(
                 "How long the element takes to settle after a loud moment. 0 follows the sound \
                  exactly; more makes it bounce back smoothly",
@@ -955,15 +969,102 @@ fn opacity_and_reaction_editor(
             reaction.rotate_degrees,
             reaction.sensitivity,
             reaction.release_seconds,
+            reaction.shake,
         ]
     };
     let has_changed = edited.band != clip.reaction.band
+        || edited.drives_effects != clip.reaction.drives_effects
         || amounts(edited)
             .iter()
             .zip(amounts(clip.reaction))
             .any(|(new, old)| (new - old).abs() > 1e-6);
     if has_changed {
         session.edit_project(|project| project.set_clip_reaction(clip.id, edited));
+    }
+}
+
+/// Effects drawn on a visual clip: blur, glow, glitch and the like.
+fn effects_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Effects").strong());
+        if !clip.effects.is_none()
+            && ui
+                .small_button("Reset")
+                .on_hover_text("Turn all effects off")
+                .clicked()
+        {
+            session
+                .edit_project(|project| project.set_clip_effects(clip.id, ClipEffects::default()));
+        }
+    });
+    ui.separator();
+
+    let mut edited = clip.effects;
+    let percent_slider = |ui: &mut egui::Ui, value: &mut f64| {
+        let mut percent = *value * 100.0;
+        ui.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix(" %"));
+        *value = percent / 100.0;
+    };
+    egui::Grid::new(("effects", clip.id))
+        .num_columns(2)
+        .show(ui, |ui| {
+            let rows: [(&str, &str, &mut f64); 6] = [
+                ("Blur", "Soft focus", &mut edited.blur),
+                (
+                    "Color Split",
+                    "Red and blue shifted apart, like a cheap lens",
+                    &mut edited.color_split,
+                ),
+                ("Glow", "Light around the bright parts", &mut edited.glow),
+                (
+                    "Glitch",
+                    "Bands of the picture jump sideways",
+                    &mut edited.glitch,
+                ),
+                ("Grain", "Moving film grain", &mut edited.grain),
+                ("Vignette", "Darker edges", &mut edited.vignette),
+            ];
+            for (name, hint, value) in rows {
+                ui.label(name).on_hover_text(hint);
+                percent_slider(ui, value);
+                ui.end_row();
+            }
+
+            ui.label("Tint")
+                .on_hover_text("Recolor the picture, keeping its light and dark parts");
+            ui.horizontal(|ui| {
+                let mut color = edited.tint_color.map(|part| part as f32);
+                if ui.color_edit_button_rgb(&mut color).changed() {
+                    edited.tint_color = color.map(f64::from);
+                }
+                percent_slider(ui, &mut edited.tint);
+            });
+            ui.end_row();
+        });
+
+    // With a tolerance: converting to percent and back can change the last
+    // digits without the user having touched anything.
+    let values = |effects: ClipEffects| {
+        [
+            effects.blur,
+            effects.color_split,
+            effects.glow,
+            effects.glitch,
+            effects.grain,
+            effects.vignette,
+            effects.tint,
+            effects.tint_color[0],
+            effects.tint_color[1],
+            effects.tint_color[2],
+        ]
+    };
+    let has_changed = values(edited)
+        .iter()
+        .zip(values(clip.effects))
+        .any(|(new, old)| (new - old).abs() > 1e-6);
+    if has_changed {
+        session.edit_project(|project| project.set_clip_effects(clip.id, edited));
     }
 }
 /// The adjustable values of a visualizer plugin, as its `visualizer.json`
