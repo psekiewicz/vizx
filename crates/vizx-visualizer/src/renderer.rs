@@ -857,6 +857,49 @@ mod tests {
         );
     }
 
+    /// Ring keeps its middle and the background empty, and grows with the
+    /// bass.
+    #[test]
+    fn the_ring_visualizer_is_hollow_and_grows_with_the_bass() {
+        if open_device().is_err() {
+            return;
+        }
+        let folder =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/visualizers/ring");
+        let plugin = VisualizerPlugin::load(&folder).unwrap();
+        let mut renderer = ShaderRenderer::new(&plugin, 160, 90).unwrap();
+        let mut picture = |bass: f32| {
+            let spectrum = [bass; 512];
+            let mut frame = input(&spectrum, &[0.0; 512]);
+            (frame.volume, frame.bass) = (bass, bass);
+            frame.parameters = plugin.pack_parameters(&crate::ParameterValues::new());
+            let mut pixels = Vec::new();
+            renderer.render(&frame, &mut pixels).unwrap();
+            pixels
+        };
+        let quiet = picture(0.0);
+        let loud = picture(1.0);
+
+        for pixels in [&quiet, &loud] {
+            assert_eq!(pixel(pixels, 160, 80, 45), [0, 0, 0, 0], "the middle");
+            assert_eq!(pixel(pixels, 160, 2, 2), [0, 0, 0, 0], "a corner");
+            assert!(pixels.chunks(4).any(|pixel| pixel[3] > 200), "the ring");
+        }
+        // Straight up from the middle, the ring's band is further out when
+        // the bass is loud.
+        let band_top = |pixels: &[u8]| {
+            (0..45)
+                .find(|y| pixel(pixels, 160, 80, *y)[3] > 200)
+                .unwrap()
+        };
+        assert!(
+            band_top(&loud) < band_top(&quiet),
+            "loud {} quiet {}",
+            band_top(&loud),
+            band_top(&quiet)
+        );
+    }
+
     #[test]
     fn a_mistake_in_the_shader_is_reported_not_fatal() {
         let Some(renderer) = renderer(

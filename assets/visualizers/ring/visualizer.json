@@ -1,0 +1,15 @@
+{
+    "name": "Ring",
+    "author": "VizX",
+    "description": "A glowing ring bent by the spectrum, with layers of dots waving inside it like a 3D mesh, in the style of NCS videos. It grows with the bass; the middle and the background stay empty.",
+    "parameters": [
+        { "id": "color", "name": "Color", "kind": "color", "default": [1.0, 0.86, 0.08] },
+        { "id": "radius", "name": "Radius", "kind": "number", "min": 0.15, "max": 0.9, "default": 0.55 },
+        { "id": "thickness", "name": "Thickness", "kind": "number", "min": 0.005, "max": 0.15, "default": 0.06 },
+        { "id": "layers", "name": "Dot layers", "kind": "number", "min": 0, "max": 10, "default": 7, "step": 1 },
+        { "id": "bass", "name": "Bass response", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.6 },
+        { "id": "bend", "name": "Spectrum bend", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.5 },
+        { "id": "glow", "name": "Glow", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.6 },
+        { "id": "spin", "name": "Spin", "kind": "number", "min": -1.0, "max": 1.0, "default": 0.05 }
+    ]
+}

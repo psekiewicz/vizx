@@ -2,8 +2,8 @@
 
 A VizX visualizer is a small program that decides the color of every pixel
 from the sound. It is written in **WGSL**, the shading language of WebGPU,
-and runs on the graphics card. The four visualizers that ship with VizX
-(Spectrum Bars, Oscilloscope, Waterfall, Core) are ordinary plugins; they
+and runs on the graphics card. The five visualizers that ship with VizX
+(Spectrum Bars, Oscilloscope, Waterfall, Core, Ring) are ordinary plugins; they
 live in [`assets/visualizers`](../assets/visualizers) and are good starting
 points to copy.
 
@@ -129,6 +129,19 @@ letter. All parameters together may use 32 numbers; a color counts as three.
 Parameter values are saved in the project, per clip. Changing one renders
 the clip again.
 
+## Example: Ring
+
+`ring/shader.wgsl` shows two techniques beyond a single shape:
+
+- **A shape bent by the spectrum.** `ring_radius(angle)` reads the spectrum
+  along the ring (low notes at the top, high notes down both sides, so
+  there is no seam), and each pixel compares its distance from the middle
+  with it.
+- **Dots without loops over dots.** Each layer of dots is a curve; a pixel
+  rounds its angle to the nearest dot position, works out where the dots
+  there lie, and measures its distance to the closest one. A few layers,
+  each a wave moving at its own speed, cross like a mesh seen in 3D.
+
 ## Names to avoid
 
 VizX adds its own code after yours. Do not define anything called `vizx`,
@@ -157,9 +170,9 @@ on every computer. To add a plugin to VizX itself, put its folder there.
 
 ## Current limits
 
-- **One way of blending.** A visualizer is laid over the layers below
-  according to its opacity. Other blend modes (add, multiply, ...) do not
-  exist yet.
+- **Blending is chosen on the clip, not in the shader.** A visualizer
+  returns color and opacity; how its clip combines with the layers below
+  (Normal, Add, Screen, ...) is set in Properties.
 - **No textures or images** of your own in a plugin yet.
 - **Preview size.** The preview renders a full-frame clip 640 pixels wide.
   Use `vizx.resolution` for anything measured in pixels, so the visualizer
