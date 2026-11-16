@@ -111,6 +111,11 @@ pub fn show(
         // while its animation moves the picture, so they do not jump
         // around while the music plays.
         draw_layer_state(&layer_painter, layer_rect, &layer.state);
+        // An effects layer covers the whole picture; it takes the mouse
+        // only once selected, so the layers below stay clickable.
+        if layer.shows_below && !session.is_clip_selected(layer.track_id, layer.clip_id) {
+            continue;
+        }
 
         // A turned element takes the mouse only inside its own outline, so
         // the corners of the box around it do not hide the layers below.

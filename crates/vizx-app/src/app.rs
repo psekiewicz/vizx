@@ -55,6 +55,8 @@ pub enum AppCommand {
     ConfirmExport,
     /// Add a text element in the middle of the picture.
     AddText,
+    /// Add an effects layer on top, which changes the layers below it.
+    AddEffectsLayer,
     /// Open the Lyrics window, to turn the words of a song into subtitles.
     OpenLyrics,
     /// Pick an .lrc or .srt file and add its timed lines as subtitles.
@@ -754,6 +756,12 @@ impl VizxApp {
                     Ok(_) => "Text added".to_owned(),
                     Err(problem) => format!("Could not add text: {problem}"),
                 };
+            }
+            AppCommand::AddEffectsLayer => {
+                self.session.add_effects_layer();
+                self.status_message =
+                    "Effects layer added: its effects and movement apply to the layers below"
+                        .to_owned();
             }
             AppCommand::OpenLyrics => {
                 let project_seconds = self.session.project().settings.duration_seconds();

@@ -56,8 +56,14 @@ impl MediaSource {
             | MediaContent::Image(_)
             | MediaContent::Video(_)
             | MediaContent::Animation(_)
-            | MediaContent::Text(_) => None,
+            | MediaContent::Text(_)
+            | MediaContent::EffectsLayer => None,
         }
+    }
+
+    /// Whether this is an effects layer, which changes the layers below it.
+    pub fn is_effects_layer(&self) -> bool {
+        matches!(self.content, MediaContent::EffectsLayer)
     }
 
     /// The text and its look, if this is a text element.
@@ -85,6 +91,9 @@ impl MediaSource {
     /// The name to show for this source: its file name, or for a text its
     /// first line.
     pub fn display_name(&self) -> &str {
+        if self.is_effects_layer() {
+            return "Effects Layer";
+        }
         match self.text() {
             Some(text) => text
                 .text
@@ -139,6 +148,7 @@ impl MediaSource {
             || self.is_still()
             || self.video().is_some()
             || self.animation().is_some()
+            || self.is_effects_layer()
     }
 }
 
@@ -167,6 +177,10 @@ pub enum MediaContent {
     /// A piece of text (a title, a caption). It is not a file: `path` is
     /// empty and everything about it is stored here.
     Text(TextProperties),
+    /// An effects layer: it has no picture of its own, but moves, turns
+    /// and changes everything on the layers below it, like a camera (shake
+    /// and zoom on the beat, a glitch for a moment). `path` is empty.
+    EffectsLayer,
 }
 
 /// A text element: what it says and how it looks.

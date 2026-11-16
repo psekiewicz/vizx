@@ -926,6 +926,14 @@ impl EditorSession {
         Ok(Some(track_id))
     }
 
+    /// Adds an effects layer above all others, which becomes selected.
+    pub fn add_effects_layer(&mut self) -> TrackId {
+        let (_media_id, track_id) = self.project.add_effects_layer();
+        self.has_unsaved_changes = true;
+        self.set_selection(Selection::Track(track_id));
+        track_id
+    }
+
     /// Adds a text element in the middle of the picture, on a visual layer,
     /// which becomes selected.
     pub fn add_text(&mut self) -> Result<TrackId, String> {

@@ -79,6 +79,7 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 /// - 20: a media file's `relative_path` (relative to the project file), used
 ///   when its full path is gone. Older files load without it.
 /// - 21: a clip's `blend_mode`. Older files load with Normal.
-/// - 22: a clip's `effects`, and a reaction's `shake` and `drives_effects`.
-///   Older files load without effects.
+/// - 22: a clip's `effects`, a reaction's `shake` and `drives_effects`,
+///   and effects layers (`MediaContent::EffectsLayer`). Older files load
+///   without effects.
 pub const CURRENT_FORMAT_VERSION: u32 = 22;

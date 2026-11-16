@@ -44,7 +44,7 @@ impl Thumbnails {
         ctx: &egui::Context,
         source: &MediaSource,
     ) -> Option<(egui::TextureId, f32)> {
-        if !source.is_visual() || source.is_visualizer() {
+        if !source.is_visual() || source.is_visualizer() || source.is_effects_layer() {
             return None;
         }
         self.collect(ctx);

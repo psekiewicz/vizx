@@ -81,6 +81,9 @@ pub struct LayerView {
     pub blend: vizx_core::LayerBlend,
     /// Its effects at the playhead.
     pub effects: vizx_core::LayerEffects,
+    /// It is an effects layer: it changes the layers below it and has no
+    /// picture of its own.
+    pub shows_below: bool,
     pub state: LayerState,
 }
 
@@ -209,7 +212,7 @@ impl VisualPreview {
                 // An image or a text is one picture, and a frame animation
                 // is read frame by frame as it is shown; nothing is
                 // rendered ahead for them.
-                if media.is_still() || media.animation().is_some() {
+                if media.is_still() || media.animation().is_some() || media.is_effects_layer() {
                     continue;
                 }
                 // A clip that cannot be rendered at all (for example a
@@ -277,7 +280,10 @@ impl VisualPreview {
             .into_iter()
             .rev()
         {
-            let state = if media.image().is_some() {
+            let state = if media.is_effects_layer() {
+                // Drawn from the layers below it, which are already there.
+                LayerState::Shown
+            } else if media.image().is_some() {
                 self.show_image(clip.id, &media.path, image_store)
             } else if let Some(animation) = media.animation() {
                 let seconds_into_clip = playhead_seconds - clip.start_milliseconds as f64 / 1000.0;
@@ -333,7 +339,11 @@ impl VisualPreview {
                 // The dragged rotation replaces the keyed one; spin stays.
                 transform.rotation_degrees += rotation - keyed.rotation_degrees;
             }
-            geometries.push(layer_geometry(&transform, effect));
+            geometries.push(if media.is_effects_layer() {
+                vizx_core::effects_layer_geometry(&transform, effect, &clip.reaction)
+            } else {
+                layer_geometry(&transform, effect)
+            });
             self.layers.push(LayerView {
                 clip_id: clip.id,
                 track_id: track.id,
@@ -349,6 +359,7 @@ impl VisualPreview {
                     effect,
                     playhead_seconds,
                 ),
+                shows_below: media.is_effects_layer(),
                 state,
             });
         }
@@ -392,13 +403,23 @@ impl VisualPreview {
             .zip(geometries)
             .filter(|(layer, _)| matches!(layer.state, LayerState::Shown))
             .filter_map(|(layer, geometry)| {
-                let picture = self.pictures.get(&layer.clip_id)?;
+                let (version, width, height, pixels) = if layer.shows_below {
+                    (0, 0, 0, &[][..])
+                } else {
+                    let picture = self.pictures.get(&layer.clip_id)?;
+                    (
+                        picture.version,
+                        picture.width,
+                        picture.height,
+                        picture.bytes(),
+                    )
+                };
                 Some(LayerDraw {
                     key: clip_key(layer.clip_id),
-                    version: picture.version,
-                    width: picture.width,
-                    height: picture.height,
-                    pixels: picture.bytes(),
+                    version,
+                    width,
+                    height,
+                    pixels,
                     center: geometry.center,
                     size: geometry.size,
                     rotation_degrees: geometry.rotation_degrees,
@@ -406,6 +427,7 @@ impl VisualPreview {
                     sharp_pixels: layer.sharp_pixels,
                     blend: layer.blend,
                     effects: layer.effects,
+                    shows_below: layer.shows_below,
                 })
             })
             .collect();

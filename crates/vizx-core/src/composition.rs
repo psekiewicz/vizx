@@ -274,6 +274,19 @@ pub fn layer_geometry(transform: &Transform, effect: ReactionEffect) -> LayerGeo
     }
 }
 
+/// Like [`layer_geometry`], for an effects layer: enlarged by as much as
+/// its shake can move it, so a shaking picture never shows its edges.
+pub fn effects_layer_geometry(
+    transform: &Transform,
+    effect: ReactionEffect,
+    reaction: &AudioReaction,
+) -> LayerGeometry {
+    let mut geometry = layer_geometry(transform, effect);
+    let grow = (1.0 + 2.0 * reaction.shake) as f32;
+    geometry.size = geometry.size.map(|edge| edge * grow);
+    geometry
+}
+
 /// The effects a clip is drawn with at `seconds` into the project: as set,
 /// or, when its reaction drives them, as strong as the sound is right now.
 pub fn layer_effects(

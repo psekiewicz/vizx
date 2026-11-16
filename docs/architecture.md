@@ -619,6 +619,17 @@ for every step is expensive.
 - **Shake** (`AudioReaction::shake`): a random jump 24 times a second, as
   far as the reaction's level allows; worked out from the moment only
   (`shake_offset`), so the preview and the export agree.
+- **Effects layers** (`MediaContent::EffectsLayer`, "Add > Effects Layer"):
+  a clip without a picture of its own that acts like a camera on all the
+  layers below it. Its placement, rotation, keyframes, reaction (pulse,
+  shake...) and effects apply to everything below, for as long as the clip
+  lasts. The compositor draws the layers below it, copies the frame
+  (`LayerDraw::shows_below`), and draws the copy back moved and changed;
+  the clip's opacity mixes the changed picture with the unchanged one.
+  `effects_layer_geometry` enlarges it by twice its shake, so shaking never
+  shows the frame's edges. It is added on a new layer on top, and takes
+  mouse clicks in the preview only once selected, so the layers below stay
+  clickable.
 - **Export settings** (`ExportSettings`, remembered in `AppSettings`):
   format (MP4 H.264 / H.265, WebM VP9, MOV ProRes 422, GIF with a palette
   made from its own colors, and two transparent ones: MOV ProRes 4444 with

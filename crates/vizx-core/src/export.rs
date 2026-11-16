@@ -20,8 +20,8 @@ use vizx_render::{Compositor, LayerDraw};
 
 use crate::animation::AnimationReader;
 use crate::composition::{
-    ReactionMeter, audio_sources, beat_count, beat_times, frame_source, layer_effects,
-    layer_geometry,
+    ReactionMeter, audio_sources, beat_count, beat_times, effects_layer_geometry, frame_source,
+    layer_effects, layer_geometry,
 };
 use crate::ffmpeg::VideoWriter;
 use crate::image_store::{DecodedImage, decode_image_file};
@@ -271,6 +271,8 @@ pub enum ExportContent {
     Text(TextProperties),
     /// Something drawn frame by frame: a visualizer or a video.
     Frames(FrameSource),
+    /// An effects layer: it changes everything drawn below it.
+    LayersBelow,
 }
 
 impl ExportJob {
@@ -308,6 +310,8 @@ impl ExportJob {
                     ExportContent::Animation(PathBuf::from(&media.path), animation.clone())
                 } else if let Some(text) = media.text() {
                     ExportContent::Text(text.clone())
+                } else if media.is_effects_layer() {
+                    ExportContent::LayersBelow
                 } else {
                     let source = frame_source(media, clip, bundled_presets, catalog, Some(ffmpeg))
                         .map_err(|problem| format!("{}: {problem}", media.file_name()))?;
@@ -464,6 +468,8 @@ enum LayerPicture {
     },
     /// Not looked at yet; clips are prepared when they first appear.
     NotPrepared,
+    /// An effects layer: what is below it.
+    Below,
     Image(DecodedImage),
     Frames {
         // Boxed (kept behind a pointer) because it is much larger than
@@ -519,6 +525,7 @@ fn run(
                 }
             }
             // ...then describe where each one goes, and draw them all.
+            let no_pixels = Vec::new();
             let mut draws = Vec::new();
             for (index, (layer, picture)) in job.layers.iter().zip(&pictures).enumerate() {
                 if !is_visible(layer, seconds) {
@@ -535,8 +542,10 @@ fn run(
                         pixels,
                         ..
                     } => (*width, *height, pixels),
+                    LayerPicture::Below => (0, 0, &no_pixels),
                     LayerPicture::NotPrepared => continue,
                 };
+                let shows_below = matches!(picture, LayerPicture::Below);
                 let effect = meter.effect(
                     &layer.input_audio,
                     &layer.beats,
@@ -546,7 +555,11 @@ fn run(
                     f64::from(job.width) / f64::from(job.height.max(1)),
                 );
                 let transform = layer.motion.animated_at(seconds - layer.start_seconds);
-                let geometry = layer_geometry(&transform, effect);
+                let geometry = if shows_below {
+                    effects_layer_geometry(&transform, effect, &layer.reaction)
+                } else {
+                    layer_geometry(&transform, effect)
+                };
                 draws.push(LayerDraw {
                     key: index as u64,
                     // An image never changes; a drawn clip changes every
@@ -566,6 +579,7 @@ fn run(
                     sharp_pixels: layer.sharp_pixels,
                     blend: layer.blend,
                     effects: layer_effects(&layer.effects, &layer.reaction, effect, seconds),
+                    shows_below,
                 });
             }
             compositor.render(&draws, &mut frame_pixels)?;
@@ -612,6 +626,7 @@ fn advance(
             }
             // The same drawing as in the preview, for the video's height.
             ExportContent::Text(text) => LayerPicture::Image(render_text(text, job.height)?),
+            ExportContent::LayersBelow => LayerPicture::Below,
             ExportContent::Animation(path, animation) => {
                 let mut reader = AnimationReader::new(
                     &path.to_string_lossy(),
@@ -812,6 +827,73 @@ mod tests {
             blend: vizx_render::LayerBlend::Normal,
             effects: vizx_project::ClipEffects::default(),
         }
+    }
+
+    /// An effects layer over a red left half moves it to the right and
+    /// tints it, in the exported video as in the preview.
+    #[test]
+    fn an_effects_layer_changes_the_layers_below_it_in_the_export() {
+        let (Some(ffmpeg), true) = (find_ffmpeg(), vizx_render::open_device("test").is_ok()) else {
+            eprintln!("FFmpeg or a graphics adapter is missing: skipping");
+            return;
+        };
+        let image_path = temporary_path("camera-source.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 0, 0, 255]))
+            .save(&image_path)
+            .unwrap();
+        let output = temporary_path("camera-source.png").with_file_name("camera-out.png");
+        let red = image_layer(
+            &image_path,
+            Placement {
+                x: 0.0,
+                y: 0.0,
+                width: 0.5,
+                height: 1.0,
+            },
+        );
+        let mut camera = image_layer(
+            &image_path,
+            Placement {
+                x: 0.5,
+                ..Placement::FULL
+            },
+        );
+        camera.content = ExportContent::LayersBelow;
+        camera.effects = vizx_project::ClipEffects {
+            tint: 1.0,
+            tint_color: [0.0, 0.0, 1.0],
+            ..vizx_project::ClipEffects::default()
+        };
+
+        let export = Export::start(
+            ExportJob {
+                output: output.clone(),
+                ffmpeg,
+                width: 32,
+                height: 16,
+                start_seconds: 0.0,
+                frame_rate: (10, 1),
+                duration_seconds: 0.1,
+                format: VideoFormat::PngSequence,
+                quality: ExportQuality::Low,
+                audio: Vec::new(),
+                layers: vec![red, camera],
+            },
+            || {},
+        );
+        let result = wait_for(&export);
+        let _ = std::fs::remove_file(&image_path);
+        assert_eq!(result, Ok(()));
+        let frame = png_sequence_frame(&output, 1);
+        let picture = image::open(&frame).unwrap().to_rgba8();
+        let _ = std::fs::remove_file(&frame);
+        // A PNG sequence is transparent where nothing is drawn.
+        assert_eq!(picture.get_pixel(4, 8).0[3], 0, "left is empty");
+        let right = picture.get_pixel(24, 8).0;
+        assert!(
+            right[0] < 10 && right[2] > 60,
+            "right is the tinted red: {right:?}"
+        );
     }
 
     /// A red picture tinted blue by its effects, which follow the beats:

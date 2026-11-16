@@ -1002,6 +1002,48 @@ impl Project {
         }
     }
 
+    /// Adds an effects layer above all others, for the whole project: it
+    /// changes everything below it. Its effects start off, so it changes
+    /// nothing until they are set.
+    pub fn add_effects_layer(&mut self) -> (MediaId, TrackId) {
+        // Always a new layer on top: below others it would leave them out.
+        let track_id = self.add_track("Effects", TrackKind::Visual);
+        let media_id = MediaId(self.next_media_id);
+        self.next_media_id += 1;
+        self.media.push(MediaSource {
+            id: media_id,
+            relative_path: None,
+            path: String::new(),
+            content: MediaContent::EffectsLayer,
+            manual_beats: None,
+            tempo_bpm: None,
+        });
+        let clip = Clip {
+            id: ClipId(self.next_clip_id),
+            media: media_id,
+            start_milliseconds: 0,
+            duration_milliseconds: self.settings.duration_milliseconds,
+            source_offset_milliseconds: 0,
+            audio_gain: 1.0,
+            audio_input: AudioInput::Mix,
+            placement: Placement::FULL,
+            parameters: BTreeMap::new(),
+            opacity: 1.0,
+            reaction: AudioReaction::default(),
+            rotation_degrees: 0.0,
+            spin_degrees_per_second: 0.0,
+            keyframes: Vec::new(),
+            sharp_pixels: None,
+            blend_mode: BlendMode::Normal,
+            effects: ClipEffects::default(),
+        };
+        self.next_clip_id += 1;
+        if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
+            track.clips.push(clip);
+        }
+        (media_id, track_id)
+    }
+
     /// Adds a text element on a visual layer for the whole project, at the
     /// given place in the picture.
     pub fn add_text(
@@ -2049,6 +2091,24 @@ mod tests {
                 ..ReactionEffect::NONE
             }
         );
+    }
+
+    #[test]
+    fn an_effects_layer_goes_on_top_and_survives_saving() {
+        let mut project = Project::new();
+        project.add_text(TextProperties::default(), Placement::FULL);
+        let (media_id, track_id) = project.add_effects_layer();
+        assert_eq!(project.tracks()[0].id, track_id);
+        let source = project.media_source(media_id).unwrap();
+        assert!(source.is_visual() && source.is_effects_layer() && !source.is_still());
+        assert_eq!(source.display_name(), "Effects Layer");
+        assert!(project.missing_media().is_empty());
+        let layers = project.visual_layers_at(0);
+        assert!(layers[0].2.is_effects_layer(), "on top");
+
+        let json = serde_json::to_string(&project).unwrap();
+        let loaded: Project = serde_json::from_str(&json).unwrap();
+        assert!(loaded.media_source(media_id).unwrap().is_effects_layer());
     }
 
     #[test]

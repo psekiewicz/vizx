@@ -84,6 +84,7 @@ impl LayerEffects {
 }
 
 /// One picture to draw into the frame.
+#[derive(Clone, Copy)]
 pub struct LayerDraw<'a> {
     /// Identifies the layer between frames, so its picture stays on the
     /// graphics card instead of being sent again every frame.
@@ -110,6 +111,20 @@ pub struct LayerDraw<'a> {
     /// How the layer's colors combine with what is below it.
     pub blend: LayerBlend,
     pub effects: LayerEffects,
+    /// The layer's picture is everything drawn below it so far (an effects
+    /// layer: a "camera" that moves, turns and changes all the layers below
+    /// at once). `pixels`, `width`, `height` and `blend` are not used. Its
+    /// opacity mixes the changed picture with the unchanged one.
+    pub shows_below: bool,
+}
+
+/// What an effects layer (see [`LayerDraw::shows_below`]) draws with: the
+/// unchanged picture below it and the changed one, each with its placement.
+struct BelowLayer {
+    unchanged: (Buffer, BindGroup),
+    changed: (Buffer, BindGroup),
+    /// The [`Compositor::snapshot_generation`] they were made for.
+    generation: u64,
 }
 
 /// How a layer's colors combine with the layers below it.
@@ -205,6 +220,13 @@ pub struct Compositor {
     layers: HashMap<u64, UploadedLayer>,
     /// Layers are drawn over nothing instead of over black.
     transparent: bool,
+    /// A copy of the frame as drawn so far, which effects layers draw.
+    snapshot_view: TextureView,
+    snapshot: Texture,
+    /// Counts up when the snapshot is made anew (on resizing), so the
+    /// effects layers know to bind the new one.
+    snapshot_generation: u64,
+    below_layers: HashMap<u64, BelowLayer>,
 }
 
 impl Compositor {
@@ -268,6 +290,7 @@ impl Compositor {
         });
         let (frame_texture, frame_view, readback_buffer, padded_row_bytes) =
             create_frame(&device, width, height);
+        let (snapshot, snapshot_view) = create_snapshot(&device, width, height);
 
         Ok(Self {
             device,
@@ -284,6 +307,10 @@ impl Compositor {
             padded_row_bytes,
             layers: HashMap::new(),
             transparent: false,
+            snapshot,
+            snapshot_view,
+            snapshot_generation: 0,
+            below_layers: HashMap::new(),
         })
     }
 
@@ -312,6 +339,187 @@ impl Compositor {
         self.padded_row_bytes = padded_row_bytes;
         self.width = width;
         self.height = height;
+        let (snapshot, snapshot_view) = create_snapshot(&self.device, width, height);
+        self.snapshot = snapshot;
+        self.snapshot_view = snapshot_view;
+        self.snapshot_generation += 1;
+    }
+
+    fn clear_color(&self) -> Color {
+        if self.transparent {
+            Color::TRANSPARENT
+        } else {
+            Color::BLACK
+        }
+    }
+
+    /// Draws `layers` (none of them an effects layer) into the frame, over
+    /// a cleared frame or over what it already holds.
+    fn draw_layers(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        layers: &[LayerDraw<'_>],
+        clear: bool,
+    ) {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("vizx frame"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &self.frame_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    load: if clear {
+                        LoadOp::Clear(self.clear_color())
+                    } else {
+                        LoadOp::Load
+                    },
+                    store: StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        let mut current_blend = None;
+        for layer in layers {
+            if let Some(uploaded) = self.layers.get(&layer.key) {
+                if current_blend != Some(layer.blend)
+                    && let Some(pipeline) = self.pipeline(layer.blend)
+                {
+                    pass.set_pipeline(pipeline);
+                    current_blend = Some(layer.blend);
+                }
+                pass.set_bind_group(0, &uploaded.bind_group, &[]);
+                pass.draw(0..4, 0..1);
+            }
+        }
+    }
+
+    fn pipeline(&self, blend: LayerBlend) -> Option<&RenderPipeline> {
+        self.pipelines
+            .iter()
+            .find(|(each, _)| *each == blend)
+            .map(|(_, pipeline)| pipeline)
+    }
+
+    /// Replaces the frame by what the effects layer `key` makes of it.
+    fn draw_effects_layer(&self, encoder: &mut wgpu::CommandEncoder, key: u64) {
+        let Some(below) = self.below_layers.get(&key) else {
+            return;
+        };
+        let size = Extent3d {
+            width: self.width,
+            height: self.height,
+            depth_or_array_layers: 1,
+        };
+        encoder.copy_texture_to_texture(
+            self.frame_texture.as_image_copy(),
+            self.snapshot.as_image_copy(),
+            size,
+        );
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("vizx effects layer"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &self.frame_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Clear(self.clear_color()),
+                    store: StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        // The unchanged picture at (1 - opacity) plus the changed one at
+        // the opacity: colors are premultiplied, so adding mixes them.
+        if let Some(pipeline) = self.pipeline(LayerBlend::Add) {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &below.unchanged.1, &[]);
+            pass.draw(0..4, 0..1);
+            pass.set_bind_group(0, &below.changed.1, &[]);
+            pass.draw(0..4, 0..1);
+        }
+    }
+
+    /// Makes sure the effects layer has its placements on the graphics card.
+    fn prepare_effects_layer(&mut self, layer: &LayerDraw<'_>) {
+        let is_current = self
+            .below_layers
+            .get(&layer.key)
+            .is_some_and(|below| below.generation == self.snapshot_generation);
+        if !is_current {
+            let make = || {
+                let uniforms = self.device.create_buffer(&BufferDescriptor {
+                    label: Some("vizx effects layer placement"),
+                    size: LAYER_UNIFORM_SIZE as u64,
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let bind_group = self.bind_group(&uniforms, &self.sampler, &self.snapshot_view);
+                (uniforms, bind_group)
+            };
+            let below = BelowLayer {
+                unchanged: make(),
+                changed: make(),
+                generation: self.snapshot_generation,
+            };
+            self.below_layers.insert(layer.key, below);
+        }
+        let Some(below) = self.below_layers.get(&layer.key) else {
+            return;
+        };
+        let opacity = layer.opacity.clamp(0.0, 1.0);
+        let unchanged = self.uniform_bytes(&LayerDraw {
+            center: [0.5, 0.5],
+            size: [1.0, 1.0],
+            rotation_degrees: 0.0,
+            opacity: 1.0 - opacity,
+            effects: LayerEffects::NONE,
+            ..*layer
+        });
+        self.queue.write_buffer(&below.unchanged.0, 0, &unchanged);
+        let changed = self.uniform_bytes(&LayerDraw { opacity, ..*layer });
+        self.queue.write_buffer(&below.changed.0, 0, &changed);
+    }
+
+    fn bind_group(&self, uniforms: &Buffer, sampler: &Sampler, view: &TextureView) -> BindGroup {
+        self.device.create_bind_group(&BindGroupDescriptor {
+            label: Some("vizx layer"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: uniforms.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Sampler(sampler),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(view),
+                },
+            ],
+        })
+    }
+
+    /// The `Layer` struct of `compositor.wgsl` for `layer`, in its layout.
+    fn uniform_bytes(&self, layer: &LayerDraw<'_>) -> Vec<u8> {
+        let (frame_width, frame_height) = (self.width as f32, self.height as f32);
+        let placement = [
+            layer.center[0] * frame_width,
+            layer.center[1] * frame_height,
+            layer.size[0] * frame_width / 2.0,
+            layer.size[1] * frame_height / 2.0,
+            frame_width,
+            frame_height,
+            layer.rotation_degrees.to_radians(),
+            layer.opacity.clamp(0.0, 1.0),
+        ];
+        let effects = layer.effects.uniforms(frame_height);
+        placement
+            .iter()
+            .chain(&effects)
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
     }
 
     /// Draws `layers` over a black frame (or a transparent one, see
@@ -319,50 +527,37 @@ impl Compositor {
     /// the result into `pixels` as RGBA bytes, top row first.
     pub fn render(&mut self, layers: &[LayerDraw<'_>], pixels: &mut Vec<u8>) -> Result<(), String> {
         // Pictures of layers that are gone are released.
-        self.layers
-            .retain(|key, _| layers.iter().any(|layer| layer.key == *key));
+        let is_wanted = |key: &u64, below: bool| {
+            layers
+                .iter()
+                .any(|layer| layer.key == *key && layer.shows_below == below)
+        };
+        self.layers.retain(|key, _| is_wanted(key, false));
+        self.below_layers.retain(|key, _| is_wanted(key, true));
         for layer in layers {
-            self.upload(layer)?;
+            if layer.shows_below {
+                self.prepare_effects_layer(layer);
+            } else {
+                self.upload(layer)?;
+            }
         }
 
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
-        {
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("vizx frame"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &self.frame_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(if self.transparent {
-                            Color::TRANSPARENT
-                        } else {
-                            Color::BLACK
-                        }),
-                        store: StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            let mut current_blend = None;
-            for layer in layers {
-                if let Some(uploaded) = self.layers.get(&layer.key) {
-                    if current_blend != Some(layer.blend)
-                        && let Some((_, pipeline)) = self
-                            .pipelines
-                            .iter()
-                            .find(|(blend, _)| *blend == layer.blend)
-                    {
-                        pass.set_pipeline(pipeline);
-                        current_blend = Some(layer.blend);
-                    }
-                    pass.set_bind_group(0, &uploaded.bind_group, &[]);
-                    pass.draw(0..4, 0..1);
-                }
+        // The layers up to each effects layer are drawn, then the effects
+        // layer turns all of that into its own picture, and so on.
+        let mut first_undrawn = 0;
+        let mut is_cleared = false;
+        for (index, layer) in layers.iter().enumerate() {
+            if layer.shows_below {
+                self.draw_layers(&mut encoder, &layers[first_undrawn..index], !is_cleared);
+                self.draw_effects_layer(&mut encoder, layer.key);
+                is_cleared = true;
+                first_undrawn = index + 1;
             }
         }
+        self.draw_layers(&mut encoder, &layers[first_undrawn..], !is_cleared);
         encoder.copy_texture_to_buffer(
             TexelCopyTextureInfo {
                 texture: &self.frame_texture,
@@ -443,25 +638,10 @@ impl Compositor {
             uploaded.version = layer.version;
         }
 
-        // The `Layer` struct of `compositor.wgsl`, in its layout.
-        let (frame_width, frame_height) = (self.width as f32, self.height as f32);
-        let uniforms = [
-            layer.center[0] * frame_width,
-            layer.center[1] * frame_height,
-            layer.size[0] * frame_width / 2.0,
-            layer.size[1] * frame_height / 2.0,
-            frame_width,
-            frame_height,
-            layer.rotation_degrees.to_radians(),
-            layer.opacity.clamp(0.0, 1.0),
-        ];
-        let effects = layer.effects.uniforms(frame_height);
-        let bytes: Vec<u8> = uniforms
-            .iter()
-            .chain(&effects)
-            .flat_map(|value| value.to_le_bytes())
-            .collect();
-        self.queue.write_buffer(&uploaded.uniforms, 0, &bytes);
+        let bytes = self.uniform_bytes(layer);
+        if let Some(uploaded) = self.layers.get(&layer.key) {
+            self.queue.write_buffer(&uploaded.uniforms, 0, &bytes);
+        }
         Ok(())
     }
 
@@ -521,6 +701,26 @@ impl Compositor {
             version: 0,
         }
     }
+}
+
+/// The copy of the frame that effects layers draw from.
+fn create_snapshot(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
+    let texture = device.create_texture(&TextureDescriptor {
+        label: Some("vizx frame snapshot"),
+        size: Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: FRAME_FORMAT,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&TextureViewDescriptor::default());
+    (texture, view)
 }
 
 /// The picture frames are drawn into, and the buffer they are read from.
@@ -626,7 +826,96 @@ mod tests {
             sharp_pixels: false,
             blend: LayerBlend::Normal,
             effects: LayerEffects::NONE,
+            shows_below: false,
         }
+    }
+
+    #[test]
+    fn an_effects_layer_moves_and_changes_everything_below_it() {
+        let Some(mut compositor) = compositor(64, 32) else {
+            return;
+        };
+        let red = solid([255, 0, 0, 255], 4, 4);
+        let green = solid([0, 255, 0, 255], 4, 4);
+        let camera = |opacity: f32, effects: LayerEffects| LayerDraw {
+            shows_below: true,
+            // Moved half the frame to the right.
+            center: [1.0, 0.5],
+            opacity,
+            effects,
+            ..layer(5, &[], 0, 0)
+        };
+        let render = |compositor: &mut Compositor, layers: &[LayerDraw<'_>]| {
+            let mut pixels = Vec::new();
+            compositor.render(layers, &mut pixels).unwrap();
+            pixels
+        };
+
+        // Red on the left half, moved by the camera to the right half.
+        let moved = render(
+            &mut compositor,
+            &[left_half_red(&red), camera(1.0, LayerEffects::NONE)],
+        );
+        assert_near(pixel(&moved, 64, 8, 16), [0, 0, 0, 255]);
+        assert_near(pixel(&moved, 64, 40, 16), [255, 0, 0, 255]);
+
+        // At half opacity: half moved, half where it was.
+        let half = render(
+            &mut compositor,
+            &[left_half_red(&red), camera(0.5, LayerEffects::NONE)],
+        );
+        assert_near(pixel(&half, 64, 8, 16), [128, 0, 0, 255]);
+        assert_near(pixel(&half, 64, 40, 16), [128, 0, 0, 255]);
+
+        // Its effects change what is below; a layer above it stays as it is.
+        let tinted = render(
+            &mut compositor,
+            &[
+                left_half_red(&red),
+                camera(
+                    1.0,
+                    LayerEffects {
+                        tint: 1.0,
+                        tint_color: [0.0, 0.0, 1.0],
+                        ..LayerEffects::NONE
+                    },
+                ),
+                LayerDraw {
+                    center: [0.25, 0.5],
+                    size: [0.5, 1.0],
+                    ..layer(2, &green, 4, 4)
+                },
+            ],
+        );
+        assert_near(pixel(&tinted, 64, 40, 16), [0, 0, 76, 255]);
+        assert_near(pixel(&tinted, 64, 8, 16), [0, 255, 0, 255]);
+
+        // Two effects layers each move what is below them.
+        let twice = render(
+            &mut compositor,
+            &[
+                left_half_red(&red),
+                LayerDraw {
+                    center: [0.75, 0.5],
+                    ..camera(1.0, LayerEffects::NONE)
+                },
+                LayerDraw {
+                    key: 6,
+                    center: [0.75, 0.5],
+                    ..camera(1.0, LayerEffects::NONE)
+                },
+            ],
+        );
+        assert_near(pixel(&twice, 64, 12, 16), [0, 0, 0, 255]);
+        assert_near(pixel(&twice, 64, 40, 16), [255, 0, 0, 255]);
+
+        // The frame size can change between frames.
+        compositor.resize(32, 16);
+        let small = render(
+            &mut compositor,
+            &[left_half_red(&red), camera(1.0, LayerEffects::NONE)],
+        );
+        assert_near(pixel(&small, 32, 20, 8), [255, 0, 0, 255]);
     }
 
     /// Red on the left half of the frame, nothing on the right.

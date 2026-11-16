@@ -101,6 +101,9 @@ fn track_properties(
                         None if source.is_milkdrop_preset() => "MilkDrop preset".to_owned(),
                         None if source.video().is_some() => "Video".to_owned(),
                         None if source.text().is_some() => "Text".to_owned(),
+                        None if source.is_effects_layer() => {
+                            "Effects layer: changes the layers below".to_owned()
+                        }
                         None if source.animation().is_some() => "Frame animation".to_owned(),
                         None => "Visualizer plugin".to_owned(),
                     };
@@ -113,6 +116,7 @@ fn track_properties(
             let is_visualizer = source.is_visualizer();
             let plugin_path = source.is_visualizer_plugin().then(|| source.path.clone());
             let is_visual = source.is_visual();
+            let is_effects_layer = source.is_effects_layer();
             let is_picture = source.image().is_some() || source.animation().is_some();
             let audio_media = source.audio().is_some().then_some(source.id);
             let animation = source
@@ -166,22 +170,26 @@ fn track_properties(
                     }
                 }
                 let mut blend = clip.blend_mode;
-                ui.horizontal(|ui| {
-                    ui.label("Blend");
-                    egui::ComboBox::from_id_salt(("blend_mode", clip.id))
-                        .selected_text(blend.label())
-                        .show_ui(ui, |ui| {
-                            for mode in vizx_project::BlendMode::ALL {
-                                ui.selectable_value(&mut blend, mode, mode.label());
-                            }
-                        })
-                        .response
-                        .on_hover_text(
-                            "Add / Screen: brighten, black disappears\n\
-                             Multiply: darken, white disappears\n\
-                             Lighten: keep the brighter color",
-                        );
-                });
+                // An effects layer replaces what is below it; blending
+                // does not apply.
+                if !is_effects_layer {
+                    ui.horizontal(|ui| {
+                        ui.label("Blend");
+                        egui::ComboBox::from_id_salt(("blend_mode", clip.id))
+                            .selected_text(blend.label())
+                            .show_ui(ui, |ui| {
+                                for mode in vizx_project::BlendMode::ALL {
+                                    ui.selectable_value(&mut blend, mode, mode.label());
+                                }
+                            })
+                            .response
+                            .on_hover_text(
+                                "Add / Screen: brighten, black disappears\n\
+                                 Multiply: darken, white disappears\n\
+                                 Lighten: keep the brighter color",
+                            );
+                    });
+                }
                 if blend != clip.blend_mode {
                     session.edit_project(|project| project.set_clip_blend_mode(clip.id, blend));
                 }

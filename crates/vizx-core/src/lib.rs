@@ -29,8 +29,8 @@ pub use app_data::{
 };
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
 pub use composition::{
-    LayerGeometry, ReactionMeter, audio_sources, beat_count, beat_pulse, beat_times, frame_source,
-    last_beat, layer_effects, layer_geometry, tempo_of,
+    LayerGeometry, ReactionMeter, audio_sources, beat_count, beat_pulse, beat_times,
+    effects_layer_geometry, frame_source, last_beat, layer_effects, layer_geometry, tempo_of,
 };
 pub use export::{
     Export, ExportContent, ExportJob, ExportLayer, ExportQuality, ExportSettings, VideoFormat,
