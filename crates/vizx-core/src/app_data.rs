@@ -43,6 +43,8 @@ pub struct AppSettings {
     pub panel_layout: Option<serde_json::Value>,
     /// Playback volume, 0 to 1.
     pub volume: f32,
+    /// Whether clips on one track may cover each other.
+    pub allow_clip_overlap: bool,
 }
 
 impl Default for AppSettings {
@@ -52,6 +54,7 @@ impl Default for AppSettings {
             show_welcome: true,
             panel_layout: None,
             volume: 1.0,
+            allow_clip_overlap: false,
         }
     }
 }

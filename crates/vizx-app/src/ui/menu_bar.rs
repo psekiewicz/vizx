@@ -128,6 +128,9 @@ fn edit_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
         "Ctrl+D",
         AppCommand::DuplicateClip,
     );
+    ui.separator();
+    ui.checkbox(&mut app.settings.allow_clip_overlap, "Allow Clip Overlap")
+        .on_hover_text("When off, clips on a track stop at their neighbours");
 }
 
 fn view_menu(ui: &mut egui::Ui, app: &mut VizxApp) {

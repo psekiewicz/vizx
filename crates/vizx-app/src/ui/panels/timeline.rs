@@ -919,7 +919,7 @@ fn show_lanes(
             if moves_group {
                 session.move_selected_clips_to_track(clip_id, track_id);
             } else {
-                session.edit_project(|project| project.move_clip_to_track(clip_id, track_id));
+                session.move_clip_to_track(clip_id, track_id);
             }
         }
         if let Some((clip_id, grab, target)) = edit {
@@ -929,11 +929,11 @@ fn show_lanes(
             if moves_group {
                 session.move_selected_clips(clip_id, target);
             } else {
-                session.edit_project(|project| match grab {
-                    ClipGrab::Move => project.move_clip(clip_id, target),
-                    ClipGrab::TrimStart => project.trim_clip_start(clip_id, target),
-                    ClipGrab::TrimEnd => project.trim_clip_end(clip_id, target),
-                });
+                match grab {
+                    ClipGrab::Move => session.move_clip(clip_id, target),
+                    ClipGrab::TrimStart => session.trim_clip_start(clip_id, target),
+                    ClipGrab::TrimEnd => session.trim_clip_end(clip_id, target),
+                };
             }
         }
     });

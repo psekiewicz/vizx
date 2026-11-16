@@ -50,6 +50,9 @@ pub struct EditorSession {
     /// More clips selected together with the one in `selection` (with
     /// Ctrl+click or a rectangle). Only counts while a clip is selected.
     extra_clips: Vec<ClipId>,
+    /// Whether clips on one track are kept from covering each other when
+    /// they are moved, trimmed, pasted or duplicated.
+    prevent_overlap: bool,
 }
 
 impl EditorSession {
@@ -69,6 +72,7 @@ impl EditorSession {
             loop_region: None,
             is_looping: false,
             extra_clips: Vec::new(),
+            prevent_overlap: true,
         }
     }
 
@@ -377,6 +381,65 @@ impl EditorSession {
     /// moved.
     pub fn move_selected_clips(&mut self, anchor: ClipId, start_milliseconds: u64) -> bool {
         let ids = self.selected_clip_ids();
+        self.shift_clips(&ids, anchor, start_milliseconds)
+    }
+
+    /// Whether clips are kept from covering each other on a track.
+    pub fn prevents_overlap(&self) -> bool {
+        self.prevent_overlap
+    }
+
+    pub fn set_prevent_overlap(&mut self, prevent: bool) {
+        self.prevent_overlap = prevent;
+    }
+
+    /// Moves one clip along its track so it starts at `start_milliseconds`,
+    /// or as close to it as its neighbours allow (when overlap is
+    /// prevented). Returns `true` if it moved.
+    pub fn move_clip(&mut self, id: ClipId, start_milliseconds: u64) -> bool {
+        self.shift_clips(&[id], id, start_milliseconds)
+    }
+
+    /// Moves the left edge of a clip, stopping at the clip before it when
+    /// overlap is prevented.
+    pub fn trim_clip_start(&mut self, id: ClipId, start_milliseconds: u64) -> bool {
+        let start = if self.prevent_overlap {
+            start_milliseconds.max(self.project.trim_room(id).0)
+        } else {
+            start_milliseconds
+        };
+        let has_changed = self.project.trim_clip_start(id, start);
+        self.has_unsaved_changes |= has_changed;
+        has_changed
+    }
+
+    /// Moves the right edge of a clip, stopping at the clip after it when
+    /// overlap is prevented.
+    pub fn trim_clip_end(&mut self, id: ClipId, end_milliseconds: u64) -> bool {
+        let end = match self.project.trim_room(id).1 {
+            Some(latest) if self.prevent_overlap => end_milliseconds.min(latest),
+            _ => end_milliseconds,
+        };
+        let has_changed = self.project.trim_clip_end(id, end);
+        self.has_unsaved_changes |= has_changed;
+        has_changed
+    }
+
+    /// Moves a clip onto another track of the same kind, unless (when
+    /// overlap is prevented) it would cover a clip there.
+    pub fn move_clip_to_track(&mut self, id: ClipId, track_id: TrackId) -> bool {
+        if self.prevent_overlap && !self.project.fits_on_tracks(&[(id, track_id)]) {
+            return false;
+        }
+        let has_changed = self.project.move_clip_to_track(id, track_id);
+        self.has_unsaved_changes |= has_changed;
+        has_changed
+    }
+
+    /// Moves the clips `ids` together so that `anchor` starts at
+    /// `start_milliseconds`, keeping their distances; none goes before the
+    /// start, and (when overlap is prevented) they stop at other clips.
+    fn shift_clips(&mut self, ids: &[ClipId], anchor: ClipId, start_milliseconds: u64) -> bool {
         let Some((_, anchor_clip)) = self.project.clip(anchor) else {
             return false;
         };
@@ -389,6 +452,9 @@ impl EditorSession {
             .min()
             .unwrap_or(0);
         delta = delta.max(-earliest);
+        if self.prevent_overlap {
+            delta = self.project.free_shift(ids, delta);
+        }
         if delta == 0 {
             return false;
         }
@@ -445,6 +511,9 @@ impl EditorSession {
                 return false;
             }
             moves.push((id, same_kind[new_index as usize]));
+        }
+        if self.prevent_overlap && !self.project.fits_on_tracks(&moves) {
+            return false;
         }
         for (id, track) in moves {
             self.project.move_clip_to_track(id, track);
@@ -570,6 +639,7 @@ impl EditorSession {
         else {
             return false;
         };
+        self.move_to_free_place(&[copy]);
         self.has_unsaved_changes = true;
         self.set_selection(Selection::Clip(copy));
         true
@@ -641,10 +711,31 @@ impl EditorSession {
             }
         }
         if !pasted.is_empty() {
+            self.move_to_free_place(&pasted);
             self.has_unsaved_changes = true;
             self.select_clips(&pasted);
         }
         pasted
+    }
+
+    /// When overlap is prevented, moves new clips (pasted or duplicated)
+    /// later together until they cover no other clip.
+    fn move_to_free_place(&mut self, ids: &[ClipId]) {
+        if !self.prevent_overlap {
+            return;
+        }
+        let shift = self.project.first_free_shift_forward(ids);
+        if shift == 0 {
+            return;
+        }
+        let starts: Vec<(ClipId, u64)> = ids
+            .iter()
+            .filter_map(|id| self.project.clip(*id))
+            .map(|(_, clip)| (clip.id, clip.start_milliseconds + shift as u64))
+            .collect();
+        for (id, start) in starts {
+            self.project.move_clip(id, start);
+        }
     }
     /// Adds a track to the timeline and selects it.
     pub fn add_track(&mut self, kind: TrackKind) -> TrackId {

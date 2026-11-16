@@ -56,6 +56,9 @@ pub struct Workspace {
     dock_state: DockState<PanelKind>,
     /// Zoom and scroll position of the timeline panel.
     timeline_view: TimelineView,
+    /// Closed panels and a panel they shared a tab group with, so they can
+    /// go back into that group when reopened.
+    closed_next_to: Vec<(PanelKind, PanelKind)>,
 }
 
 impl Workspace {
@@ -63,6 +66,7 @@ impl Workspace {
         Self {
             dock_state: default_layout(),
             timeline_view: TimelineView::default(),
+            closed_next_to: Vec::new(),
         }
     }
 
@@ -93,15 +97,94 @@ impl Workspace {
         self.dock_state.find_tab(&panel).is_some()
     }
 
-    /// Opens or closes a panel. A reopened panel is added as a tab to the
-    /// currently focused group; the user can then drag it anywhere.
+    /// Opens or closes a panel. A reopened panel goes back where it was: as
+    /// a tab next to a panel it shared a group with, or else on its side of
+    /// the default layout (Media Library left, Properties right, Timeline
+    /// below, Preview in the middle).
     pub fn set_open(&mut self, panel: PanelKind, should_be_open: bool) {
         match (self.dock_state.find_tab(&panel), should_be_open) {
             (Some(tab_path), false) => {
+                let companion = self
+                    .dock_state
+                    .iter_all_tabs()
+                    .find(|(path, other)| {
+                        **other != panel
+                            && path.surface == tab_path.surface
+                            && path.node == tab_path.node
+                    })
+                    .map(|(_, other)| *other);
+                self.closed_next_to.retain(|(closed, _)| *closed != panel);
+                if let Some(companion) = companion {
+                    self.closed_next_to.push((panel, companion));
+                }
                 self.dock_state.remove_tab(tab_path);
             }
-            (None, true) => self.dock_state.push_to_focused_leaf(panel),
+            (None, true) => self.reopen(panel),
             _ => {} // already in the requested state
+        }
+    }
+
+    fn reopen(&mut self, panel: PanelKind) {
+        // Back into the group it shared with another panel.
+        let companion = self
+            .closed_next_to
+            .iter()
+            .find(|(closed, _)| *closed == panel)
+            .map(|(_, companion)| *companion);
+        self.closed_next_to.retain(|(closed, _)| *closed != panel);
+        if let Some(path) = companion.and_then(|companion| self.dock_state.find_tab(&companion)) {
+            self.dock_state
+                .set_focused_node_and_surface(egui_dock::NodePath::new(path.surface, path.node));
+            self.dock_state.push_to_focused_leaf(panel);
+            return;
+        }
+
+        let tree = self.dock_state.main_surface_mut();
+        let node_of = |tree: &egui_dock::Tree<PanelKind>, other: PanelKind| {
+            tree.find_tab(&other).map(|(node, _)| node)
+        };
+        if tree.is_empty() {
+            self.dock_state.push_to_focused_leaf(panel);
+            return;
+        }
+        let root = NodeIndex::root();
+        let preview = node_of(tree, PanelKind::Preview);
+        match panel {
+            PanelKind::Timeline => {
+                tree.split_below(root, 0.68, vec![panel]);
+            }
+            PanelKind::MediaLibrary => match preview {
+                Some(node) => {
+                    tree.split_left(node, 0.22, vec![panel]);
+                }
+                None => {
+                    tree.split_left(root, 0.18, vec![panel]);
+                }
+            },
+            PanelKind::Properties => match preview {
+                Some(node) => {
+                    tree.split_right(node, 0.72, vec![panel]);
+                }
+                None => {
+                    tree.split_right(root, 0.8, vec![panel]);
+                }
+            },
+            PanelKind::Preview => {
+                match (
+                    node_of(tree, PanelKind::Properties),
+                    node_of(tree, PanelKind::MediaLibrary),
+                ) {
+                    (Some(properties), _) => {
+                        tree.split_left(properties, 0.7, vec![panel]);
+                    }
+                    (None, Some(library)) => {
+                        tree.split_right(library, 0.25, vec![panel]);
+                    }
+                    (None, None) => {
+                        tree.split_above(root, 0.6, vec![panel]);
+                    }
+                }
+            }
         }
     }
 
@@ -291,6 +374,34 @@ mod tests {
         for panel in PanelKind::ALL {
             assert!(workspace.is_open(panel));
         }
+    }
+
+    #[test]
+    fn a_reopened_panel_gets_its_own_area_again() {
+        let mut workspace = Workspace::new();
+        let node_of = |workspace: &Workspace, panel| workspace.dock_state.find_tab(&panel).unwrap().node;
+
+        workspace.set_open(PanelKind::Properties, false);
+        workspace.set_open(PanelKind::Properties, true);
+        // Not a tab in the focused group, but a group of its own.
+        assert_ne!(
+            node_of(&workspace, PanelKind::Properties),
+            node_of(&workspace, PanelKind::Preview)
+        );
+
+        // A panel that shared a group goes back into that group.
+        let preview = workspace.dock_state.find_tab(&PanelKind::Preview).unwrap();
+        workspace
+            .dock_state
+            .set_focused_node_and_surface(egui_dock::NodePath::new(preview.surface, preview.node));
+        workspace.set_open(PanelKind::Timeline, false);
+        workspace.dock_state.push_to_focused_leaf(PanelKind::Timeline);
+        workspace.set_open(PanelKind::Timeline, false);
+        workspace.set_open(PanelKind::Timeline, true);
+        assert_eq!(
+            node_of(&workspace, PanelKind::Timeline),
+            node_of(&workspace, PanelKind::Preview)
+        );
     }
 
     #[test]

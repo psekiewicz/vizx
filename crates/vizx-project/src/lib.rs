@@ -14,6 +14,7 @@ mod file;
 mod media;
 mod metadata;
 mod motion;
+mod overlap;
 mod project;
 mod settings;
 mod track;

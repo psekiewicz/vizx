@@ -1351,6 +1351,8 @@ impl eframe::App for VizxApp {
         self.handle_window_close_request(&ctx);
         self.transport
             .begin_frame(&mut self.session, &self.audio_store, &ctx);
+        self.session
+            .set_prevent_overlap(!self.settings.allow_clip_overlap);
         self.handle_keyboard_shortcuts(&ctx);
         self.load_project_audio(&ctx);
         self.load_project_images(&ctx);
