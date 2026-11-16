@@ -40,6 +40,110 @@ const ANIMATION_BYTE_BUDGET: usize = 256 * 1024 * 1024;
 /// How often (in frames) the UI is told that progress was made.
 const PROGRESS_INTERVAL: u32 = 10;
 
+/// The kind of file an export writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum VideoFormat {
+    /// MP4 with H.264 and AAC: plays everywhere.
+    #[default]
+    Mp4H264,
+    /// MP4 with H.265 (HEVC): smaller files, newer players.
+    Mp4H265,
+    /// WebM with VP9 and Opus: for the web.
+    WebmVp9,
+    /// QuickTime with Apple ProRes 422 HQ: large, for further editing.
+    MovProres,
+    /// Animated GIF, without sound.
+    Gif,
+}
+
+impl VideoFormat {
+    pub const ALL: [Self; 5] = [
+        Self::Mp4H264,
+        Self::Mp4H265,
+        Self::WebmVp9,
+        Self::MovProres,
+        Self::Gif,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Mp4H264 => "MP4 (H.264)",
+            Self::Mp4H265 => "MP4 (H.265 / HEVC)",
+            Self::WebmVp9 => "WebM (VP9)",
+            Self::MovProres => "MOV (ProRes 422 HQ)",
+            Self::Gif => "GIF (no sound)",
+        }
+    }
+
+    /// File extension, without the dot.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Mp4H264 | Self::Mp4H265 => "mp4",
+            Self::WebmVp9 => "webm",
+            Self::MovProres => "mov",
+            Self::Gif => "gif",
+        }
+    }
+
+    pub fn has_sound(self) -> bool {
+        self != Self::Gif
+    }
+}
+
+/// How much an export is compressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ExportQuality {
+    #[default]
+    High,
+    Medium,
+    /// Smallest files.
+    Low,
+}
+
+impl ExportQuality {
+    pub const ALL: [Self; 3] = [Self::High, Self::Medium, Self::Low];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::High => "High",
+            Self::Medium => "Medium",
+            Self::Low => "Low",
+        }
+    }
+}
+
+/// What the user chose in the export window.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ExportSettings {
+    pub format: VideoFormat,
+    pub quality: ExportQuality,
+    /// Height of the video in pixels, the width following the project's
+    /// shape. `None`: the project's size.
+    pub height: Option<u32>,
+    /// Only this stretch of the project (start, end in seconds). `None`:
+    /// the whole project.
+    pub range: Option<(f64, f64)>,
+}
+
+impl ExportSettings {
+    /// Heights offered besides the project's own.
+    pub const HEIGHTS: [u32; 5] = [2160, 1440, 1080, 720, 480];
+
+    /// The video size for a project of `width` x `height`: even numbers,
+    /// in the project's shape.
+    pub fn video_size(&self, width: u32, height: u32) -> (u32, u32) {
+        let even = |value: f64| ((value.round() as u32) / 2 * 2).max(2);
+        match self.height {
+            Some(wanted) if wanted != height && height > 0 => (
+                even(f64::from(width) * f64::from(wanted) / f64::from(height)),
+                even(f64::from(wanted)),
+            ),
+            _ => (even(f64::from(width)), even(f64::from(height))),
+        }
+    }
+}
+
 /// Everything needed to export, copied out of the project. The export runs
 /// on its own thread from this snapshot, so the project can be edited (or
 /// closed) meanwhile without affecting the video.
@@ -52,7 +156,12 @@ pub struct ExportJob {
     pub height: u32,
     /// Frames per second as a fraction (frames, seconds).
     pub frame_rate: (u32, u32),
+    /// Project time of the first frame (0 unless only a part is exported).
+    pub start_seconds: f64,
+    /// Length of the video.
     pub duration_seconds: f64,
+    pub format: VideoFormat,
+    pub quality: ExportQuality,
     /// The sound of the video: everything on the audio tracks.
     pub audio: Vec<PlaybackSource>,
     /// The visual clips, the bottom layer first.
@@ -79,6 +188,21 @@ pub struct ExportLayer {
     pub tempo_bpm: f64,
     /// Enlarged, the picture keeps sharp pixels instead of being smoothed.
     pub sharp_pixels: bool,
+    /// How its colors combine with the layers below.
+    pub blend: vizx_render::LayerBlend,
+}
+
+/// The compositor's blend for a clip's blend mode.
+pub fn layer_blend(mode: vizx_project::BlendMode) -> vizx_render::LayerBlend {
+    use vizx_project::BlendMode;
+    use vizx_render::LayerBlend;
+    match mode {
+        BlendMode::Normal => LayerBlend::Normal,
+        BlendMode::Add => LayerBlend::Add,
+        BlendMode::Screen => LayerBlend::Screen,
+        BlendMode::Multiply => LayerBlend::Multiply,
+        BlendMode::Lighten => LayerBlend::Lighten,
+    }
 }
 
 pub enum ExportContent {
@@ -102,6 +226,7 @@ impl ExportJob {
         bundled_presets: Option<&Path>,
         ffmpeg: &Path,
         output: &Path,
+        export: &ExportSettings,
     ) -> Result<Self, String> {
         let (audio, clips_still_loading) =
             audio_sources(project, audio_store, vizx_project::AudioInput::Mix);
@@ -139,6 +264,7 @@ impl ExportJob {
                     motion: clip.motion(),
                     reaction: clip.reaction,
                     sharp_pixels: project.clip_sharp_pixels(clip),
+                    blend: layer_blend(clip.blend_mode),
                     input_audio: audio_sources(project, audio_store, clip.audio_input).0,
                     audio_gain: clip.audio_gain,
                     beats: Arc::new(beats),
@@ -148,16 +274,31 @@ impl ExportJob {
         }
 
         let settings = &project.settings;
+        let project_seconds = settings.duration_seconds();
+        let (start_seconds, end_seconds) = match export.range {
+            Some((start, end)) => (
+                start.clamp(0.0, project_seconds),
+                end.clamp(0.0, project_seconds),
+            ),
+            None => (0.0, project_seconds),
+        };
+        if end_seconds - start_seconds < 0.01 {
+            return Err("the range to export is empty".to_owned());
+        }
+        let (width, height) = export.video_size(settings.width, settings.height);
         Ok(Self {
             output: output.to_owned(),
             ffmpeg: ffmpeg.to_owned(),
-            width: settings.width,
-            height: settings.height,
+            width,
+            height,
             frame_rate: (
                 settings.frame_rate.numerator,
                 settings.frame_rate.denominator.max(1),
             ),
-            duration_seconds: settings.duration_seconds(),
+            start_seconds,
+            duration_seconds: end_seconds - start_seconds,
+            format: export.format,
+            quality: export.quality,
             audio,
             layers,
         })
@@ -286,6 +427,7 @@ fn run(
             (job.width, job.height),
             job.frame_rate,
             sound_file.as_deref(),
+            (job.format, job.quality),
         )?;
         let mut pictures: Vec<LayerPicture> = job
             .layers
@@ -299,7 +441,7 @@ fn run(
             if is_cancelled.load(Ordering::Relaxed) {
                 return Err("the export was cancelled".to_owned());
             }
-            let seconds = f64::from(frame) / frames_per_second;
+            let seconds = job.start_seconds + f64::from(frame) / frames_per_second;
 
             // First bring every visible layer's picture up to this frame...
             for (layer, picture) in job.layers.iter().zip(&mut pictures) {
@@ -352,6 +494,7 @@ fn run(
                     rotation_degrees: geometry.rotation_degrees,
                     opacity: geometry.opacity,
                     sharp_pixels: layer.sharp_pixels,
+                    blend: layer.blend,
                 });
             }
             compositor.render(&draws, &mut frame_pixels)?;
@@ -416,7 +559,7 @@ fn advance(
                 let width = render_edge(largest_width * f64::from(job.width));
                 let height = render_edge(largest_height * f64::from(job.height));
                 let frames_per_second = frames_per_second.round().max(1.0) as u32;
-                let renderer = FrameRenderer::new(&PrerenderJob {
+                let mut renderer = FrameRenderer::new(&PrerenderJob {
                     source: source.clone(),
                     width,
                     height,
@@ -429,11 +572,21 @@ fn advance(
                     beats: Arc::clone(&layer.beats),
                     tempo_bpm: layer.tempo_bpm,
                 })?;
+                // A clip that began before the exported part is drawn from
+                // its start, so it looks as it does there: the frames
+                // before are drawn and dropped.
+                let skipped = ((seconds - layer.start_seconds) * f64::from(frames_per_second))
+                    .round()
+                    .max(0.0) as u32;
+                let mut pixels = Vec::new();
+                for _ in 0..skipped {
+                    renderer.next_frame(&mut pixels)?;
+                }
                 LayerPicture::Frames {
                     renderer: Box::new(renderer),
                     width,
                     height,
-                    pixels: Vec::new(),
+                    pixels,
                 }
             }
         };
@@ -484,11 +637,12 @@ fn render_edge(pixels: f64) -> u32 {
 /// Mixes the project's audio into a temporary WAV file for FFmpeg. `None`
 /// if the project has no audio.
 fn write_sound_file(job: &ExportJob) -> Result<Option<PathBuf>, String> {
-    if job.audio.is_empty() {
+    if job.audio.is_empty() || !job.format.has_sound() {
         return Ok(None);
     }
     let frame_count = (job.duration_seconds * f64::from(EXPORT_SAMPLE_RATE)).ceil() as usize;
-    let mix = vizx_audio::mix_to_stereo(&job.audio, EXPORT_SAMPLE_RATE, 0, frame_count);
+    let start_frame = (job.start_seconds * f64::from(EXPORT_SAMPLE_RATE)).round() as u64;
+    let mix = vizx_audio::mix_to_stereo(&job.audio, EXPORT_SAMPLE_RATE, start_frame, frame_count);
     // WAV stores whole numbers; too loud a mix is limited rather than
     // wrapped around, which would crackle.
     let samples: Vec<i16> = mix
@@ -513,6 +667,42 @@ mod tests {
 
     use super::*;
     use crate::ffmpeg::{VideoReader, find_ffmpeg, probe_video};
+
+    #[test]
+    fn export_size_keeps_the_project_shape_in_even_numbers() {
+        let at = |height| ExportSettings {
+            height,
+            ..ExportSettings::default()
+        };
+        assert_eq!(at(None).video_size(1920, 1080), (1920, 1080));
+        assert_eq!(at(Some(720)).video_size(1920, 1080), (1280, 720));
+        assert_eq!(at(Some(480)).video_size(1920, 1080), (852, 480));
+        // A square project stays square.
+        assert_eq!(at(Some(1080)).video_size(800, 800), (1080, 1080));
+    }
+
+    #[test]
+    fn a_range_exports_only_its_part() {
+        let mut project = Project::new();
+        project.settings.duration_milliseconds = 10_000;
+        let settings = ExportSettings {
+            range: Some((2.0, 5.0)),
+            ..ExportSettings::default()
+        };
+        let job = ExportJob::from_project(
+            &project,
+            &AudioStore::default(),
+            &mut VisualizerCatalog::with_bundled_root(None),
+            None,
+            Path::new("ffmpeg"),
+            Path::new("out.mp4"),
+            &settings,
+        )
+        .unwrap();
+        assert_eq!(job.start_seconds, 2.0);
+        assert_eq!(job.duration_seconds, 3.0);
+        assert_eq!(job.frame_count(), 90);
+    }
 
     fn temporary_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("vizx-export-test-{}-{name}", std::process::id()))
@@ -545,6 +735,7 @@ mod tests {
             beats: Arc::new(Vec::new()),
             tempo_bpm: 0.0,
             sharp_pixels: false,
+            blend: vizx_render::LayerBlend::Normal,
         }
     }
 
@@ -565,8 +756,11 @@ mod tests {
             ffmpeg: PathBuf::new(),
             width: 64,
             height: 48,
+            start_seconds: 0.0,
             frame_rate,
             duration_seconds,
+            format: VideoFormat::Mp4H264,
+            quality: ExportQuality::High,
             audio: Vec::new(),
             layers: Vec::new(),
         };
@@ -599,8 +793,11 @@ mod tests {
                 ffmpeg: ffmpeg.clone(),
                 width: 64,
                 height: 48,
+                start_seconds: 0.0,
                 frame_rate: (10, 1),
                 duration_seconds: 1.0,
+                format: VideoFormat::Mp4H264,
+                quality: ExportQuality::High,
                 audio: tone(1.0),
                 layers: vec![image_layer(
                     &image_path,
@@ -686,8 +883,11 @@ mod tests {
                 ffmpeg: ffmpeg.clone(),
                 width: 64,
                 height: 48,
+                start_seconds: 0.0,
                 frame_rate: (10, 1),
                 duration_seconds: 1.0,
+                format: VideoFormat::Mp4H264,
+                quality: ExportQuality::High,
                 audio: Vec::new(),
                 layers: vec![layer],
             },
@@ -750,8 +950,11 @@ mod tests {
                 ffmpeg: ffmpeg.clone(),
                 width: 64,
                 height: 48,
+                start_seconds: 0.0,
                 frame_rate: (10, 1),
                 duration_seconds: 1.0,
+                format: VideoFormat::Mp4H264,
+                quality: ExportQuality::High,
                 audio: Vec::new(),
                 layers: vec![layer],
             },
@@ -795,8 +998,11 @@ mod tests {
                 ffmpeg,
                 width: 64,
                 height: 48,
+                start_seconds: 0.0,
                 frame_rate: (10, 1),
                 duration_seconds: 1.0,
+                format: VideoFormat::Mp4H264,
+                quality: ExportQuality::High,
                 audio: Vec::new(),
                 layers: vec![image_layer(
                     Path::new("vizx-export-image-that-does-not-exist.png"),

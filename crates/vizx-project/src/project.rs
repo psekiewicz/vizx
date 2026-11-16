@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AudioInput, AudioProperties, AudioReaction, CURRENT_FORMAT_VERSION, Clip, ClipId,
+    AudioInput, AudioProperties, AudioReaction, BlendMode, CURRENT_FORMAT_VERSION, Clip, ClipId,
     ImageProperties, MediaContent, MediaId, MediaSource, Placement, ProjectMetadata,
     ProjectSettings, TextProperties, Track, TrackId, TrackKind, Transform,
 };
@@ -646,6 +646,7 @@ impl Project {
             spin_degrees_per_second: 0.0,
             keyframes: Vec::new(),
             sharp_pixels: None,
+            blend_mode: BlendMode::Normal,
         };
         self.next_clip_id += 1;
         let clip_end = clip.end_milliseconds();
@@ -707,6 +708,7 @@ impl Project {
             spin_degrees_per_second: 0.0,
             keyframes: Vec::new(),
             sharp_pixels: None,
+            blend_mode: BlendMode::Normal,
         };
         self.next_clip_id += 1;
         let track = self.tracks.iter_mut().find(|track| track.id == track_id)?;
@@ -881,6 +883,7 @@ impl Project {
             spin_degrees_per_second: 0.0,
             keyframes: Vec::new(),
             sharp_pixels: None,
+            blend_mode: BlendMode::Normal,
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -925,6 +928,7 @@ impl Project {
             spin_degrees_per_second: 0.0,
             keyframes: Vec::new(),
             sharp_pixels: None,
+            blend_mode: BlendMode::Normal,
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -1052,6 +1056,7 @@ impl Project {
             spin_degrees_per_second: 0.0,
             keyframes: Vec::new(),
             sharp_pixels: None,
+            blend_mode: BlendMode::Normal,
         };
         self.tracks
             .iter_mut()
@@ -1397,6 +1402,18 @@ impl Project {
         match self.clip_mut(clip_id) {
             Some(clip) if clip.sharp_pixels != Some(sharp) => {
                 clip.sharp_pixels = Some(sharp);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Sets how a clip's colors combine with the layers below. Returns
+    /// `true` only if this changed something.
+    pub fn set_clip_blend_mode(&mut self, clip_id: ClipId, mode: BlendMode) -> bool {
+        match self.clip_mut(clip_id) {
+            Some(clip) if clip.blend_mode != mode => {
+                clip.blend_mode = mode;
                 true
             }
             _ => false,

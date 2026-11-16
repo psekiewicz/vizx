@@ -77,6 +77,8 @@ pub struct LayerView {
     pub rotation_degrees: f64,
     /// Enlarged, its picture keeps sharp pixels instead of being smoothed.
     pub sharp_pixels: bool,
+    /// How its colors combine with the layers below.
+    pub blend: vizx_core::LayerBlend,
     pub state: LayerState,
 }
 
@@ -337,6 +339,7 @@ impl VisualPreview {
                 placement: keyed.placement,
                 rotation_degrees: keyed.rotation_degrees,
                 sharp_pixels: project.clip_sharp_pixels(clip),
+                blend: vizx_core::layer_blend(clip.blend_mode),
                 state,
             });
         }
@@ -392,6 +395,7 @@ impl VisualPreview {
                     rotation_degrees: geometry.rotation_degrees,
                     opacity: geometry.opacity,
                     sharp_pixels: layer.sharp_pixels,
+                    blend: layer.blend,
                 })
             })
             .collect();

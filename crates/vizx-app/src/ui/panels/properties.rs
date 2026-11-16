@@ -165,6 +165,26 @@ fn track_properties(
                             .edit_project(|project| project.set_clip_sharp_pixels(clip.id, sharp));
                     }
                 }
+                let mut blend = clip.blend_mode;
+                ui.horizontal(|ui| {
+                    ui.label("Blend");
+                    egui::ComboBox::from_id_salt(("blend_mode", clip.id))
+                        .selected_text(blend.label())
+                        .show_ui(ui, |ui| {
+                            for mode in vizx_project::BlendMode::ALL {
+                                ui.selectable_value(&mut blend, mode, mode.label());
+                            }
+                        })
+                        .response
+                        .on_hover_text(
+                            "Add / Screen: brighten, black disappears\n\
+                             Multiply: darken, white disappears\n\
+                             Lighten: keep the brighter color",
+                        );
+                });
+                if blend != clip.blend_mode {
+                    session.edit_project(|project| project.set_clip_blend_mode(clip.id, blend));
+                }
                 opacity_and_reaction_editor(ui, session, clip, is_visualizer);
             }
             if let Some(plugin_path) = plugin_path {

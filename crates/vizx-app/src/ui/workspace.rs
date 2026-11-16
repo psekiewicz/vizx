@@ -379,7 +379,8 @@ mod tests {
     #[test]
     fn a_reopened_panel_gets_its_own_area_again() {
         let mut workspace = Workspace::new();
-        let node_of = |workspace: &Workspace, panel| workspace.dock_state.find_tab(&panel).unwrap().node;
+        let node_of =
+            |workspace: &Workspace, panel| workspace.dock_state.find_tab(&panel).unwrap().node;
 
         workspace.set_open(PanelKind::Properties, false);
         workspace.set_open(PanelKind::Properties, true);
@@ -395,7 +396,9 @@ mod tests {
             .dock_state
             .set_focused_node_and_surface(egui_dock::NodePath::new(preview.surface, preview.node));
         workspace.set_open(PanelKind::Timeline, false);
-        workspace.dock_state.push_to_focused_leaf(PanelKind::Timeline);
+        workspace
+            .dock_state
+            .push_to_focused_leaf(PanelKind::Timeline);
         workspace.set_open(PanelKind::Timeline, false);
         workspace.set_open(PanelKind::Timeline, true);
         assert_eq!(

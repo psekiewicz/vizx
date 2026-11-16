@@ -22,7 +22,12 @@ impl Project {
                     .clips
                     .iter()
                     .filter(|clip| !ignored.contains(&clip.id))
-                    .map(|clip| (clip.start_milliseconds as i64, clip.end_milliseconds() as i64))
+                    .map(|clip| {
+                        (
+                            clip.start_milliseconds as i64,
+                            clip.end_milliseconds() as i64,
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -53,7 +58,10 @@ impl Project {
             let Some((track, clip)) = self.clip(*id) else {
                 continue;
             };
-            let (start, end) = (clip.start_milliseconds as i64, clip.end_milliseconds() as i64);
+            let (start, end) = (
+                clip.start_milliseconds as i64,
+                clip.end_milliseconds() as i64,
+            );
             shifts.push(-start);
             for (other_start, other_end) in self.occupied(track.id, ids) {
                 shifts.push(other_end - start); // right after the other
@@ -108,7 +116,10 @@ impl Project {
         let Some((track, clip)) = self.clip(id) else {
             return (0, None);
         };
-        let (start, end) = (clip.start_milliseconds as i64, clip.end_milliseconds() as i64);
+        let (start, end) = (
+            clip.start_milliseconds as i64,
+            clip.end_milliseconds() as i64,
+        );
         let others = self.occupied(track.id, &[id]);
         let earliest = others
             .iter()
@@ -132,19 +143,25 @@ impl Project {
             let Some((_, clip)) = self.clip(*id) else {
                 return true;
             };
-            let range = (clip.start_milliseconds as i64, clip.end_milliseconds() as i64);
+            let range = (
+                clip.start_milliseconds as i64,
+                clip.end_milliseconds() as i64,
+            );
             // Clips moving onto the same track must not cover each other.
-            let fellow_movers = moves.iter().filter(|(other, other_track)| {
-                other != id && other_track == track_id
-            });
-            let covers_mover = fellow_movers.filter_map(|(other, _)| self.clip(*other)).any(
-                |(_, other)| {
+            let fellow_movers = moves
+                .iter()
+                .filter(|(other, other_track)| other != id && other_track == track_id);
+            let covers_mover = fellow_movers
+                .filter_map(|(other, _)| self.clip(*other))
+                .any(|(_, other)| {
                     ranges_overlap(
                         range,
-                        (other.start_milliseconds as i64, other.end_milliseconds() as i64),
+                        (
+                            other.start_milliseconds as i64,
+                            other.end_milliseconds() as i64,
+                        ),
                     )
-                },
-            );
+                });
             !covers_mover
                 && !self
                     .occupied(*track_id, &moving)

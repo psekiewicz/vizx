@@ -45,6 +45,8 @@ pub struct AppSettings {
     pub volume: f32,
     /// Whether clips on one track may cover each other.
     pub allow_clip_overlap: bool,
+    /// The choices made in the export window last time.
+    pub export: crate::ExportSettings,
 }
 
 impl Default for AppSettings {
@@ -55,6 +57,7 @@ impl Default for AppSettings {
             panel_layout: None,
             volume: 1.0,
             allow_clip_overlap: false,
+            export: crate::ExportSettings::default(),
         }
     }
 }

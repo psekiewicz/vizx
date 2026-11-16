@@ -32,7 +32,10 @@ pub use composition::{
     LayerGeometry, ReactionMeter, audio_sources, beat_count, beat_pulse, beat_times, frame_source,
     last_beat, layer_geometry, tempo_of,
 };
-pub use export::{Export, ExportContent, ExportJob, ExportLayer};
+pub use export::{
+    Export, ExportContent, ExportJob, ExportLayer, ExportQuality, ExportSettings, VideoFormat,
+    layer_blend,
+};
 pub use ffmpeg::{
     FFMPEG_DIR_VARIABLE, SUPPORTED_VIDEO_EXTENSIONS, VideoReader, VideoWriter, find_ffmpeg,
     has_supported_video_extension, probe_video,
@@ -61,7 +64,7 @@ pub use visualizer_catalog::{
 pub use vizx_visualizer::{Manifest, ParameterKind, ParameterSpec, ParameterValues};
 // The compositor, so the preview can use it without depending on the
 // rendering crate itself.
-pub use vizx_render::{Compositor, LayerDraw};
+pub use vizx_render::{Compositor, LayerBlend, LayerDraw};
 
 /// Name of the application as shown to the user.
 pub const APP_NAME: &str = "VizX (Prototype)";

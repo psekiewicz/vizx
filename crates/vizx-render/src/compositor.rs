@@ -47,6 +47,67 @@ pub struct LayerDraw<'a> {
     /// When drawn larger than it is, show its pixels as sharp squares (for
     /// pixel art) instead of smoothing between them.
     pub sharp_pixels: bool,
+    /// How the layer's colors combine with what is below it.
+    pub blend: LayerBlend,
+}
+
+/// How a layer's colors combine with the layers below it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum LayerBlend {
+    /// The layer covers what is below, as far as it is opaque.
+    #[default]
+    Normal,
+    /// Colors are added: brightens, black disappears (light, glow).
+    Add,
+    /// Like Add, but never brighter than white (softer light).
+    Screen,
+    /// Colors are multiplied: darkens, white disappears (shadows, paper).
+    Multiply,
+    /// The brighter of the two colors is kept.
+    Lighten,
+}
+
+impl LayerBlend {
+    pub const ALL: [Self; 5] = [
+        Self::Normal,
+        Self::Add,
+        Self::Screen,
+        Self::Multiply,
+        Self::Lighten,
+    ];
+
+    fn state(self) -> BlendState {
+        use wgpu::{BlendComponent, BlendFactor, BlendOperation};
+        let component = |src_factor, dst_factor, operation| BlendComponent {
+            src_factor,
+            dst_factor,
+            operation,
+        };
+        // Opacity builds up the same way in every mode.
+        let alpha = component(
+            BlendFactor::One,
+            BlendFactor::OneMinusSrcAlpha,
+            BlendOperation::Add,
+        );
+        let color = match self {
+            Self::Normal => return BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            Self::Add => component(BlendFactor::One, BlendFactor::One, BlendOperation::Add),
+            // a + b - a * b
+            Self::Screen => component(
+                BlendFactor::OneMinusDst,
+                BlendFactor::One,
+                BlendOperation::Add,
+            ),
+            // a * b, and b where the layer is transparent
+            Self::Multiply => component(
+                BlendFactor::Dst,
+                BlendFactor::OneMinusSrcAlpha,
+                BlendOperation::Add,
+            ),
+            Self::Lighten => component(BlendFactor::One, BlendFactor::One, BlendOperation::Max),
+        };
+        BlendState { color, alpha }
+    }
 }
 
 /// A layer's picture on the graphics card.
@@ -68,7 +129,8 @@ struct UploadedLayer {
 pub struct Compositor {
     device: Device,
     queue: Queue,
-    pipeline: RenderPipeline,
+    /// One per [LayerBlend], in the order of [LayerBlend::ALL].
+    pipelines: Vec<(LayerBlend, RenderPipeline)>,
     bind_group_layout: BindGroupLayout,
     sampler: Sampler,
     /// Like sampler, but enlarged pictures keep sharp pixels.
@@ -121,7 +183,10 @@ impl Compositor {
                 },
             ],
         });
-        let pipeline = create_pipeline(&device, &bind_group_layout);
+        let pipelines = LayerBlend::ALL
+            .into_iter()
+            .map(|blend| (blend, create_pipeline(&device, &bind_group_layout, blend)))
+            .collect();
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("vizx layer sampler"),
             address_mode_u: AddressMode::ClampToEdge,
@@ -144,7 +209,7 @@ impl Compositor {
         Ok(Self {
             device,
             queue,
-            pipeline,
+            pipelines,
             bind_group_layout,
             sampler,
             sharp_sampler,
@@ -205,9 +270,18 @@ impl Compositor {
                 })],
                 ..Default::default()
             });
-            pass.set_pipeline(&self.pipeline);
+            let mut current_blend = None;
             for layer in layers {
                 if let Some(uploaded) = self.layers.get(&layer.key) {
+                    if current_blend != Some(layer.blend)
+                        && let Some((_, pipeline)) = self
+                            .pipelines
+                            .iter()
+                            .find(|(blend, _)| *blend == layer.blend)
+                    {
+                        pass.set_pipeline(pipeline);
+                        current_blend = Some(layer.blend);
+                    }
                     pass.set_bind_group(0, &uploaded.bind_group, &[]);
                     pass.draw(0..4, 0..1);
                 }
@@ -398,7 +472,11 @@ fn create_frame(device: &Device, width: u32, height: u32) -> (Texture, TextureVi
     (texture, view, readback_buffer, padded_row_bytes)
 }
 
-fn create_pipeline(device: &Device, bind_group_layout: &BindGroupLayout) -> RenderPipeline {
+fn create_pipeline(
+    device: &Device,
+    bind_group_layout: &BindGroupLayout,
+    blend: LayerBlend,
+) -> RenderPipeline {
     let module = device.create_shader_module(ShaderModuleDescriptor {
         label: Some("vizx compositor"),
         source: ShaderSource::Wgsl(include_str!("compositor.wgsl").into()),
@@ -430,8 +508,7 @@ fn create_pipeline(device: &Device, bind_group_layout: &BindGroupLayout) -> Rend
             compilation_options: PipelineCompilationOptions::default(),
             targets: &[Some(ColorTargetState {
                 format: FRAME_FORMAT,
-                // "Over": the new layer plus what shows through it.
-                blend: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                blend: Some(blend.state()),
                 write_mask: ColorWrites::ALL,
             })],
         }),
@@ -469,7 +546,52 @@ mod tests {
             rotation_degrees: 0.0,
             opacity: 1.0,
             sharp_pixels: false,
+            blend: LayerBlend::Normal,
         }
+    }
+
+    #[test]
+    fn blend_modes_combine_colors_as_named() {
+        let Some(mut compositor) = compositor(8, 8) else {
+            return;
+        };
+        let base = solid([100, 100, 100, 255], 2, 2);
+        let top = solid([100, 200, 0, 255], 2, 2);
+        let with = |compositor: &mut Compositor, blend| {
+            let mut pixels = Vec::new();
+            compositor
+                .render(
+                    &[
+                        layer(1, &base, 2, 2),
+                        LayerDraw {
+                            blend,
+                            ..layer(2, &top, 2, 2)
+                        },
+                    ],
+                    &mut pixels,
+                )
+                .unwrap();
+            pixel(&pixels, 8, 4, 4)
+        };
+        assert_near(
+            with(&mut compositor, LayerBlend::Normal),
+            [100, 200, 0, 255],
+        );
+        assert_near(with(&mut compositor, LayerBlend::Add), [200, 255, 100, 255]);
+        // a + b - a*b, in 0..1: 0.39 + 0.39 - 0.15 = 0.63
+        assert_near(
+            with(&mut compositor, LayerBlend::Screen),
+            [161, 222, 100, 255],
+        );
+        // a * b: 0.39 * 0.78 = 0.31
+        assert_near(
+            with(&mut compositor, LayerBlend::Multiply),
+            [39, 78, 0, 255],
+        );
+        assert_near(
+            with(&mut compositor, LayerBlend::Lighten),
+            [100, 200, 100, 255],
+        );
     }
 
     fn pixel(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {

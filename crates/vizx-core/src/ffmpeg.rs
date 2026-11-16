@@ -189,7 +189,90 @@ impl VideoWriter {
         (width, height): (u32, u32),
         frame_rate: (u32, u32),
         audio: Option<&Path>,
+        (format, quality): (crate::VideoFormat, crate::ExportQuality),
     ) -> Result<Self, String> {
+        use crate::{ExportQuality, VideoFormat};
+        // (video settings, sound settings) for each format and quality.
+        let level = |high: &'static str, medium: &'static str, low: &'static str| match quality {
+            ExportQuality::High => high,
+            ExportQuality::Medium => medium,
+            ExportQuality::Low => low,
+        };
+        let audio_bitrate = level("320k", "192k", "128k");
+        let (video, sound): (Vec<&str>, Vec<&str>) = match format {
+            VideoFormat::Mp4H264 => (
+                vec![
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "medium",
+                    "-crf",
+                    level("18", "23", "28"),
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                ],
+                vec!["-c:a", "aac", "-b:a", audio_bitrate],
+            ),
+            VideoFormat::Mp4H265 => (
+                // `hvc1` lets Apple players open it.
+                vec![
+                    "-c:v",
+                    "libx265",
+                    "-preset",
+                    "medium",
+                    "-crf",
+                    level("20", "26", "30"),
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-tag:v",
+                    "hvc1",
+                    "-movflags",
+                    "+faststart",
+                ],
+                vec!["-c:a", "aac", "-b:a", audio_bitrate],
+            ),
+            VideoFormat::WebmVp9 => (
+                vec![
+                    "-c:v",
+                    "libvpx-vp9",
+                    "-crf",
+                    level("24", "32", "40"),
+                    "-b:v",
+                    "0",
+                    "-row-mt",
+                    "1",
+                    "-pix_fmt",
+                    "yuv420p",
+                ],
+                vec!["-c:a", "libopus", "-b:a", level("256k", "160k", "96k")],
+            ),
+            VideoFormat::MovProres => (
+                // Profile 3 is 422 HQ, 2 is 422, 1 is 422 LT.
+                vec![
+                    "-c:v",
+                    "prores_ks",
+                    "-profile:v",
+                    level("3", "2", "1"),
+                    "-pix_fmt",
+                    "yuv422p10le",
+                ],
+                vec!["-c:a", "pcm_s16le"],
+            ),
+            VideoFormat::Gif => (Vec::new(), Vec::new()),
+        };
+        let filter = match format {
+            // One palette for the whole animation, made from its own colors.
+            VideoFormat::Gif => format!(
+                "fps={},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither={}",
+                level("30", "20", "12"),
+                level("sierra2_4a", "bayer:bayer_scale=3", "bayer:bayer_scale=5")
+            ),
+            // The usual color layouts need an even width and height.
+            _ => "pad=ceil(iw/2)*2:ceil(ih/2)*2".to_owned(),
+        };
+        let audio = audio.filter(|_| format.has_sound());
         let mut command = quiet_command(ffmpeg);
         command
             .args(["-y", "-v", "error"])
@@ -205,18 +288,11 @@ impl VideoWriter {
             // Input 2: the sound.
             command.arg("-i").arg(audio);
         }
-        command
-            // H.264 picture in the color layout every player understands,
-            // which needs an even width and height.
-            .args(["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"])
-            .args(["-c:v", "libx264", "-preset", "medium", "-crf", "18"])
-            .args(["-pix_fmt", "yuv420p"]);
+        command.arg("-vf").arg(&filter).args(&video);
         if audio.is_some() {
-            command.args(["-c:a", "aac", "-b:a", "192k", "-shortest"]);
+            command.args(&sound).arg("-shortest");
         }
         let mut child = command
-            // Lets a player start before the whole file is downloaded.
-            .args(["-movflags", "+faststart"])
             .arg(output)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -333,7 +409,15 @@ mod tests {
             std::env::temp_dir().join(format!("vizx-ffmpeg-test-{}.mp4", std::process::id()));
 
         // 12 frames of 64 x 48: the first six red, the rest blue.
-        let mut writer = VideoWriter::create(&ffmpeg, &file, (64, 48), (12, 1), None).unwrap();
+        let mut writer = VideoWriter::create(
+            &ffmpeg,
+            &file,
+            (64, 48),
+            (12, 1),
+            None,
+            (crate::VideoFormat::Mp4H264, crate::ExportQuality::High),
+        )
+        .unwrap();
         for frame in 0..12 {
             let color = if frame < 6 {
                 [255, 0, 0, 255]
@@ -372,6 +456,42 @@ mod tests {
         assert!(is_blue([pixels[0], pixels[1], pixels[2], pixels[3]]));
         drop(late);
         let _ = std::fs::remove_file(&file);
+    }
+
+    /// Every export format and quality makes a file FFmpeg can read back,
+    /// in the size it was written at.
+    #[test]
+    fn every_export_format_writes_a_readable_file() {
+        use crate::{ExportQuality, VideoFormat};
+        let Some(ffmpeg) = find_ffmpeg() else {
+            eprintln!("FFmpeg not found: skipping");
+            return;
+        };
+        for format in VideoFormat::ALL {
+            let quality = match format {
+                VideoFormat::Gif => ExportQuality::Low,
+                _ => ExportQuality::Medium,
+            };
+            let file = std::env::temp_dir().join(format!(
+                "vizx-format-test-{}.{}",
+                std::process::id(),
+                format.extension()
+            ));
+            let mut writer =
+                VideoWriter::create(&ffmpeg, &file, (64, 48), (12, 1), None, (format, quality))
+                    .unwrap();
+            for frame in 0..6 {
+                let shade = (frame * 40) as u8;
+                writer
+                    .write_frame(&[shade, 0, 255 - shade, 255].repeat(64 * 48))
+                    .unwrap();
+            }
+            writer
+                .finish()
+                .unwrap_or_else(|problem| panic!("{format:?}: {problem}"));
+            assert_eq!(probe_video(&ffmpeg, &file), Ok((64, 48)), "{format:?}");
+            let _ = std::fs::remove_file(&file);
+        }
     }
 
     /// An animated GIF with transparent parts reads like a video, keeps

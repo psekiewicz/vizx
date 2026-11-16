@@ -49,8 +49,10 @@ pub enum AppCommand {
     ImportSpriteSheet,
     /// Pick a video file and put it behind everything else.
     ImportBackgroundVideo,
-    /// Write the project as a video file.
+    /// Open the export window.
     ExportVideo,
+    /// Pick the file and start exporting with the chosen settings.
+    ConfirmExport,
     /// Add a text element in the middle of the picture.
     AddText,
     /// Open the Lyrics window, to turn the words of a song into subtitles.
@@ -174,6 +176,8 @@ pub struct VizxApp {
     /// The clip copied last.
     clipboard: Vec<vizx_core::CopiedClip>,
     pub is_shortcuts_open: bool,
+    /// The export window shows its settings (before an export starts).
+    pub is_export_settings_open: bool,
     /// The welcome window shown at startup.
     pub is_welcome_open: bool,
     /// Small pictures of the media, for the timeline.
@@ -236,6 +240,7 @@ impl VizxApp {
             app_data,
             clipboard: Vec::new(),
             is_shortcuts_open: false,
+            is_export_settings_open: false,
             graphics_summary: describe_graphics_adapter(creation_context),
             status_message: "Ready".to_owned(),
             requested_command: None,
@@ -508,8 +513,9 @@ impl VizxApp {
         };
     }
 
-    /// Asks where to save the video and starts exporting in the background.
-    fn export_video(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+    /// Opens the export window, where format, quality, size and range are
+    /// chosen.
+    fn export_video(&mut self) {
         if self
             .export
             .as_ref()
@@ -518,18 +524,37 @@ impl VizxApp {
             self.status_message = "Export already in progress".to_owned();
             return;
         }
+        if self.require_ffmpeg("Export").is_none() {
+            return;
+        }
+        // Without a loop, an earlier choice of "loop range" means the whole
+        // project again.
+        if self.session.loop_region().is_none() {
+            self.settings.export.range = None;
+        }
+        self.close_export();
+        self.is_export_settings_open = true;
+    }
+
+    /// Asks where to save the video, with the settings from the export
+    /// window, and starts exporting in the background.
+    fn confirm_export(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        self.is_export_settings_open = false;
         let Some(ffmpeg) = self.require_ffmpeg("Export") else {
             return;
         };
+        let format = self.settings.export.format;
+        let extension = format.extension();
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("MP4 video", &["mp4"])
-            .set_file_name(format!("{}.mp4", self.session.project_name()))
+            .add_filter(format.label(), &[extension])
+            .set_file_name(format!("{}.{extension}", self.session.project_name()))
             .set_parent(frame)
             .save_file()
         else {
             return; // dialog cancelled
         };
-        self.start_export(ctx, &ffmpeg, &with_mp4_extension(path));
+        let path = with_extension(path, extension);
+        self.start_export(ctx, &ffmpeg, &path);
     }
 
     fn start_export(&mut self, ctx: &egui::Context, ffmpeg: &Path, output: &Path) {
@@ -540,6 +565,7 @@ impl VizxApp {
             self.bundled_presets.as_deref(),
             ffmpeg,
             output,
+            &self.settings.export,
         );
         match job {
             Ok(job) => {
@@ -709,7 +735,8 @@ impl VizxApp {
             AppCommand::ImportImageSequence => self.import_animation(frame, true),
             AppCommand::ImportSpriteSheet => self.import_animation(frame, false),
             AppCommand::ImportBackgroundVideo => self.import_video(frame, true),
-            AppCommand::ExportVideo => self.export_video(ctx, frame),
+            AppCommand::ExportVideo => self.export_video(),
+            AppCommand::ConfirmExport => self.confirm_export(ctx, frame),
             AppCommand::AddText => {
                 self.status_message = match self.session.add_text() {
                     Ok(_) => "Text added".to_owned(),
@@ -1413,16 +1440,17 @@ impl eframe::App for VizxApp {
     }
 }
 
-/// Returns `path` with the `.mp4` extension, appending it if it is missing.
-fn with_mp4_extension(path: PathBuf) -> PathBuf {
+/// Returns `path` ending in `.extension`, appending it if it is missing.
+fn with_extension(path: PathBuf, extension: &str) -> PathBuf {
     let has_extension = path
         .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"));
+        .is_some_and(|existing| existing.eq_ignore_ascii_case(extension));
     if has_extension {
         return path;
     }
     let mut file_name = path.into_os_string();
-    file_name.push(".mp4");
+    file_name.push(".");
+    file_name.push(extension);
     PathBuf::from(file_name)
 }
 

@@ -151,6 +151,49 @@ pub struct Clip {
     /// by the file: sharp for PNG images and animations, smooth otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sharp_pixels: Option<bool>,
+    /// How a visual clip's colors combine with the layers below it.
+    #[serde(default, skip_serializing_if = "BlendMode::is_normal")]
+    pub blend_mode: BlendMode,
+}
+
+/// How a visual clip's colors combine with the layers below it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum BlendMode {
+    /// Covers what is below, as far as it is opaque.
+    #[default]
+    Normal,
+    /// Adds its colors: brightens, black disappears.
+    Add,
+    /// Like Add, but softer and never brighter than white.
+    Screen,
+    /// Multiplies colors: darkens, white disappears.
+    Multiply,
+    /// Keeps the brighter of the two colors.
+    Lighten,
+}
+
+impl BlendMode {
+    pub const ALL: [Self; 5] = [
+        Self::Normal,
+        Self::Add,
+        Self::Screen,
+        Self::Multiply,
+        Self::Lighten,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::Add => "Add",
+            Self::Screen => "Screen",
+            Self::Multiply => "Multiply",
+            Self::Lighten => "Lighten",
+        }
+    }
+
+    fn is_normal(&self) -> bool {
+        *self == Self::Normal
+    }
 }
 
 fn full_opacity() -> f64 {

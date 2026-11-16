@@ -30,8 +30,8 @@ pub use motion::{Easing, KEYFRAME_TOLERANCE_MILLISECONDS, Keyframe, Motion, Tran
 pub use project::{LayerMove, Marker, Project};
 pub use settings::{FrameRate, ProjectSettings};
 pub use track::{
-    AudioInput, AudioReaction, Clip, ClipId, Placement, ReactionBand, ReactionEffect, Track,
-    TrackId, TrackKind,
+    AudioInput, AudioReaction, BlendMode, Clip, ClipId, Placement, ReactionBand, ReactionEffect,
+    Track, TrackId, TrackKind,
 };
 
 /// File extension of native VizX project files, without the leading dot.
@@ -78,4 +78,5 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 ///   (`row_lengths`). Older files load without them.
 /// - 20: a media file's `relative_path` (relative to the project file), used
 ///   when its full path is gone. Older files load without it.
-pub const CURRENT_FORMAT_VERSION: u32 = 20;
+/// - 21: a clip's `blend_mode`. Older files load with Normal.
+pub const CURRENT_FORMAT_VERSION: u32 = 21;
