@@ -610,10 +610,16 @@ for every step is expensive.
   the export.
 - **Export settings** (`ExportSettings`, remembered in `AppSettings`):
   format (MP4 H.264 / H.265, WebM VP9, MOV ProRes 422, GIF with a palette
-  made from its own colors), quality (CRF or ProRes profile per format),
+  made from its own colors, and two transparent ones: MOV ProRes 4444 with
+  alpha and a PNG sequence `name_00001.png`...), quality (CRF or ProRes
+  profile per format),
   height (width in the project's shape) and range (whole project or the
   loop). A clip that starts before the range is drawn from its start and
   the frames before the range are dropped, so it looks as in a full export.
+  For the transparent formats the compositor starts each frame transparent
+  instead of black, and the export turns its premultiplied colors into the
+  plain RGBA that FFmpeg expects. They are meant for layering VizX's
+  visualizers and lyrics in other editors.
 - **Sound of videos** (`extract_video_sound`): importing a video also
   writes its sound as `<video> sound.wav` (next to it, or in
   `VIZX_STEMS_DIR`) and adds it on an audio track; a background video's

@@ -142,6 +142,8 @@ pub struct Compositor {
     height: u32,
     padded_row_bytes: u32,
     layers: HashMap<u64, UploadedLayer>,
+    /// Layers are drawn over nothing instead of over black.
+    transparent: bool,
 }
 
 impl Compositor {
@@ -220,7 +222,15 @@ impl Compositor {
             height,
             padded_row_bytes,
             layers: HashMap::new(),
+            transparent: false,
         })
+    }
+
+    /// Whether frames start transparent instead of black. A transparent
+    /// frame comes out with colors premultiplied by the opacity, like the
+    /// layers' pictures.
+    pub fn set_transparent(&mut self, transparent: bool) {
+        self.transparent = transparent;
     }
 
     /// The frame size in pixels.
@@ -243,8 +253,9 @@ impl Compositor {
         self.height = height;
     }
 
-    /// Draws `layers` over a black frame, the first one at the bottom, and
-    /// writes the result into `pixels` as opaque RGBA bytes, top row first.
+    /// Draws `layers` over a black frame (or a transparent one, see
+    /// [`Self::set_transparent`]), the first one at the bottom, and writes
+    /// the result into `pixels` as RGBA bytes, top row first.
     pub fn render(&mut self, layers: &[LayerDraw<'_>], pixels: &mut Vec<u8>) -> Result<(), String> {
         // Pictures of layers that are gone are released.
         self.layers
@@ -264,7 +275,11 @@ impl Compositor {
                     depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(Color::BLACK),
+                        load: LoadOp::Clear(if self.transparent {
+                            Color::TRANSPARENT
+                        } else {
+                            Color::BLACK
+                        }),
                         store: StoreOp::Store,
                     },
                 })],

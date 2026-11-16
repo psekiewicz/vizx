@@ -45,6 +45,27 @@ fn show_settings(ctx: &egui::Context, app: &mut VizxApp) {
                             }
                         });
                     ui.end_row();
+                    if settings.format.is_transparent() {
+                        ui.label("");
+                        ui.label(
+                            egui::RichText::new(
+                                "Empty parts of the frame stay transparent.\n\
+                                 For layering in another editor.",
+                            )
+                            .small()
+                            .weak(),
+                        );
+                        ui.end_row();
+                    }
+                    if settings.format == VideoFormat::PngSequence {
+                        ui.label("");
+                        ui.label(
+                            egui::RichText::new("Frames are saved as name_00001.png, ...")
+                                .small()
+                                .weak(),
+                        );
+                        ui.end_row();
+                    }
 
                     ui.label("Quality");
                     ui.horizontal(|ui| {

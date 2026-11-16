@@ -52,16 +52,24 @@ pub enum VideoFormat {
     WebmVp9,
     /// QuickTime with Apple ProRes 422 HQ: large, for further editing.
     MovProres,
+    /// QuickTime with Apple ProRes 4444 and an alpha channel: the empty
+    /// parts of the frame stay transparent, for laying the video over
+    /// other pictures in another program.
+    MovProresTransparent,
+    /// One PNG file per frame, with transparency, without sound.
+    PngSequence,
     /// Animated GIF, without sound.
     Gif,
 }
 
 impl VideoFormat {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Mp4H264,
         Self::Mp4H265,
         Self::WebmVp9,
         Self::MovProres,
+        Self::MovProresTransparent,
+        Self::PngSequence,
         Self::Gif,
     ];
 
@@ -71,6 +79,8 @@ impl VideoFormat {
             Self::Mp4H265 => "MP4 (H.265 / HEVC)",
             Self::WebmVp9 => "WebM (VP9)",
             Self::MovProres => "MOV (ProRes 422 HQ)",
+            Self::MovProresTransparent => "MOV (ProRes 4444, transparent)",
+            Self::PngSequence => "PNG sequence (transparent, no sound)",
             Self::Gif => "GIF (no sound)",
         }
     }
@@ -80,13 +90,58 @@ impl VideoFormat {
         match self {
             Self::Mp4H264 | Self::Mp4H265 => "mp4",
             Self::WebmVp9 => "webm",
-            Self::MovProres => "mov",
+            Self::MovProres | Self::MovProresTransparent => "mov",
+            Self::PngSequence => "png",
             Self::Gif => "gif",
         }
     }
 
     pub fn has_sound(self) -> bool {
-        self != Self::Gif
+        !matches!(self, Self::Gif | Self::PngSequence)
+    }
+
+    /// Whether the empty parts of the frame are left transparent instead
+    /// of black.
+    pub fn is_transparent(self) -> bool {
+        matches!(self, Self::MovProresTransparent | Self::PngSequence)
+    }
+}
+
+/// The files of a PNG sequence exported to `output` ("clip.png"): FFmpeg's
+/// pattern for them, "clip_00001.png" and on.
+pub fn png_sequence_pattern(output: &Path) -> PathBuf {
+    output.with_file_name(format!("{}_%05d.png", sequence_stem(output)))
+}
+
+/// The file of frame `number` (from 1) of a PNG sequence exported to
+/// `output`.
+pub fn png_sequence_frame(output: &Path, number: u32) -> PathBuf {
+    output.with_file_name(format!("{}_{number:05}.png", sequence_stem(output)))
+}
+
+fn sequence_stem(output: &Path) -> String {
+    output
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "frame".to_owned())
+}
+
+/// Turns premultiplied RGBA (what the compositor makes) into the plain
+/// RGBA video files store: each color divided by the pixel's opacity.
+fn unpremultiply(pixels: &mut [u8]) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        let opacity = u32::from(pixel[3]);
+        match opacity {
+            255 => {}
+            0 => pixel[..3].fill(0),
+            _ => {
+                for part in &mut pixel[..3] {
+                    // Added light (the Add blend) can be brighter than the
+                    // opacity allows; it stays at full brightness.
+                    *part = ((u32::from(*part) * 255 + opacity / 2) / opacity).min(255) as u8;
+                }
+            }
+        }
     }
 }
 
@@ -344,7 +399,16 @@ impl Export {
             let result = run(&job, &state, &is_cancelled, &on_progress);
             if result.is_err() {
                 // An unfinished video file is useless; do not leave it.
-                let _ = std::fs::remove_file(&job.output);
+                if job.format == VideoFormat::PngSequence {
+                    // Only the frames this export wrote (FFmpeg may be one
+                    // ahead of the count).
+                    let written = state.lock().map_or(0, |state| state.finished_frames);
+                    for number in 1..=written + 1 {
+                        let _ = std::fs::remove_file(png_sequence_frame(&job.output, number));
+                    }
+                } else {
+                    let _ = std::fs::remove_file(&job.output);
+                }
             }
             if let Ok(mut state) = state.lock() {
                 state.result = Some(result);
@@ -421,6 +485,8 @@ fn run(
     let sound_file = write_sound_file(job)?;
     let result = (|| {
         let mut compositor = Compositor::new(job.width, job.height)?;
+        let transparent = job.format.is_transparent();
+        compositor.set_transparent(transparent);
         let mut writer = VideoWriter::create(
             &job.ffmpeg,
             &job.output,
@@ -498,6 +564,9 @@ fn run(
                 });
             }
             compositor.render(&draws, &mut frame_pixels)?;
+            if transparent {
+                unpremultiply(&mut frame_pixels);
+            }
             writer.write_frame(&frame_pixels)?;
 
             if let Ok(mut state) = state.lock() {
@@ -982,6 +1051,102 @@ mod tests {
         let _ = std::fs::remove_file(&output);
 
         assert_eq!(colors.iter().collect::<String>(), "RRBBRRBBRR");
+    }
+
+    #[test]
+    fn premultiplied_colors_become_plain_colors() {
+        let mut pixels = vec![
+            128, 0, 64, 128, // half-transparent red-purple
+            0, 0, 0, 0, // empty
+            9, 9, 9, 0, // empty with stray light
+            200, 0, 0, 100, // added light brighter than its opacity
+            10, 20, 30, 255, // opaque
+        ];
+        unpremultiply(&mut pixels);
+        assert_eq!(
+            pixels,
+            [
+                255, 0, 128, 128, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 100, 10, 20, 30, 255
+            ]
+        );
+    }
+
+    /// A red square on the left half, the right half empty, the square at
+    /// half opacity: both transparent formats keep exactly that.
+    #[test]
+    fn transparent_formats_keep_the_empty_parts_transparent() {
+        let (Some(ffmpeg), true) = (find_ffmpeg(), vizx_render::open_device("test").is_ok()) else {
+            eprintln!("FFmpeg or a graphics adapter is missing: skipping");
+            return;
+        };
+        let image_path = temporary_path("transparent-source.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 0, 0, 255]))
+            .save(&image_path)
+            .unwrap();
+        let half_red_square = || {
+            let mut layer = image_layer(
+                &image_path,
+                Placement {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.5,
+                    height: 1.0,
+                },
+            );
+            layer.motion.resting.opacity = 0.5;
+            layer
+        };
+
+        for format in [VideoFormat::PngSequence, VideoFormat::MovProresTransparent] {
+            let output = temporary_path(&format!("transparent.{}", format.extension()));
+            let export = Export::start(
+                ExportJob {
+                    output: output.clone(),
+                    ffmpeg: ffmpeg.clone(),
+                    width: 64,
+                    height: 48,
+                    start_seconds: 0.0,
+                    frame_rate: (10, 1),
+                    duration_seconds: 0.3,
+                    format,
+                    quality: ExportQuality::Medium,
+                    audio: Vec::new(),
+                    layers: vec![half_red_square()],
+                },
+                || {},
+            );
+            assert_eq!(wait_for(&export), Ok(()), "{format:?}");
+
+            let pixels = if format == VideoFormat::PngSequence {
+                let first = png_sequence_frame(&output, 1);
+                let pixels = image::open(&first).unwrap().to_rgba8().into_raw();
+                for number in 1..=3 {
+                    let frame = png_sequence_frame(&output, number);
+                    assert!(frame.is_file(), "{}", frame.display());
+                    let _ = std::fs::remove_file(frame);
+                }
+                pixels
+            } else {
+                let mut reader = VideoReader::open(&ffmpeg, &output, (64, 48), 10, 0.0).unwrap();
+                let mut pixels = Vec::new();
+                reader.read_frame(&mut pixels).unwrap();
+                drop(reader);
+                let _ = std::fs::remove_file(&output);
+                pixels
+            };
+            let at = |x: usize| {
+                let start = (24 * 64 + x) * 4;
+                [pixels[start], pixels[start + 1], pixels[start + 3]]
+            };
+            let [red, green, opacity] = at(16);
+            assert!(
+                red > 240 && green < 15 && (118..=138).contains(&opacity),
+                "{format:?} left: {:?}",
+                at(16)
+            );
+            assert_eq!(at(48)[2], 0, "{format:?} right half is transparent");
+        }
+        let _ = std::fs::remove_file(&image_path);
     }
 
     #[test]

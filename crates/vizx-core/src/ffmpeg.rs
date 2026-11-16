@@ -220,7 +220,8 @@ impl Drop for VideoReader {
     }
 }
 
-/// Compresses frames (and optionally sound) into an MP4 video file.
+/// Compresses frames (and optionally sound) into a video file, or into
+/// numbered PNG files.
 pub struct VideoWriter {
     child: Child,
     input: Option<ChildStdin>,
@@ -309,9 +310,41 @@ impl VideoWriter {
                 ],
                 vec!["-c:a", "pcm_s16le"],
             ),
+            VideoFormat::MovProresTransparent => (
+                // Profile 5 is 4444 XQ, 4 is 4444; both keep the opacity.
+                vec![
+                    "-c:v",
+                    "prores_ks",
+                    "-profile:v",
+                    level("5", "4", "4"),
+                    "-pix_fmt",
+                    "yuva444p10le",
+                    "-alpha_bits",
+                    "16",
+                    "-vendor",
+                    "apl0",
+                ],
+                vec!["-c:a", "pcm_s16le"],
+            ),
+            // PNG loses nothing; the quality only trades size for speed.
+            VideoFormat::PngSequence => (
+                vec![
+                    "-c:v",
+                    "png",
+                    "-pix_fmt",
+                    "rgba",
+                    "-compression_level",
+                    level("9", "6", "3"),
+                    "-start_number",
+                    "1",
+                ],
+                Vec::new(),
+            ),
             VideoFormat::Gif => (Vec::new(), Vec::new()),
         };
         let filter = match format {
+            // Kept as they are: padding would add an opaque edge.
+            VideoFormat::MovProresTransparent | VideoFormat::PngSequence => "null".to_owned(),
             // One palette for the whole animation, made from its own colors.
             VideoFormat::Gif => format!(
                 "fps={},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither={}",
@@ -341,8 +374,12 @@ impl VideoWriter {
         if audio.is_some() {
             command.args(&sound).arg("-shortest");
         }
+        let output = match format {
+            VideoFormat::PngSequence => crate::export::png_sequence_pattern(output),
+            _ => output.to_path_buf(),
+        };
         let mut child = command
-            .arg(output)
+            .arg(&output)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -584,6 +621,16 @@ mod tests {
             writer
                 .finish()
                 .unwrap_or_else(|problem| panic!("{format:?}: {problem}"));
+            if format == VideoFormat::PngSequence {
+                let frames: Vec<_> = (1..=6)
+                    .map(|number| crate::export::png_sequence_frame(&file, number))
+                    .collect();
+                assert_eq!(probe_video(&ffmpeg, &frames[5]), Ok((64, 48)));
+                for frame in frames {
+                    let _ = std::fs::remove_file(frame);
+                }
+                continue;
+            }
             assert_eq!(probe_video(&ffmpeg, &file), Ok((64, 48)), "{format:?}");
             let _ = std::fs::remove_file(&file);
         }
