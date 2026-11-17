@@ -258,6 +258,10 @@ impl VideoWriter {
                     "medium",
                     "-crf",
                     level("18", "23", "28"),
+                    // A shorter look-ahead than the default 40 frames
+                    // holds fewer pictures in memory, at hardly any cost.
+                    "-x264-params",
+                    "rc-lookahead=20",
                     "-pix_fmt",
                     "yuv420p",
                     "-movflags",
@@ -274,6 +278,8 @@ impl VideoWriter {
                     "medium",
                     "-crf",
                     level("20", "26", "30"),
+                    "-x265-params",
+                    "pools=4:rc-lookahead=20",
                     "-pix_fmt",
                     "yuv420p",
                     "-tag:v",
@@ -365,6 +371,10 @@ impl VideoWriter {
                 "-framerate",
                 &format!("{}/{}", frame_rate.0, frame_rate.1.max(1)),
             ])
+            // Only a few pictures may wait for the encoder: when it falls
+            // behind (busy pictures encode slowly), VizX waits instead of
+            // FFmpeg piling up gigabytes of raw frames (8 MB each at 1080p).
+            .args(["-thread_queue_size", "4"])
             .args(["-i", "-"]);
         if let Some(audio) = audio {
             // Input 2: the sound.
@@ -372,7 +382,13 @@ impl VideoWriter {
         }
         command.arg("-vf").arg(&filter).args(&video);
         if audio.is_some() {
-            command.args(&sound).arg("-shortest");
+            // `-shortest` lines the sound up with the pictures by holding
+            // back up to 10 s of pictures by default: about 800 MB at
+            // 1080p. Half a second is enough here, since the sound is
+            // written exactly as long as the video.
+            command
+                .args(&sound)
+                .args(["-shortest", "-shortest_buf_duration", "0.5"]);
         }
         let output = match format {
             VideoFormat::PngSequence => crate::export::png_sequence_pattern(output),

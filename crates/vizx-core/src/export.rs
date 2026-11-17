@@ -528,10 +528,18 @@ fn run(
             }
             let seconds = job.start_seconds + f64::from(frame) / frames_per_second;
 
-            // First bring every visible layer's picture up to this frame...
+            // First bring every visible layer's picture up to this frame,
+            // and let go of the layers that are over: a song can have dozens
+            // of visualizers, videos and texts one after another, and
+            // keeping all of them (renderers, decoders, pictures) until the
+            // end ran out of memory.
             for (layer, picture) in job.layers.iter().zip(&mut pictures) {
                 if is_visible(layer, seconds) {
                     advance(job, layer, picture, frames_per_second, seconds)?;
+                } else if seconds >= layer.start_seconds + layer.duration_seconds
+                    && !matches!(picture, LayerPicture::NotPrepared)
+                {
+                    *picture = LayerPicture::NotPrepared;
                 }
             }
             // ...then describe where each one goes, and draw them all.

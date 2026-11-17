@@ -687,6 +687,9 @@ fn build_project(
                             project.move_clip_to_track(clip, flash_track);
                             project.remove_track(track);
                         }
+                        // Shortened first: moved at its full length, it
+                        // would make the project longer than the song.
+                        project.trim_clip_end(clip, 900);
                         project.move_clip(clip, milliseconds(from));
                     }
                     added = clip;
