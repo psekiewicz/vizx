@@ -120,3 +120,39 @@ cargo run -p vizx-app
 ```
 
 The backend and adapter in use are shown on the right side of the status bar.
+
+## Showcase video
+
+`crates/vizx-core/examples/showcase.rs` builds a project that uses as many
+VizX features as it can for one song and exports it with the application's
+own export:
+
+```powershell
+cargo run --release -p vizx-core --example showcase -- `
+    song.mp3 "stems folder" "project with timed lyrics.vzx" D:\vizx-showcase
+```
+
+What it shows, part by part of the song (each part also gets a timeline
+marker and an on-screen caption naming its features):
+
+- the song with its four stems (vocals, drums, bass, other), each visual
+  listening to the one it suits;
+- a different bundled MilkDrop preset in every part;
+- all five visualizer plugins: the ring on the drums, the oscilloscope on
+  the vocals, spectrum bars, the waterfall on the "other" stem, the core on
+  the bass, with their parameters set;
+- a background image with a slow keyframed zoom, an emblem that grows,
+  turns and shakes with the bass, an image sequence that spins, sprite
+  sheets that step one frame per drum beat, and a video that slides in;
+- blend modes (Add, Screen, Lighten), opacity, clip effects (glow, color
+  split, tint, grain, vignette, blur, glitch);
+- effects layers with a look per part: camera shake and effects driven by
+  the drums;
+- a keyframed title in a TrueType font, and the lyrics as popping
+  subtitles.
+
+The pictures, sprite sheet, image sequence and video are generated (the
+video by FFmpeg), so the example needs only the song, its stems and the
+lyrics. `--samples` exports two seconds of every part at 360p for a quick
+look; `--height` sets the video's height (1080 by default). The song and
+the rendered video are not part of the repository.
