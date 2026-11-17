@@ -10,6 +10,7 @@
 //! milestones.
 
 mod animation;
+mod collect;
 mod file;
 mod media;
 mod metadata;
@@ -20,6 +21,7 @@ mod settings;
 mod track;
 
 pub use animation::{FrameAnimation, FrameLayout, sequence_frame_path, split_numbered_path};
+pub use collect::{COLLECTED_MEDIA_FOLDER, CollectionPlan, FileCopy, new_collection_folder};
 pub use file::{ProjectFileError, with_project_extension};
 pub use media::{
     AudioProperties, ImageProperties, MediaContent, MediaId, MediaSource, TextAlignment,

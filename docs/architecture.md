@@ -142,6 +142,30 @@ kind of media, version **13** text elements. Version **14** added a clip's
 `source_offset_milliseconds`, version **15** its `audio_gain`,
 version **16** its `rotation_degrees`, `spin_degrees_per_second` and `keyframes`.
 
+### Collect All and Save
+
+Because media is referenced, not embedded, a project spread over several
+folders and drives is hard to move or back up. **File > Collect All and
+Save...** asks for a parent folder and makes a new folder there named after
+the project (`Name (2)` if it exists): `Name.vzx` plus a `Media` folder with
+a copy of every file the project uses.
+
+- Single files (songs, stems, images, videos, sprite sheets, MilkDrop
+  presets, fonts) go straight into `Media`; equal names from different
+  folders become `song (2).mp3`. A file used several times is copied once.
+- An image sequence gets a folder of its own with its frame names unchanged,
+  so the numbering still works; a visualizer plugin keeps its whole folder.
+- Bundled presets and plugins ship with VizX and are not copied. Missing
+  files are reported and keep their old path.
+- `vizx-project` only plans the copy (`Project::plan_collection`, no disk
+  writes, easy to test). `vizx-core::CollectJob` copies in 4 MB pieces on a
+  background thread with progress, so large videos neither freeze the window
+  nor stop it from being cancelled; a stopped or failed collection removes
+  the folder it made.
+- Afterwards the open project *is* the collected one (like Save As): its
+  paths point at the copies and it is saved there. Edits made while copying
+  are kept and count as unsaved. Opening another project stops the copy.
+
 ### Audio drives the visuals; VizX is not an audio workstation
 
 Audio is the input that visuals react to, not material to be mixed. This

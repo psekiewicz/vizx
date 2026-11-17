@@ -8,6 +8,7 @@
 mod animation;
 mod app_data;
 mod audio_store;
+mod collect;
 mod composition;
 mod export;
 mod ffmpeg;
@@ -29,6 +30,7 @@ pub use app_data::{
     AUTOSAVE_INTERVAL, AppSettings, Autosaver, Recovery, app_data_dir, find_recoveries,
 };
 pub use audio_store::{AudioState, AudioStore, LoadedAudio};
+pub use collect::{CollectJob, Collected};
 pub use composition::{
     LayerGeometry, ReactionMeter, audio_sources, beat_count, beat_pulse, beat_times,
     effects_layer_geometry, frame_source, last_beat, layer_effects, layer_geometry, tempo_of,

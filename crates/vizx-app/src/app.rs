@@ -37,6 +37,8 @@ pub enum AppCommand {
     OpenRecent(usize),
     SaveProject,
     SaveProjectAs,
+    /// Save the project with copies of all its files in one new folder.
+    CollectAndSave,
     ImportAudio,
     ImportImage,
     /// Pick an image and put it behind everything else, covering the frame.
@@ -186,6 +188,8 @@ pub struct VizxApp {
     thumbnails: crate::thumbnails::Thumbnails,
     /// The stem separation running in the background, if any.
     stem_job: Option<vizx_core::StemJob>,
+    /// Collect All and Save, copying files in the background.
+    collect_job: Option<vizx_core::CollectJob>,
     /// Lyrics being recognized from the song's vocals.
     lyrics_recognition: Option<vizx_core::LyricsRecognition>,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
@@ -231,6 +235,7 @@ impl VizxApp {
             is_project_settings_open: false,
             lyrics: LyricsWindow::default(),
             stem_job: None,
+            collect_job: None,
             lyrics_recognition: None,
             thumbnails,
             settings: app_data
@@ -772,6 +777,7 @@ impl VizxApp {
                 self.transport.pause();
                 self.forget_autosave();
                 self.session = EditorSession::new_untitled();
+                self.stop_collecting();
                 self.status_message = "New project".to_owned();
             }
             AppCommand::OpenProject => self.open_project(frame),
@@ -854,6 +860,7 @@ impl VizxApp {
             AppCommand::SaveProjectAs => {
                 self.save_project_as(frame);
             }
+            AppCommand::CollectAndSave => self.collect_and_save(ctx, frame),
             AppCommand::ImportAudio => self.import_audio(frame),
             AppCommand::ImportImage => self.import_images(frame),
             AppCommand::ImportBackgroundImage => self.import_background_image(frame),
@@ -966,6 +973,7 @@ impl VizxApp {
                 self.transport.pause();
                 self.forget_autosave();
                 self.session = session;
+                self.stop_collecting();
                 self.remember_recent_project(path);
                 let missing = self.session.project().missing_media().len();
                 self.status_message = if missing == 0 {
@@ -1135,6 +1143,87 @@ impl VizxApp {
         }
     }
 
+    /// Asks for a folder and starts copying the project with all its files
+    /// into a new folder there, named after the project.
+    fn collect_and_save(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        if let Some(job) = &self.collect_job {
+            self.status_message = format!("Already collecting into {}", job.folder().display());
+            return;
+        }
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Collect All and Save: choose where the project folder goes")
+            .set_parent(frame);
+        if let Some(parent) = self.session.file_path().and_then(Path::parent) {
+            dialog = dialog.set_directory(parent);
+        }
+        let Some(parent) = dialog.pick_folder() else {
+            return; // dialog cancelled
+        };
+        let ctx = ctx.clone();
+        let job = vizx_core::CollectJob::start(
+            self.session.project().clone(),
+            &parent,
+            &self.session.project_name(),
+            move || ctx.request_repaint(),
+        );
+        self.status_message = format!("Collecting into {}...", job.folder().display());
+        self.collect_job = Some(job);
+    }
+
+    /// Stops Collect All and Save (another project was opened); the
+    /// half-filled folder is removed.
+    fn stop_collecting(&mut self) {
+        if let Some(job) = self.collect_job.take() {
+            self.status_message = format!("Collecting into {} stopped", job.folder().display());
+        }
+    }
+
+    /// The running Collect All and Save, if any.
+    pub fn collect_job(&self) -> Option<&vizx_core::CollectJob> {
+        self.collect_job.as_ref()
+    }
+
+    /// Shows the progress of Collect All and Save and, once done, makes the
+    /// collected copy the open project.
+    fn finish_collecting(&mut self) {
+        let Some(job) = &self.collect_job else {
+            return;
+        };
+        let Some(outcome) = job.finished() else {
+            self.status_message = format!(
+                "Collecting into {}: {:.0}%",
+                job.folder().display(),
+                job.progress() * 100.0
+            );
+            return;
+        };
+        self.collect_job = None;
+        let collected = match outcome {
+            Ok(collected) => collected,
+            Err(problem) => {
+                self.status_message = format!("Collect All and Save failed: {problem}");
+                return;
+            }
+        };
+        self.session.adopt_collection(&collected);
+        self.forget_autosave();
+        self.remember_recent_project(&collected.project_path);
+        let size = format_bytes(collected.bytes);
+        self.status_message = match collected.missing.len() {
+            0 => format!(
+                "Collected {} files ({size}) and saved {}",
+                collected.file_count,
+                collected.project_path.display()
+            ),
+            missing => format!(
+                "Saved {} with {} files ({size}); {missing} not found and not copied: {}",
+                collected.project_path.display(),
+                collected.file_count,
+                collected.missing.join(", ")
+            ),
+        };
+    }
+
     /// Whether the welcome window opens at startup; stored right away.
     pub fn set_show_welcome(&mut self, show: bool) {
         self.settings.show_welcome = show;
@@ -1149,6 +1238,7 @@ impl VizxApp {
         self.transport.pause();
         self.forget_autosave();
         self.session = EditorSession::new_untitled();
+        self.stop_collecting();
         if template == Template::Empty {
             self.status_message = "New project".to_owned();
             return;
@@ -1221,6 +1311,7 @@ impl VizxApp {
             Ok(session) => {
                 self.transport.pause();
                 self.session = session;
+                self.stop_collecting();
                 recovery.discard();
                 self.status_message =
                     format!("Recovered {} (not saved yet)", recovery.project_name);
@@ -1516,6 +1607,7 @@ impl eframe::App for VizxApp {
         self.load_project_audio(&ctx);
         self.load_project_images(&ctx);
         self.collect_stems();
+        self.finish_collecting();
         self.collect_lyrics_recognition();
         self.autosave();
         self.visual_preview.update(
@@ -1570,6 +1662,18 @@ impl eframe::App for VizxApp {
         self.session.settle_history(is_user_busy);
         self.transport.end_frame(&self.session);
         self.sync_window_title(&ctx);
+    }
+}
+
+/// A size such as `850 KB`, `12.4 MB` or `1.3 GB`.
+fn format_bytes(bytes: u64) -> String {
+    let bytes = bytes as f64;
+    if bytes >= 1e9 {
+        format!("{:.1} GB", bytes / 1e9)
+    } else if bytes >= 1e6 {
+        format!("{:.1} MB", bytes / 1e6)
+    } else {
+        format!("{:.0} KB", (bytes / 1e3).ceil())
     }
 }
 

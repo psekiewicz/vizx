@@ -49,6 +49,18 @@ fn file_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
         "Ctrl+Shift+S",
         AppCommand::SaveProjectAs,
     );
+    let collecting = app.collect_job().is_some();
+    let collect = ui
+        .add_enabled(!collecting, egui::Button::new("Collect All and Save..."))
+        .on_hover_text(
+            "Save the project together with copies of every file it uses (songs, \
+             videos, images, fonts, plugins) in one new folder, to move it, back it \
+             up or send it to another computer",
+        )
+        .on_disabled_hover_text("Collecting already");
+    if collect.clicked() {
+        app.request(AppCommand::CollectAndSave);
+    }
     ui.separator();
     command_item(
         ui,

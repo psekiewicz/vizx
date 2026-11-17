@@ -151,6 +151,26 @@ impl Project {
             .collect()
     }
 
+    /// Points every file the project uses (media files, plugin folders,
+    /// fonts) for which `new_path` knows a new place there. Returns how many
+    /// changed.
+    pub fn repoint_media(&mut self, new_path: impl Fn(&str) -> Option<String>) -> usize {
+        let mut changed = 0;
+        let mut repoint = |path: &mut String| {
+            if let Some(new) = new_path(path).filter(|new| new != path) {
+                *path = new;
+                changed += 1;
+            }
+        };
+        for media in &mut self.media {
+            repoint(&mut media.path);
+            if let crate::MediaContent::Text(text) = &mut media.content {
+                repoint(&mut text.font_path);
+            }
+        }
+        changed
+    }
+
     /// Changes the file of one media source (after the user located a
     /// moved file). Returns `true` if it changed.
     pub fn relink_media(&mut self, id: crate::MediaId, path: &Path) -> bool {
@@ -168,7 +188,7 @@ impl Project {
 
 /// Whether a stored path names a file on disk (rather than something that
 /// ships with VizX, like `bundled-presets:/...`, or nothing, like a text).
-fn is_file_reference(path: &str) -> bool {
+pub(crate) fn is_file_reference(path: &str) -> bool {
     !path.is_empty() && !path.starts_with("bundled-")
 }
 

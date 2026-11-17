@@ -1231,6 +1231,22 @@ impl EditorSession {
         self.has_unsaved_changes = false;
         Ok(())
     }
+
+    /// Makes the collected copy of the project (Collect All and Save) its
+    /// file from now on, with every file pointing at its copy. Changes made
+    /// while the files were being copied are kept and count as unsaved.
+    pub fn adopt_collection(&mut self, collected: &crate::Collected) {
+        let new_path = |path: &str| {
+            collected
+                .moved_paths
+                .iter()
+                .find(|(old, _)| old == path)
+                .map(|(_, new)| new.clone())
+        };
+        self.edit_project(|project| project.repoint_media(new_path) > 0);
+        self.file_path = Some(collected.project_path.clone());
+        self.has_unsaved_changes = self.project != collected.project;
+    }
 }
 
 #[cfg(test)]
