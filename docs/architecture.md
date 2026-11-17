@@ -41,7 +41,7 @@ in the project.
 | `vizx-visualizer` | Visualizer plugins: reading a plugin folder and rendering its WGSL shader off-screen with wgpu. | GUI, project data, the timeline |
 | `vizx-render` | The rendering engine: an off-screen wgpu device and the compositor that lays pictures over each other into one frame. | GUI, project data, the timeline |
 | `vizx-ml` | Local machine learning: the HTDemucs stem separation model, run by ONNX Runtime loaded at run time. Nothing leaves the computer. | GUI, project data, network access |
-| `vizx-core` | Editing state and logic operating on a project. Future home of subsystem coordination. | GUI code |
+| `vizx-core` | Editing state and logic operating on a project. Future home of subsystem coordination. The only network access: looking up lyrics on LRCLIB when the user asks. | GUI code |
 | `vizx-app` | The window, panels, menus and visual style. | Project rules or logic that other front ends would need |
 
 Because the lower two crates have no GUI dependency, they can be tested
@@ -719,6 +719,40 @@ Fast 841 s (3.4 x its length), Accurate 873 s (3.5 x). The words came out
 nearly all right in both; Accurate split lines more finely.
 `cargo run --release -p vizx-ml --example lyrics -- <vocals> [fast|balanced|accurate] [language]`
 measures a file without the window.
+
+On stylized singing recognition is much worse. Party Favor (ivycomb feat.
+OodleZz, 195 s), against its published lyrics: 53 % of the words wrong on
+Balanced, 55 % on Accurate (32 % in the first minute, 97 % in the last,
+where a nursery-rhyme line and "na na na" were missed or made up). The line
+times were right to within 0.4 s. Hence the published words below.
+
+### Lyrics found online (LRCLIB)
+
+**Find Lyrics Online** in the Lyrics window (`vizx_core::LyricsSearch`, in a
+background thread) asks LRCLIB (lrclib.net, a free open lyrics database, no
+key) for the song. It is the only place VizX goes on the internet, only on
+that button, and it sends only the title and artist (both editable; empty
+means guessed from the file name, "Artist - Title"). The HTTP client is
+`ureq` with rustls and its own root certificates (no system library).
+
+- **Which song.** A title alone finds mostly the most famous song of that
+  name: for "Party Favor" LRCLIB returned twenty Billie Eilish versions, one
+  of them 196 s long, and not ivycomb's (195 s). So with an artist given only
+  that artist's songs are kept (`same_artist`, ignoring case, punctuation
+  and guests); without one the result says whose song it is and asks for
+  the artist (`by_title_only`). Of the songs left, one within 4 s of the
+  file's length is preferred, timed if possible.
+- **Timed lyrics** (LRC) of a song of the file's length are used as they
+  are (`timed_lyrics_on_timeline`: moved to the clip's place; a line lasts
+  until the next one, at most 6 s, so it does not stay through an
+  instrumental break).
+- **Words only** (no timed version, or one of another length) go into the
+  window untimed. **Recognize from Vocals** then keeps words that are in the
+  window without times (pasted or found) and only times them:
+  `align_official_lyrics` pairs them with the words heard, the same
+  alignment the Subtitle Editor uses for official lyrics.
+
+`cargo test -p vizx-core lyrics_online -- --ignored` asks the real LRCLIB.
 
 ### Speed measurements
 

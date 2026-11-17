@@ -18,6 +18,7 @@ jpeg-encoder.workspace = true
 vizx-project.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+ureq.workspace = true
 
 # Whether the VizX that wrote an autosave is still running.
 [target.'cfg(windows)'.dependencies]

@@ -198,6 +198,9 @@ pub struct VizxApp {
     collect_job: Option<vizx_core::CollectJob>,
     /// Lyrics being recognized from the song's vocals.
     lyrics_recognition: Option<vizx_core::LyricsRecognition>,
+    /// Lyrics being looked up online, and where the song lies on the
+    /// timeline (for the times found).
+    lyrics_search: Option<(vizx_core::LyricsSearch, vizx_core::SongPlacement)>,
     /// Singers being told apart, and the subtitle layer they are on.
     singer_separation: Option<(vizx_core::SingerSeparation, TrackId)>,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
@@ -215,6 +218,15 @@ pub struct VizxApp {
     /// Last title sent to the OS window, so it is only updated on change.
     window_title: String,
     has_maximized_on_startup: bool,
+}
+
+/// The song whose lyrics are recognized or looked up, or whose singers are
+/// told apart.
+struct LyricsSong {
+    path: String,
+    /// The whole file's length, which tells apart songs of the same title.
+    length_seconds: f64,
+    placement: vizx_core::SongPlacement,
 }
 
 impl VizxApp {
@@ -247,6 +259,7 @@ impl VizxApp {
             stem_job: None,
             collect_job: None,
             lyrics_recognition: None,
+            lyrics_search: None,
             singer_separation: None,
             thumbnails,
             settings: app_data
@@ -481,6 +494,38 @@ impl VizxApp {
             self.lyrics.message = format!("Already recognizing {}", job.song_name());
             return;
         }
+        let song = match self.lyrics_song() {
+            Ok(song) => song,
+            Err(problem) => {
+                self.lyrics.message = problem.to_owned();
+                return;
+            }
+        };
+        let Some(loaded) = self.audio_store.loaded(&song.path) else {
+            self.lyrics.message = "The song is still loading".to_owned();
+            return;
+        };
+        let ctx = ctx.clone();
+        match vizx_core::LyricsRecognition::start(
+            std::sync::Arc::clone(&loaded.audio),
+            Path::new(&song.path),
+            song.placement,
+            language,
+            quality,
+            move || ctx.request_repaint(),
+        ) {
+            Ok(job) => {
+                self.lyrics.message = format!("Recognizing the lyrics of {}...", job.song_name());
+                self.lyrics_recognition = Some(job);
+            }
+            Err(problem) => self.lyrics.message = format!("Cannot recognize lyrics: {problem}"),
+        }
+    }
+
+    /// The song whose lyrics are wanted: the selected audio clip, or the
+    /// first one on a track that is heard (stems are added on muted
+    /// tracks). `Err` says what is missing.
+    fn lyrics_song(&self) -> Result<LyricsSong, &'static str> {
         let project = self.session.project();
         let is_audio = |clip: &vizx_project::Clip| {
             project
@@ -496,69 +541,117 @@ impl VizxApp {
         let first = project
             .tracks()
             .iter()
-            .filter(|track| track.kind == vizx_project::TrackKind::Audio)
-            .flat_map(|track| &track.clips)
-            .find(|clip| is_audio(clip));
-        let Some(clip) = selected.or(first) else {
-            self.lyrics.message = "Add the song first".to_owned();
-            return;
-        };
-        let Some(source) = project.media_source(clip.media) else {
-            return;
-        };
-        let Some(loaded) = self.audio_store.loaded(&source.path) else {
-            self.lyrics.message = "The song is still loading".to_owned();
-            return;
-        };
-        let placement = vizx_core::SongPlacement {
-            clip_start_seconds: clip.start_milliseconds as f64 / 1000.0,
-            source_offset_seconds: clip.source_offset_milliseconds as f64 / 1000.0,
-            clip_duration_seconds: clip.duration_milliseconds as f64 / 1000.0,
-        };
-        let ctx = ctx.clone();
-        match vizx_core::LyricsRecognition::start(
-            std::sync::Arc::clone(&loaded.audio),
-            Path::new(&source.path),
-            placement,
-            language,
-            quality,
-            move || ctx.request_repaint(),
-        ) {
-            Ok(job) => {
-                self.lyrics.message = format!("Recognizing the lyrics of {}...", job.song_name());
-                self.lyrics_recognition = Some(job);
-            }
-            Err(problem) => self.lyrics.message = format!("Cannot recognize lyrics: {problem}"),
-        }
-    }
-
-    /// The song: the selected audio clip, or the first one of the project,
-    /// with where it lies on the timeline. `Err` says what is missing.
-    fn song_clip(&self) -> Result<(String, vizx_core::SongPlacement), &'static str> {
-        let project = self.session.project();
-        let is_audio = |clip: &vizx_project::Clip| {
-            project
-                .media_source(clip.media)
-                .is_some_and(|source| source.audio().is_some())
-        };
-        let first = project
-            .tracks()
-            .iter()
             .filter(|track| track.kind == TrackKind::Audio && !track.muted)
             .flat_map(|track| &track.clips)
             .find(|clip| is_audio(clip));
-        let clip = first.ok_or("Add the song first")?;
+        let clip = selected.or(first).ok_or("Add the song first")?;
         let source = project
             .media_source(clip.media)
             .ok_or("Add the song first")?;
-        Ok((
-            source.path.clone(),
-            vizx_core::SongPlacement {
+        Ok(LyricsSong {
+            path: source.path.clone(),
+            length_seconds: source
+                .audio()
+                .map_or(0.0, |audio| audio.duration_milliseconds as f64 / 1000.0),
+            placement: vizx_core::SongPlacement {
                 clip_start_seconds: clip.start_milliseconds as f64 / 1000.0,
                 source_offset_seconds: clip.source_offset_milliseconds as f64 / 1000.0,
                 clip_duration_seconds: clip.duration_milliseconds as f64 / 1000.0,
             },
-        ))
+        })
+    }
+
+    /// The title and artist the song's file name suggests, for the Lyrics
+    /// window to offer; `None` without a song.
+    pub fn lyrics_song_guess(&self) -> Option<(String, String)> {
+        self.lyrics_song()
+            .ok()
+            .map(|song| vizx_core::guess_title_and_artist(Path::new(&song.path)))
+    }
+
+    /// Whether lyrics are being looked up online.
+    pub fn is_searching_lyrics(&self) -> bool {
+        self.lyrics_search.is_some()
+    }
+
+    /// Starts looking up the song's lyrics in LRCLIB by `title` and
+    /// `artist` (may be empty).
+    pub fn find_lyrics_online(&mut self, ctx: &egui::Context, title: &str, artist: &str) {
+        if self.lyrics_search.is_some() {
+            return;
+        }
+        let song = match self.lyrics_song() {
+            Ok(song) => song,
+            Err(problem) => {
+                self.lyrics.message = problem.to_owned();
+                return;
+            }
+        };
+        if title.trim().is_empty() {
+            self.lyrics.message = "Type the song's title first".to_owned();
+            return;
+        }
+        let ctx = ctx.clone();
+        let search =
+            vizx_core::LyricsSearch::start(title, artist, song.length_seconds, move || {
+                ctx.request_repaint();
+            });
+        self.lyrics.message = format!("Looking up \"{}\" on LRCLIB...", title.trim());
+        self.lyrics_search = Some((search, song.placement));
+    }
+
+    /// Puts the lyrics found online into the Lyrics window once found.
+    fn collect_lyrics_search(&mut self) {
+        let Some(outcome) = self
+            .lyrics_search
+            .as_ref()
+            .and_then(|(search, _)| search.finished())
+        else {
+            return;
+        };
+        let Some((_, placement)) = self.lyrics_search.take() else {
+            return;
+        };
+        self.lyrics.message = match outcome {
+            Ok(found) if found.instrumental && found.plain.trim().is_empty() => format!(
+                "LRCLIB lists {} - {} as instrumental (no words)",
+                found.artist, found.title
+            ),
+            Ok(found) => {
+                let name = format!("{} - {}", found.artist, found.title);
+                // Found by the title alone, it may be another song of the
+                // same name: say whose it is, and how to find the right one.
+                let check = if found.by_title_only {
+                    " Not this song? Type its artist and look again."
+                } else {
+                    ""
+                };
+                let timed = found
+                    .synced
+                    .as_deref()
+                    .map(|synced| vizx_core::timed_lyrics_on_timeline(synced, placement))
+                    .filter(|lines| !lines.is_empty());
+                match timed {
+                    Some(lines) => {
+                        self.lyrics
+                            .show_recognized(&vizx_core::lyric_lines_to_lrc(&lines));
+                        format!(
+                            "Timed lyrics of {name} found ({} lines). Check them, then \
+                             Add Lines.{check}",
+                            lines.len()
+                        )
+                    }
+                    None => {
+                        self.lyrics.show_official(&found.plain);
+                        format!(
+                            "Words of {name} found, without times for this recording. \
+                             Recognize from Vocals to time them.{check}"
+                        )
+                    }
+                }
+            }
+            Err(problem) => format!("Lyrics not found: {problem}"),
+        };
     }
 
     /// Starts telling apart who sings the lines of the subtitle layer
@@ -572,10 +665,10 @@ impl VizxApp {
         if self.singer_separation.is_some() {
             return Err("Already telling singers apart".to_owned());
         }
-        let (song_path, placement) = self.song_clip().map_err(str::to_owned)?;
+        let song = self.lyrics_song().map_err(str::to_owned)?;
         let loaded = self
             .audio_store
-            .loaded(&song_path)
+            .loaded(&song.path)
             .ok_or("The song is still loading")?;
         let lines: Vec<(ClipId, f64, f64)> = self
             .session
@@ -601,8 +694,8 @@ impl VizxApp {
         let ctx = ctx.clone();
         let job = vizx_core::SingerSeparation::start(
             std::sync::Arc::clone(&loaded.audio),
-            Path::new(&song_path),
-            placement,
+            Path::new(&song.path),
+            song.placement,
             lines,
             singers,
             move || ctx.request_repaint(),
@@ -688,12 +781,39 @@ impl VizxApp {
                 self.lyrics.message = format!("No words were recognized in {song}");
             }
             Ok(lyrics) => {
-                self.lyrics
-                    .show_recognized(&vizx_core::recognized_lyrics_to_lrc(&lyrics));
-                self.lyrics.message = format!(
-                    "{} lines recognized. Check the words, then Add Lines.",
-                    lyrics.len()
-                );
+                // Words already in the window without times (pasted, or
+                // found online) are the correct ones: they get the times
+                // heard, instead of the words heard.
+                let official = self.lyrics.untimed_text();
+                let heard: Vec<vizx_core::HeardLine> = lyrics
+                    .iter()
+                    .map(|lyric| vizx_core::HeardLine {
+                        start_seconds: lyric.line.start_seconds,
+                        end_seconds: lyric.line.end_seconds,
+                        text: lyric.line.text.clone(),
+                    })
+                    .collect();
+                let aligned: Vec<vizx_core::LyricLine> = official
+                    .map(|official| vizx_core::align_official_lyrics(&official, &heard))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|aligned| aligned.line)
+                    .collect();
+                if aligned.is_empty() {
+                    self.lyrics
+                        .show_recognized(&vizx_core::recognized_lyrics_to_lrc(&lyrics));
+                    self.lyrics.message = format!(
+                        "{} lines recognized. Check the words, then Add Lines.",
+                        lyrics.len()
+                    );
+                } else {
+                    self.lyrics
+                        .show_recognized(&vizx_core::lyric_lines_to_lrc(&aligned));
+                    self.lyrics.message = format!(
+                        "Your {} lines, timed by what was heard. Check the times, then Add Lines.",
+                        aligned.len()
+                    );
+                }
                 self.status_message = format!("Lyrics of {song} recognized");
             }
             Err(problem) => {
@@ -1768,6 +1888,7 @@ impl eframe::App for VizxApp {
         self.collect_stems();
         self.finish_collecting();
         self.collect_lyrics_recognition();
+        self.collect_lyrics_search();
         self.collect_singer_separation();
         self.autosave();
         self.visual_preview.update(

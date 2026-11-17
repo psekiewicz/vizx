@@ -1,8 +1,9 @@
 //! The Lyrics window: the quick way to make a "text video". The words of a
-//! song are pasted in, one subtitle per line, and turned into lines of a
-//! subtitle layer, timed by tapping along with the music, spread over a
-//! stretch of time, one every few beats, or read from an .lrc/.srt file.
-//! The lines are then fixed in the Subtitle Editor.
+//! song are pasted in (or found online, or recognized from the vocals), one
+//! subtitle per line, and turned into lines of a subtitle layer, timed by
+//! tapping along with the music, spread over a stretch of time, one every
+//! few beats, or read from an .lrc/.srt file. The lines are then fixed in
+//! the Subtitle Editor.
 
 use eframe::egui;
 use vizx_core::{LyricLine, LyricsStyle};
@@ -52,6 +53,10 @@ pub struct LyricsWindow {
     /// Index into `RECOGNITION_LANGUAGES` for recognizing the lyrics.
     recognition_language: usize,
     recognition_quality: vizx_core::RecognitionQuality,
+    /// The song's title and artist for looking it up online; empty means
+    /// what the file name suggests.
+    online_title: String,
+    online_artist: String,
 }
 
 impl Default for LyricsWindow {
@@ -70,6 +75,8 @@ impl Default for LyricsWindow {
             message: String::new(),
             recognition_language: 0,
             recognition_quality: vizx_core::RecognitionQuality::default(),
+            online_title: String::new(),
+            online_artist: String::new(),
         }
     }
 }
@@ -90,6 +97,82 @@ impl LyricsWindow {
         self.timing = Timing::AsTimed;
         self.is_open = true;
     }
+
+    /// Shows the words of a song without times (found online), to be timed
+    /// by recognition or by one of the timings.
+    pub fn show_official(&mut self, words: &str) {
+        self.text = words.trim().to_owned();
+        if self.timing == Timing::AsTimed {
+            self.timing = Timing::Tap;
+        }
+        self.is_open = true;
+    }
+
+    /// The words in the window if they have no times (pasted or found
+    /// online, not yet timed); `None` if there are none or they are timed.
+    pub fn untimed_text(&self) -> Option<String> {
+        let has_words = !vizx_core::split_lyrics(&self.text).is_empty();
+        (has_words && vizx_core::parse_timed_lyrics(&self.text).is_err()).then(|| self.text.clone())
+    }
+}
+
+/// Looking up the song's words online, in LRCLIB.
+fn online_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
+    let (guessed_title, guessed_artist) = app.lyrics_song_guess().unwrap_or_default();
+    let is_searching = app.is_searching_lyrics();
+    ui.horizontal(|ui| {
+        let window = &mut app.lyrics;
+        ui.add(
+            egui::TextEdit::singleline(&mut window.online_title)
+                .desired_width(120.0)
+                .hint_text(if guessed_title.is_empty() {
+                    "Title"
+                } else {
+                    &guessed_title
+                }),
+        )
+        .on_hover_text("The song's title (empty: from the file name)");
+        ui.add(
+            egui::TextEdit::singleline(&mut window.online_artist)
+                .desired_width(90.0)
+                .hint_text(if guessed_artist.is_empty() {
+                    "Artist"
+                } else {
+                    &guessed_artist
+                }),
+        )
+        .on_hover_text(
+            "The artist. Without it the most famous song of this title is found, \
+             which may be another one",
+        );
+        let label = if is_searching {
+            "Looking up..."
+        } else {
+            "Find Lyrics Online"
+        };
+        if ui
+            .add_enabled(!is_searching, egui::Button::new(label))
+            .on_hover_text(
+                "Look up the words on LRCLIB (lrclib.net), a free lyrics database. \
+                 Sends only the title and artist. Timed lyrics of a recording of this \
+                 length are used as they are; words without times can be timed by \
+                 Recognize from Vocals.",
+            )
+            .clicked()
+        {
+            let pick = |typed: &str, guessed: String| {
+                if typed.trim().is_empty() {
+                    guessed
+                } else {
+                    typed.trim().to_owned()
+                }
+            };
+            let title = pick(&window.online_title, guessed_title);
+            let artist = pick(&window.online_artist, guessed_artist);
+            let ctx = ui.ctx().clone();
+            app.find_lyrics_online(&ctx, &title, &artist);
+        }
+    });
 }
 
 /// Recognizing the words from the song's vocals with the Whisper model.
@@ -211,9 +294,13 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
 
 /// The words, their look and how they are timed.
 fn setup_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
+    online_panel(ui, app);
     recognition_panel(ui, app);
     ui.add_space(4.0);
-    ui.label("One subtitle per line. Use | for a line break.");
+    ui.label(
+        "One subtitle per line. Use | for a line break. Words pasted here without times \
+         are kept by Recognize from Vocals, which only times them.",
+    );
     egui::ScrollArea::vertical()
         .max_height(200.0)
         .show(ui, |ui| {

@@ -239,6 +239,13 @@ fn place_on_timeline(
 /// read back with `parse_timed_lyrics`. A line that ends well before the
 /// next one starts is followed by a time without words, which ends it.
 pub fn recognized_lyrics_to_lrc(lyrics: &[RecognizedLyric]) -> String {
+    let lines: Vec<LyricLine> = lyrics.iter().map(|lyric| lyric.line.clone()).collect();
+    lyric_lines_to_lrc(&lines)
+}
+
+/// Timed lines as LRC text, as [`recognized_lyrics_to_lrc`] writes them.
+/// Line breaks within a line are written as `|`.
+pub fn lyric_lines_to_lrc(lyrics: &[LyricLine]) -> String {
     let stamp = |seconds: f64| {
         let centiseconds = (seconds.max(0.0) * 100.0).round() as u64;
         format!(
@@ -250,14 +257,14 @@ pub fn recognized_lyrics_to_lrc(lyrics: &[RecognizedLyric]) -> String {
     };
     let mut text = String::new();
     for (index, lyric) in lyrics.iter().enumerate() {
-        text.push_str(&stamp(lyric.line.start_seconds));
-        text.push_str(&lyric.line.text);
+        text.push_str(&stamp(lyric.start_seconds));
+        text.push_str(&lyric.text.replace('\n', "|"));
         text.push('\n');
         let next_start = lyrics
             .get(index + 1)
-            .map_or(f64::INFINITY, |next| next.line.start_seconds);
-        if next_start - lyric.line.end_seconds > 0.5 {
-            text.push_str(&stamp(lyric.line.end_seconds));
+            .map_or(f64::INFINITY, |next| next.start_seconds);
+        if next_start - lyric.end_seconds > 0.5 {
+            text.push_str(&stamp(lyric.end_seconds));
             text.push('\n');
         }
     }

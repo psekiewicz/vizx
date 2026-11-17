@@ -16,6 +16,7 @@ mod history;
 mod image_store;
 mod lyrics;
 mod lyrics_alignment;
+mod lyrics_online;
 mod lyrics_recognition;
 mod prerender;
 mod preset_library;
@@ -54,9 +55,12 @@ pub use lyrics::{
     spread_lines,
 };
 pub use lyrics_alignment::{AlignedLine, HeardLine, align_official_lyrics, apply_official_lyrics};
+pub use lyrics_online::{
+    LyricsSearch, OnlineLyrics, guess_title_and_artist, timed_lyrics_on_timeline,
+};
 pub use lyrics_recognition::{
     LyricsRecognition, RECOGNITION_LANGUAGES, RecognitionStep, RecognizedLyric, SongPlacement,
-    recognized_lyrics_to_lrc,
+    lyric_lines_to_lrc, recognized_lyrics_to_lrc,
 };
 pub use prerender::{FrameSource, Prerender, PrerenderJob, PrerenderedFrame};
 pub use preset_library::{

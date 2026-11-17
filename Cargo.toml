@@ -87,6 +87,10 @@ epaint_default_fonts = "0.36"
 rustfft = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# A small HTTP client, used only when the user asks to find a song's lyrics
+# online (LRCLIB). Its TLS is rustls with its own root certificates, so it
+# needs no system library.
+ureq = "3"
 
 # Smaller debug info: noticeably less disk usage and faster linking on the
 # modest development laptop, while panics/backtraces still show file:line.
