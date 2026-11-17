@@ -30,6 +30,8 @@ pub struct SubtitleEditor {
     search: String,
     /// Keep the line at the playhead in view while playing.
     follow_playhead: bool,
+    /// How many singers "Separate Singers" looks for; 0 lets it decide.
+    singer_count: usize,
     message: String,
 }
 
@@ -39,6 +41,11 @@ impl SubtitleEditor {
         self.is_open = true;
         self.layer = layer;
         self.follow_playhead = true;
+    }
+
+    /// Shows a note under the table.
+    pub fn set_message(&mut self, message: &str) {
+        message.clone_into(&mut self.message);
     }
 }
 
@@ -118,6 +125,7 @@ fn contents(ui: &mut egui::Ui, app: &mut VizxApp) {
         ui.checkbox(&mut editor.follow_playhead, "Follow playhead");
     });
 
+    singers_tools(ui, app, &layers);
     let playhead = app.session.playhead_seconds();
     let rows = rows(
         &app.session,
@@ -136,6 +144,62 @@ fn contents(ui: &mut egui::Ui, app: &mut VizxApp) {
                 .color(theme::TEXT_MUTED),
         );
     }
+}
+
+/// Telling the singers of a layer apart, each onto a layer of their own.
+fn singers_tools(ui: &mut egui::Ui, app: &mut VizxApp, layers: &[(TrackId, String)]) {
+    ui.horizontal(|ui| {
+        if let Some(progress) = app.singer_separation_progress() {
+            ui.add(
+                egui::ProgressBar::new(progress)
+                    .desired_width(220.0)
+                    .text("Listening to the voices..."),
+            );
+            if ui.button("Stop").clicked() {
+                app.cancel_singer_separation();
+            }
+            return;
+        }
+        // The layer shown, or the only one there is.
+        let layer = app
+            .subtitle_editor
+            .layer
+            .or_else(|| (layers.len() == 1).then(|| layers[0].0));
+        let count = &mut app.subtitle_editor.singer_count;
+        egui::ComboBox::from_id_salt("singer_count")
+            .selected_text(if *count == 0 {
+                "Singers: decide".to_owned()
+            } else {
+                format!("Singers: {count}")
+            })
+            .width(120.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(count, 0, "Decide by the voices");
+                for number in 2..=5 {
+                    ui.selectable_value(count, number, format!("{number} singers"));
+                }
+            });
+        let button = ui
+            .add_enabled(layer.is_some(), egui::Button::new("Separate Singers"))
+            .on_hover_text(
+                "Listens to the vocals of every line and gives each singer a subtitle layer \
+                 of their own. Works best when voices differ (a man and a woman); lines sung \
+                 together go to the louder voice. Choose a single layer first.",
+            )
+            .on_disabled_hover_text("Choose one layer above first");
+        if button.clicked()
+            && let Some(layer) = layer
+        {
+            let singers =
+                (app.subtitle_editor.singer_count > 0).then_some(app.subtitle_editor.singer_count);
+            let ctx = ui.ctx().clone();
+            app.subtitle_editor.message = match app.separate_singers(&ctx, layer, singers) {
+                Ok(()) => "Telling the singers apart (separating the vocals first if needed)..."
+                    .to_owned(),
+                Err(problem) => problem,
+            };
+        }
+    });
 }
 
 fn rows(session: &EditorSession, layer: Option<TrackId>, search: &str) -> Vec<Row> {

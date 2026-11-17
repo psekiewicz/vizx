@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use vizx_core::{AudioStore, EditorSession, Export, ExportJob, ImageStore, VisualizerCatalog};
-use vizx_project::{PROJECT_FILE_EXTENSION, TrackKind, with_project_extension};
+use vizx_project::{ClipId, PROJECT_FILE_EXTENSION, TrackId, TrackKind, with_project_extension};
 
 use crate::theme;
 use crate::transport::Transport;
@@ -197,6 +197,8 @@ pub struct VizxApp {
     collect_job: Option<vizx_core::CollectJob>,
     /// Lyrics being recognized from the song's vocals.
     lyrics_recognition: Option<vizx_core::LyricsRecognition>,
+    /// Singers being told apart, and the subtitle layer they are on.
+    singer_separation: Option<(vizx_core::SingerSeparation, TrackId)>,
     /// Description of the graphics adapter wgpu selected, for diagnostics.
     pub graphics_summary: String,
     /// Result of the last command, shown in the status bar.
@@ -243,6 +245,7 @@ impl VizxApp {
             stem_job: None,
             collect_job: None,
             lyrics_recognition: None,
+            singer_separation: None,
             thumbnails,
             settings: app_data
                 .as_deref()
@@ -517,6 +520,131 @@ impl VizxApp {
             }
             Err(problem) => self.lyrics.message = format!("Cannot recognize lyrics: {problem}"),
         }
+    }
+
+    /// The song: the selected audio clip, or the first one of the project,
+    /// with where it lies on the timeline. `Err` says what is missing.
+    fn song_clip(&self) -> Result<(String, vizx_core::SongPlacement), &'static str> {
+        let project = self.session.project();
+        let is_audio = |clip: &vizx_project::Clip| {
+            project
+                .media_source(clip.media)
+                .is_some_and(|source| source.audio().is_some())
+        };
+        let first = project
+            .tracks()
+            .iter()
+            .filter(|track| track.kind == TrackKind::Audio && !track.muted)
+            .flat_map(|track| &track.clips)
+            .find(|clip| is_audio(clip));
+        let clip = first.ok_or("Add the song first")?;
+        let source = project
+            .media_source(clip.media)
+            .ok_or("Add the song first")?;
+        Ok((
+            source.path.clone(),
+            vizx_core::SongPlacement {
+                clip_start_seconds: clip.start_milliseconds as f64 / 1000.0,
+                source_offset_seconds: clip.source_offset_milliseconds as f64 / 1000.0,
+                clip_duration_seconds: clip.duration_milliseconds as f64 / 1000.0,
+            },
+        ))
+    }
+
+    /// Starts telling apart who sings the lines of the subtitle layer
+    /// `track_id`; `singers` fixes how many there are (`None`: decide).
+    pub fn separate_singers(
+        &mut self,
+        ctx: &egui::Context,
+        track_id: TrackId,
+        singers: Option<usize>,
+    ) -> Result<(), String> {
+        if self.singer_separation.is_some() {
+            return Err("Already telling singers apart".to_owned());
+        }
+        let (song_path, placement) = self.song_clip().map_err(str::to_owned)?;
+        let loaded = self
+            .audio_store
+            .loaded(&song_path)
+            .ok_or("The song is still loading")?;
+        let lines: Vec<(ClipId, f64, f64)> = self
+            .session
+            .project()
+            .track(track_id)
+            .map(|track| {
+                track
+                    .clips
+                    .iter()
+                    .map(|clip| {
+                        (
+                            clip.id,
+                            clip.start_milliseconds as f64 / 1000.0,
+                            clip.end_milliseconds() as f64 / 1000.0,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if lines.len() < 2 {
+            return Err("The layer needs at least two lines".to_owned());
+        }
+        let ctx = ctx.clone();
+        let job = vizx_core::SingerSeparation::start(
+            std::sync::Arc::clone(&loaded.audio),
+            Path::new(&song_path),
+            placement,
+            lines,
+            singers,
+            move || ctx.request_repaint(),
+        )?;
+        self.singer_separation = Some((job, track_id));
+        Ok(())
+    }
+
+    /// How far telling the singers apart is (0 to 1), while it runs.
+    pub fn singer_separation_progress(&self) -> Option<f32> {
+        self.singer_separation
+            .as_ref()
+            .map(|(job, _)| job.progress())
+    }
+
+    pub fn cancel_singer_separation(&mut self) {
+        if self.singer_separation.take().is_some() {
+            self.status_message = "Telling singers apart stopped".to_owned();
+        }
+    }
+
+    /// Puts every singer's lines on a layer of their own once known.
+    fn collect_singer_separation(&mut self) {
+        let Some(outcome) = self
+            .singer_separation
+            .as_ref()
+            .and_then(|(job, _)| job.finished())
+        else {
+            return;
+        };
+        let Some((_, track_id)) = self.singer_separation.take() else {
+            return;
+        };
+        self.status_message = match outcome {
+            Ok(singers) => {
+                let mut layers = Vec::new();
+                self.session.edit_project(|project| {
+                    layers = project.split_subtitle_layer(track_id, &singers);
+                    !layers.is_empty()
+                });
+                match layers.len() {
+                    0 => "The subtitle layer is gone".to_owned(),
+                    1 => "One singer found: all lines stay on the layer".to_owned(),
+                    count => format!(
+                        "{count} singers found: each has a subtitle layer of their own. \
+                         Move a line to another singer in the Subtitle Editor."
+                    ),
+                }
+            }
+            Err(problem) => format!("Could not tell the singers apart: {problem}"),
+        };
+        self.subtitle_editor.set_message(&self.status_message);
     }
 
     /// Stops a running lyrics recognition.
@@ -1630,6 +1758,7 @@ impl eframe::App for VizxApp {
         self.collect_stems();
         self.finish_collecting();
         self.collect_lyrics_recognition();
+        self.collect_singer_separation();
         self.autosave();
         self.visual_preview.update(
             &ctx,

@@ -8,7 +8,7 @@
 #   ffmpeg.exe          video import and export
 #   projectM-4.dll      MilkDrop presets (with glew32.dll)
 #   onnxruntime*.dll    stem separation
-#   models\             HTDemucs and Whisper models
+#   models\             HTDemucs, Whisper and WeSpeaker models
 #   data\               pre-rendered frames and stems (portable mode)
 #   Install models.cmd  downloads the models on a computer without them
 #
@@ -26,6 +26,7 @@ param(
     [string]$OnnxRuntimeDir = 'D:\tools\onnxruntime-win-x64-1.32.0',
     [string]$DemucsModel = 'D:\tools\demucs\htdemucs_fp16weights.onnx',
     [string]$WhisperModel = 'D:\tools\whisper\ggml-large-v3-turbo-q5_0.bin',
+    [string]$SpeakerModel = 'D:\tools\wespeaker\voxceleb_resnet34_LM.onnx',
     [string]$TargetDir = 'D:\rust\target'
 )
 
@@ -73,6 +74,7 @@ Place-File "$OnnxRuntimeDir\lib\onnxruntime.dll" "$Destination\onnxruntime.dll"
 Place-File "$OnnxRuntimeDir\lib\onnxruntime_providers_shared.dll" "$Destination\onnxruntime_providers_shared.dll"
 Place-File $DemucsModel "$Destination\models\$(Split-Path -Leaf $DemucsModel)"
 Place-File $WhisperModel "$Destination\models\$(Split-Path -Leaf $WhisperModel)"
+Place-File $SpeakerModel "$Destination\models\$(Split-Path -Leaf $SpeakerModel)"
 
 # The installer downloads missing models on another computer.
 Copy-Item "$PSScriptRoot\install-models.ps1" "$Destination\install-models.ps1" -Force

@@ -20,6 +20,7 @@ mod prerender;
 mod preset_library;
 mod selection;
 mod session;
+mod singers;
 mod stems;
 mod subtitles;
 mod text;
@@ -61,6 +62,7 @@ pub use preset_library::{
 };
 pub use selection::Selection;
 pub use session::{CopiedClip, EditorSession, UNTITLED_PROJECT_NAME};
+pub use singers::{SingerAssignment, SingerSeparation};
 pub use stems::{STEM_NAMES, STEMS_DIR_VARIABLE, StemEngine, StemFiles, StemJob, stem_folder};
 pub use subtitles::{SubtitleLine, subtitle_layout};
 pub use text::{measure_text, render_text, wrap_text};

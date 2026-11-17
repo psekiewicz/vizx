@@ -8,4 +8,5 @@ repository.workspace = true
 [dependencies]
 vizx-audio.workspace = true
 ort.workspace = true
+rustfft.workspace = true
 whisper-rs.workspace = true

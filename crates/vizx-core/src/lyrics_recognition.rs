@@ -169,7 +169,7 @@ impl Drop for LyricsRecognition {
 
 /// The song's vocals: from the stems made before, or separated now (and
 /// the stems written, so the next time is quick).
-fn vocals(
+pub(crate) fn vocals(
     audio: &DecodedAudio,
     folder: &Path,
     name: &str,

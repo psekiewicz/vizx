@@ -561,6 +561,40 @@ are added at the playhead, split (the words divided by time), merged,
 deleted, shifted together, and saved as `.srt`. Collect All and Save also
 copies the font of a subtitle layer.
 
+### Telling singers apart
+
+**Separate Singers** in the Subtitle Editor gives every singer of a subtitle
+layer a layer of their own (`Project::split_subtitle_layer`: "Singer 1"
+keeps the lines and the look, "Singer 2", ... get another color and sit
+right above it). `vizx_core::SingerSeparation` runs in the background:
+
+1. The song's vocals come from its stems (separated first if needed, as
+   for lyrics recognition).
+2. Every line's stretch of the vocals (at least 1.5 s around its middle,
+   at most 8 s) becomes a voice print: 256 numbers from the WeSpeaker
+   ResNet34 model (`voxceleb_resnet34_LM.onnx`, 26 MB, CC BY 4.0, from
+   huggingface.co/Wespeaker, run by ONNX Runtime). Its input are Kaldi-style
+   log mel filter banks (80 bands, 25 ms Hamming frames every 10 ms, 16 kHz,
+   pre-emphasis, mean-normalized), computed in `vizx_ml::speakers`. Lines
+   too quiet for a print take the singer of their neighbor.
+3. Prints are grouped (agglomerative, cosine similarity of the groups'
+   average prints, joined while at least 0.45 alike). Groups of only a line
+   or two are noise, not singers; with a number of singers chosen, the most
+   alike large groups are joined until that many are left. Every line then
+   goes to the singer whose average print is nearest, and singers are
+   numbered in the order they are first heard.
+
+Only one voice per line: two people singing at once cannot be split into
+two tracks (no local model does that well); such a line goes to the louder
+voice. The model learned from speech, so it separates voices that differ
+(a man and a woman) far better than two alike ones. On ANTIVILLAIN (71
+lines) it found two singers, the second taking over at 2:58 ("Wipe out what
+*I've* been told") and the two alternating in the rap, the same with "decide"
+and with "2 singers"; it took 6.5 s once the stems existed.
+`cargo run --release -p vizx-ml --example singers -- <vocals.wav> <lines.tsv> [singers]`
+tries it without the window. The model path is `models/` next to the
+executable or `%VIZX_SPEAKER_MODEL%`; `Install models` downloads it.
+
 ### Stems: one visualizer for the vocals, one for the drums
 
 An audio clip's context menu offers **Separate Stems**. The song is split

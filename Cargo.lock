@@ -3209,6 +3209,7 @@ name = "vizx-ml"
 version = "0.1.0"
 dependencies = [
  "ort",
+ "rustfft",
  "vizx-audio",
  "whisper-rs",
 ]

@@ -521,7 +521,7 @@ fn drop_silent_lines(lines: Vec<RecognizedLine>, samples: &[f32]) -> Vec<Recogni
 /// different rate is converted by averaging the samples that fall into
 /// each new one (which also keeps out what is too high to be heard at
 /// 16 kHz), or by straight-line interpolation when there are fewer.
-fn mono_at_whisper_rate(audio: &DecodedAudio) -> Vec<f32> {
+pub(crate) fn mono_at_whisper_rate(audio: &DecodedAudio) -> Vec<f32> {
     let channels = audio.channel_count.max(1);
     let mono: Vec<f32> = audio
         .samples

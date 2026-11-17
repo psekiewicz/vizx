@@ -8,7 +8,10 @@
 //! folders that can be configured, see [`find_ml_setup`]. Without them, VizX
 //! falls back to its built-in separation (`vizx_audio::separate_stems`).
 
+pub mod speakers;
 pub mod transcribe;
+
+pub use speakers::{SPEAKER_MODEL_VARIABLE, SpeakerModel, find_speaker_model, identify_singers};
 
 pub use transcribe::{
     RecognitionQuality, RecognizedLine, RecognizedWord, WHISPER_MODEL_VARIABLE, find_whisper_model,
@@ -66,20 +69,7 @@ pub fn find_ml_setup() -> Result<MlSetup, String> {
     let executable_folder = std::env::current_exe()
         .ok()
         .and_then(|path| Some(path.parent()?.to_path_buf()));
-
-    let runtime_candidates = executable_folder
-        .iter()
-        .map(|folder| folder.join(RUNTIME_FILE_NAME))
-        .chain(
-            std::env::var_os(RUNTIME_DIR_VARIABLE)
-                .map(|folder| PathBuf::from(folder).join("lib").join(RUNTIME_FILE_NAME)),
-        );
-    let runtime_library = first_file(runtime_candidates).ok_or_else(|| {
-        format!(
-            "ONNX Runtime ({RUNTIME_FILE_NAME}) was not found next to VizX or in \
-             %{RUNTIME_DIR_VARIABLE}%/lib"
-        )
-    })?;
+    let runtime_library = find_onnx_runtime()?;
 
     let model_candidates = executable_folder
         .iter()
@@ -96,6 +86,27 @@ pub fn find_ml_setup() -> Result<MlSetup, String> {
     Ok(MlSetup {
         runtime_library,
         model,
+    })
+}
+
+/// Finds the ONNX Runtime library: next to the VizX executable, or in
+/// [`RUNTIME_DIR_VARIABLE`]`/lib`.
+pub fn find_onnx_runtime() -> Result<PathBuf, String> {
+    let executable_folder = std::env::current_exe()
+        .ok()
+        .and_then(|path| Some(path.parent()?.to_path_buf()));
+    let candidates = executable_folder
+        .iter()
+        .map(|folder| folder.join(RUNTIME_FILE_NAME))
+        .chain(
+            std::env::var_os(RUNTIME_DIR_VARIABLE)
+                .map(|folder| PathBuf::from(folder).join("lib").join(RUNTIME_FILE_NAME)),
+        );
+    first_file(candidates).ok_or_else(|| {
+        format!(
+            "ONNX Runtime ({RUNTIME_FILE_NAME}) was not found next to VizX or in \
+             %{RUNTIME_DIR_VARIABLE}%/lib"
+        )
     })
 }
 

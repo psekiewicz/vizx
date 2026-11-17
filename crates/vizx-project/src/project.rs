@@ -1623,6 +1623,69 @@ impl Project {
         }
     }
 
+    /// Gives every singer of a subtitle layer a layer of their own: the
+    /// lines in `singers` (clip, singer from 0) of singer 0 stay on
+    /// `track_id`, which is named "Singer 1"; the others move to new
+    /// subtitle layers "Singer 2", ... in the same style but another color,
+    /// placed right above it. Returns the layers, singer 0 first; empty if
+    /// `track_id` is not a subtitle layer.
+    pub fn split_subtitle_layer(
+        &mut self,
+        track_id: TrackId,
+        singers: &[(ClipId, usize)],
+    ) -> Vec<TrackId> {
+        /// Colors for singers 2, 3, ...: amber, sky blue, pink, green.
+        const COLORS: [[f64; 3]; 4] = [
+            [1.0, 0.78, 0.3],
+            [0.45, 0.82, 1.0],
+            [1.0, 0.5, 0.78],
+            [0.55, 1.0, 0.55],
+        ];
+        let Some(style) = self.subtitle_style(track_id).cloned() else {
+            return Vec::new();
+        };
+        let count = singers
+            .iter()
+            .map(|(_, singer)| singer + 1)
+            .max()
+            .unwrap_or(1);
+        self.rename_track(track_id, "Singer 1");
+        let mut layers = vec![track_id];
+        for singer in 1..count {
+            let layer = self.add_subtitle_track(&format!("Singer {}", singer + 1));
+            self.set_subtitle_style(
+                layer,
+                SubtitleStyle {
+                    color: COLORS[(singer - 1) % COLORS.len()],
+                    ..style.clone()
+                },
+            );
+            // Right above the first singer's layer, in singing order.
+            let below = self
+                .tracks
+                .iter()
+                .position(|track| track.id == *layers.last().unwrap_or(&track_id))
+                .unwrap_or(0);
+            if let Some(from) = self.tracks.iter().position(|track| track.id == layer) {
+                let moved = self.tracks.remove(from);
+                let at = if from < below { below - 1 } else { below };
+                self.tracks.insert(at, moved);
+            }
+            layers.push(layer);
+        }
+        for (clip, singer) in singers {
+            if *singer > 0
+                && let Some(layer) = layers.get(*singer)
+                && self
+                    .clip(*clip)
+                    .is_some_and(|(track, _)| track.id == track_id)
+            {
+                self.move_clip_to_track(*clip, *layer);
+            }
+        }
+        layers
+    }
+
     /// Turns a visual layer that holds only texts (lyrics added as texts)
     /// into a subtitle layer that looks like its first text and shows its
     /// lines where that text was. Returns `false` if the layer is not such
@@ -2819,5 +2882,43 @@ mod tests {
         // Saved and loaded again, nothing is lost.
         let loaded = Project::from_vzx_str(&project.to_vzx_string().unwrap()).unwrap();
         assert_eq!(loaded, project);
+    }
+
+    #[test]
+    fn a_subtitle_layer_is_split_into_one_layer_per_singer() {
+        let mut project = Project::with_starter_tracks();
+        let lyrics = project.add_subtitle_track("Lyrics");
+        let lines: Vec<ClipId> = (0..4)
+            .map(|index| {
+                project
+                    .add_subtitle_line(lyrics, "la", index * 1000, 1000)
+                    .unwrap()
+            })
+            .collect();
+        let singers = [(lines[0], 0), (lines[1], 1), (lines[2], 0), (lines[3], 2)];
+        let layers = project.split_subtitle_layer(lyrics, &singers);
+
+        assert_eq!(layers.len(), 3);
+        assert_eq!(layers[0], lyrics);
+        let names: Vec<&str> = layers
+            .iter()
+            .map(|id| project.track(*id).unwrap().name.as_str())
+            .collect();
+        assert_eq!(names, ["Singer 1", "Singer 2", "Singer 3"]);
+        assert_eq!(project.track(lyrics).unwrap().clips.len(), 2);
+        assert_eq!(project.clip(lines[3]).unwrap().0.id, layers[2]);
+        // Another color, the same look otherwise.
+        let first = project.subtitle_style(layers[0]).unwrap();
+        let second = project.subtitle_style(layers[1]).unwrap();
+        assert_ne!(first.color, second.color);
+        assert_eq!(first.size, second.size);
+        // The singers' layers sit together, in order.
+        let order: Vec<TrackId> = project.tracks().iter().map(|track| track.id).collect();
+        let at = |id: TrackId| order.iter().position(|other| *other == id).unwrap();
+        assert!(at(layers[2]) < at(layers[1]) && at(layers[1]) < at(layers[0]));
+        assert_eq!(at(layers[0]) - at(layers[2]), 2);
+        // Not a subtitle layer: nothing happens.
+        let picture = project.add_default_named_track(TrackKind::Visual);
+        assert!(project.split_subtitle_layer(picture, &singers).is_empty());
     }
 }

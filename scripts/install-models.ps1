@@ -5,6 +5,7 @@
 #
 #   <VizX folder>\models\htdemucs_fp16weights.onnx    stem separation
 #   <VizX folder>\models\ggml-*.bin                     lyrics recognition
+#   <VizX folder>\models\voxceleb_resnet34_LM.onnx      telling singers apart
 #   <VizX folder>\onnxruntime*.dll                      runs HTDemucs
 #
 # Usage: double-click "Install models.cmd" next to vizx.exe, or
@@ -72,6 +73,19 @@ $components = @(
         Target      = 'models\ggml-large-v3-turbo-q5_0.bin'
         Sha256      = '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2'
         Size        = 574041195
+        Default     = $true
+    }
+    [pscustomobject]@{
+        Name        = 'WeSpeaker ResNet34 (tell singers apart)'
+        Description = 'Voice prints for Separate Singers in the Subtitle Editor: every singer gets ' +
+                      'a subtitle layer of their own. By the WeSpeaker project, trained on ' +
+                      'VoxCeleb (CC BY 4.0 licence). Needs ONNX Runtime.'
+        Source      = 'huggingface.co/Wespeaker'
+        Kind        = 'File'
+        Url         = 'https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/main/voxceleb_resnet34_LM.onnx'
+        Target      = 'models\voxceleb_resnet34_LM.onnx'
+        Sha256      = '7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068'
+        Size        = 26530309
         Default     = $true
     }
     [pscustomobject]@{
