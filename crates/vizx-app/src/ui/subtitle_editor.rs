@@ -68,8 +68,9 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
     egui::Window::new("Subtitle Editor")
         .open(&mut is_open)
         .collapsible(false)
-        .resizable(true)
-        .default_size([640.0, 460.0])
+        .resizable([true, true])
+        .default_size([820.0, 520.0])
+        .min_size([560.0, 300.0])
         .show(ctx, |ui| contents(ui, app));
     app.subtitle_editor.is_open = is_open;
 }
@@ -393,7 +394,14 @@ fn line_tools(
     });
 }
 
-/// The table of lines: times, layer and words, all editable.
+/// Widths of the table's columns, in points; the words take the rest.
+const MARK_WIDTH: f32 = 22.0;
+const TIME_WIDTH: f32 = 112.0;
+const LAYER_WIDTH: f32 = 118.0;
+const DUET_WIDTH: f32 = 44.0;
+
+/// The table of lines: times, layer and words, all editable. Its rows
+/// stretch with the window: the words get all the width that is left.
 fn table(
     ui: &mut egui::Ui,
     app: &mut VizxApp,
@@ -404,7 +412,21 @@ fn table(
     let current = rows
         .iter()
         .position(|row| row.start <= playhead && playhead < row.end);
-    let row_height = ui.spacing().interact_size.y + 4.0;
+    let row_height = ui.spacing().interact_size.y + 6.0;
+    ui.horizontal(|ui| {
+        let header = |ui: &mut egui::Ui, width: f32, text: &str| {
+            ui.add_sized(
+                [width, 18.0],
+                egui::Label::new(egui::RichText::new(text).strong()),
+            );
+        };
+        header(ui, MARK_WIDTH, "");
+        header(ui, TIME_WIDTH, "Start");
+        header(ui, TIME_WIDTH, "End");
+        header(ui, LAYER_WIDTH, "Layer (singer)");
+        header(ui, DUET_WIDTH, "");
+        ui.label(egui::RichText::new("Words").strong());
+    });
     let mut scroll = egui::ScrollArea::vertical().auto_shrink(false);
     if app.subtitle_editor.follow_playhead
         && app.is_playing()
@@ -412,23 +434,20 @@ fn table(
     {
         scroll = scroll.vertical_scroll_offset((index as f32 - 3.0).max(0.0) * row_height);
     }
-    scroll.show(ui, |ui| {
-        egui::Grid::new("subtitle_lines")
-            .num_columns(6)
-            .striped(true)
-            .min_row_height(row_height)
-            .show(ui, |ui| {
-                ui.label("");
-                ui.label(egui::RichText::new("Start").strong());
-                ui.label(egui::RichText::new("End").strong());
-                ui.label(egui::RichText::new("Layer").strong());
-                ui.label(egui::RichText::new("Words").strong());
-                ui.end_row();
-                for (index, row) in rows.iter().enumerate() {
+    scroll.show_rows(ui, row_height, rows.len(), |ui, range| {
+        for index in range {
+            let row = &rows[index];
+            let response = ui
+                .horizontal(|ui| {
+                    ui.set_min_height(row_height - 4.0);
                     line_row(ui, app, row, layers, current == Some(index), playhead);
-                    ui.end_row();
-                }
-            });
+                })
+                .response;
+            if current == Some(index) {
+                ui.painter()
+                    .rect_filled(response.rect, 2.0, theme::ACCENT.gamma_multiply(0.12));
+            }
+        }
     });
 }
 
@@ -440,10 +459,14 @@ fn line_row(
     is_current: bool,
     playhead: f64,
 ) {
+    let height = ui.spacing().interact_size.y;
     let is_selected = app.subtitle_editor.selected == Some(row.clip_id);
-    let marker = if is_current { "▶" } else { "  " };
+    let marker = if is_current { "▶" } else { " " };
     if ui
-        .selectable_label(is_selected, marker)
+        .add_sized(
+            [MARK_WIDTH, height],
+            egui::Button::selectable(is_selected, marker),
+        )
         .on_hover_text("Select this line and move the playhead to its start")
         .clicked()
     {
@@ -452,39 +475,43 @@ fn line_row(
     }
 
     // Start: changing it keeps the end where it is.
-    ui.horizontal(|ui| {
-        let mut start = row.start;
-        if ui.add(time_field(&mut start)).changed() {
-            let new_start = milliseconds(start.min(row.end - 0.05));
-            app.session
-                .edit_project(|project| project.trim_clip_start(row.clip_id, new_start));
-        }
-        if ui
-            .small_button("⏷")
-            .on_hover_text("Start at the playhead")
-            .clicked()
-        {
-            let new_start = milliseconds(playhead.min(row.end - 0.05));
-            app.session
-                .edit_project(|project| project.trim_clip_start(row.clip_id, new_start));
-        }
+    ui.allocate_ui(egui::vec2(TIME_WIDTH, height), |ui| {
+        ui.horizontal(|ui| {
+            let mut start = row.start;
+            if ui.add(time_field(&mut start)).changed() {
+                let new_start = milliseconds(start.min(row.end - 0.05));
+                app.session
+                    .edit_project(|project| project.trim_clip_start(row.clip_id, new_start));
+            }
+            if ui
+                .small_button("⏷")
+                .on_hover_text("Start at the playhead")
+                .clicked()
+            {
+                let new_start = milliseconds(playhead.min(row.end - 0.05));
+                app.session
+                    .edit_project(|project| project.trim_clip_start(row.clip_id, new_start));
+            }
+        });
     });
-    ui.horizontal(|ui| {
-        let mut end = row.end;
-        if ui.add(time_field(&mut end)).changed() {
-            let new_end = milliseconds(end.max(row.start + 0.05));
-            app.session
-                .edit_project(|project| project.trim_clip_end(row.clip_id, new_end));
-        }
-        if ui
-            .small_button("⏷")
-            .on_hover_text("End at the playhead")
-            .clicked()
-        {
-            let new_end = milliseconds(playhead.max(row.start + 0.05));
-            app.session
-                .edit_project(|project| project.trim_clip_end(row.clip_id, new_end));
-        }
+    ui.allocate_ui(egui::vec2(TIME_WIDTH, height), |ui| {
+        ui.horizontal(|ui| {
+            let mut end = row.end;
+            if ui.add(time_field(&mut end)).changed() {
+                let new_end = milliseconds(end.max(row.start + 0.05));
+                app.session
+                    .edit_project(|project| project.trim_clip_end(row.clip_id, new_end));
+            }
+            if ui
+                .small_button("⏷")
+                .on_hover_text("End at the playhead")
+                .clicked()
+            {
+                let new_end = milliseconds(playhead.max(row.start + 0.05));
+                app.session
+                    .edit_project(|project| project.trim_clip_end(row.clip_id, new_end));
+            }
+        });
     });
 
     let mut layer = row.track_id;
@@ -494,7 +521,7 @@ fn line_row(
         .map_or("", |(_, name)| name.as_str());
     egui::ComboBox::from_id_salt(("subtitle_line_layer", row.clip_id))
         .selected_text(name)
-        .width(110.0)
+        .width(LAYER_WIDTH - 8.0)
         .show_ui(ui, |ui| {
             for (id, name) in layers {
                 ui.selectable_value(&mut layer, *id, name);
@@ -507,11 +534,54 @@ fn line_row(
             .edit_project(|project| project.move_clip_to_track(row.clip_id, layer));
     }
 
+    let others: Vec<TrackId> = layers
+        .iter()
+        .map(|(id, _)| *id)
+        .filter(|id| *id != row.track_id)
+        .collect();
+    let duet = ui
+        .add_enabled(
+            !others.is_empty(),
+            egui::Button::new("Duet").min_size(egui::vec2(DUET_WIDTH, height)),
+        )
+        .on_hover_text(
+            "Sung together: the line is also put on every other singer's layer, at the same \
+             time. Lines shown together are placed one above the other.",
+        )
+        .on_disabled_hover_text("There is only one subtitle layer");
+    if duet.clicked() {
+        let (start, end) = (milliseconds(row.start), milliseconds(row.end));
+        let mut added = 0;
+        app.session.edit_project(|project| {
+            for layer in &others {
+                // Not twice: a layer that already has this line keeps it.
+                let has_it = project.track(*layer).is_some_and(|track| {
+                    track.clips.iter().any(|clip| {
+                        clip.start_milliseconds == start
+                            && project.clip_text(clip.id) == Some(row.text.as_str())
+                    })
+                });
+                if !has_it
+                    && project
+                        .add_subtitle_line(*layer, &row.text, start, end.saturating_sub(start))
+                        .is_some()
+                {
+                    added += 1;
+                }
+            }
+            added > 0
+        });
+        app.subtitle_editor.message = if added > 0 {
+            format!("The line is now sung by {} singers", added + 1)
+        } else {
+            "Every singer already has this line".to_owned()
+        };
+    }
+
     let mut words = row.text.replace('\n', " | ");
-    let field = ui.add(
-        egui::TextEdit::singleline(&mut words)
-            .desired_width(f32::INFINITY)
-            .min_size(egui::vec2(220.0, 0.0)),
+    let field = ui.add_sized(
+        [ui.available_width().max(160.0), height],
+        egui::TextEdit::singleline(&mut words),
     );
     if field.gained_focus() {
         app.subtitle_editor.selected = Some(row.clip_id);
@@ -522,7 +592,6 @@ fn line_row(
             .edit_project(|project| project.set_clip_text(row.clip_id, &words));
     }
 }
-
 /// Cuts a line in two at `at` seconds; the words are shared out by where
 /// the cut falls in the line's time.
 fn split_line(app: &mut VizxApp, row: &Row, at: f64) {

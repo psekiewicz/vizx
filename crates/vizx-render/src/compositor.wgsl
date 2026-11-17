@@ -20,6 +20,8 @@ struct Layer {
     glitch_vignette_time_halo: vec4f,
     // Tint color and how much of it.
     tint: vec4f,
+    // Fill color (the picture turns into it) and how much of it.
+    fill: vec4f,
 }
 
 @group(0) @binding(0) var<uniform> layer: Layer;
@@ -155,6 +157,12 @@ fn fragment(input: VertexOutput) -> @location(0) vec4f {
         let pixel = floor(input.uv * 2.0 * layer.half_size);
         let speck = noise(pixel.x + pixel.y * 4099.0, floor(time * 24.0)) - 0.5;
         color = vec4f(max(color.rgb + speck * grain * 0.4 * color.a, vec3f(0.0)), color.a);
+    }
+
+    if layer.fill.a > 0.0 {
+        // Towards a solid color, covering what is transparent too.
+        let amount = layer.fill.a;
+        color = vec4f(mix(color.rgb, layer.fill.rgb, amount), mix(color.a, 1.0, amount));
     }
 
     // Colors are premultiplied by their opacity, so fading the layer is one

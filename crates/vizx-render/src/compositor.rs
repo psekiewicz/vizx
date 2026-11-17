@@ -21,7 +21,7 @@ const FRAME_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 /// this many bytes long.
 const ROW_ALIGNMENT: u32 = 256;
 /// Size in bytes of the `Layer` struct in `compositor.wgsl`.
-const LAYER_UNIFORM_SIZE: usize = 80;
+const LAYER_UNIFORM_SIZE: usize = 96;
 
 /// Effects drawn on a layer. Every strength is 0 (off) to 1 (strong).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -42,6 +42,10 @@ pub struct LayerEffects {
     pub tint_color: [f32; 3],
     /// How much of the tint color: 0 none, 1 only the tint.
     pub tint: f32,
+    /// A color the picture turns into (a flash of white, a fade to black).
+    pub fill_color: [f32; 3],
+    /// How much of the fill color: 0 none, 1 only the color.
+    pub fill: f32,
     /// The moment in seconds, which moves grain and glitches.
     pub seconds: f32,
 }
@@ -57,12 +61,14 @@ impl LayerEffects {
         vignette: 0.0,
         tint_color: [1.0, 1.0, 1.0],
         tint: 0.0,
+        fill_color: [1.0, 1.0, 1.0],
+        fill: 0.0,
         seconds: 0.0,
     };
 
     /// The values of the `Layer` struct of `compositor.wgsl` after its
     /// placement, for a frame `frame_height` pixels high.
-    fn uniforms(&self, frame_height: f32) -> [f32; 12] {
+    fn uniforms(&self, frame_height: f32) -> [f32; 16] {
         let strength = |value: f32| value.clamp(0.0, 1.0);
         [
             // Full blur is 3 % of the frame's height, full split 1 %.
@@ -79,6 +85,10 @@ impl LayerEffects {
             self.tint_color[1].clamp(0.0, 1.0),
             self.tint_color[2].clamp(0.0, 1.0),
             strength(self.tint),
+            self.fill_color[0].clamp(0.0, 1.0),
+            self.fill_color[1].clamp(0.0, 1.0),
+            self.fill_color[2].clamp(0.0, 1.0),
+            strength(self.fill),
         ]
     }
 }

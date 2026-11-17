@@ -173,6 +173,7 @@ pub struct VizxApp {
     pub is_project_settings_open: bool,
     pub lyrics: LyricsWindow,
     pub subtitle_editor: crate::ui::subtitle_editor::SubtitleEditor,
+    pub scenes: crate::ui::scenes_window::ScenesWindow,
     /// VizX's own folder for settings and autosaves, if the system has one.
     app_data: Option<PathBuf>,
     /// Settings of VizX itself, such as the recent projects.
@@ -242,6 +243,7 @@ impl VizxApp {
             is_project_settings_open: false,
             lyrics: LyricsWindow::default(),
             subtitle_editor: Default::default(),
+            scenes: Default::default(),
             stem_job: None,
             collect_job: None,
             lyrics_recognition: None,
@@ -275,6 +277,14 @@ impl VizxApp {
         app.transport.set_volume(app.settings.volume);
         // Like Blender's splash screen; not over the offer to recover work.
         app.is_welcome_open = app.settings.show_welcome && app.recoveries.is_empty();
+        // A project given when VizX starts ("Open with", a double-click on
+        // a .vzx file, or `vizx.exe song.vzx`) is opened right away.
+        if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from)
+            && path.is_file()
+        {
+            app.open_project_at(&path);
+            app.is_welcome_open = false;
+        }
         app
     }
 
@@ -1794,6 +1804,7 @@ impl eframe::App for VizxApp {
         project_settings_window::show(&ctx, self);
         lyrics_window::show(&ctx, self);
         crate::ui::subtitle_editor::show(&ctx, self);
+        crate::ui::scenes_window::show(&ctx, self);
         recovery_window::show(&ctx, self);
         welcome_window::show(&ctx, self);
         shortcuts_window::show(&ctx, self);

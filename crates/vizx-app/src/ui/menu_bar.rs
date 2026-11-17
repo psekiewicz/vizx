@@ -155,6 +155,17 @@ fn view_menu(ui: &mut egui::Ui, app: &mut VizxApp) {
         }
     }
     ui.separator();
+    if ui
+        .button("Scenes...")
+        .on_hover_text("The song's parts and the transitions between them")
+        .clicked()
+    {
+        app.scenes.is_open = true;
+    }
+    if ui.button("Subtitle Editor...").clicked() {
+        app.request(AppCommand::OpenSubtitleEditor);
+    }
+    ui.separator();
     if ui.button("Reset Layout").clicked() {
         app.workspace.reset_layout();
     }

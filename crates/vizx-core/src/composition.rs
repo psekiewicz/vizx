@@ -309,6 +309,8 @@ pub fn layer_effects(
         vignette: effects.vignette as f32,
         tint_color: effects.tint_color.map(|part| part as f32),
         tint: effects.tint as f32,
+        fill_color: effects.fill_color.map(|part| part as f32),
+        fill: effects.fill as f32,
         seconds: seconds as f32,
     }
 }

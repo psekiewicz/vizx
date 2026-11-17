@@ -561,6 +561,29 @@ are added at the playhead, split (the words divided by time), merged,
 deleted, shifted together, and saved as `.srt`. Collect All and Save also
 copies the font of a subtitle layer.
 
+### Scenes and transitions
+
+Every timeline marker starts a scene (until the next marker); a marker's
+`transition` says how the picture changes there: Cut, Flash, Fade through
+black, Zoom punch, Glitch, Blur, Spin or Shake, with a duration centered on
+the change (format version 24). They are set in the Scenes window
+(View > Scenes) or in a marker's right-click menu.
+
+Transitions need no renderer of their own. `Project::rebuild_scene_transitions`
+keeps a layer, "Scene transitions" (`Track::scene_transitions`), placed above
+the picture and below the subtitles, filled with short effects-layer clips
+around every change: each of 4 to 20 steps has the effect strength of its
+moment (rising to 1 at the change and back), and a zoom, turn or shake
+keyframed from its start to its end, so motion is smooth. Preview, export
+and timeline treat them like any effects layer. The layer is laid out again
+whenever a marker moves, goes or gets another transition, and removed when
+only cuts are left. Flash and fade need a new effect, `fill` (the picture
+turns into a solid color), also available on every clip in Properties.
+
+Lines of different subtitle layers may overlap in time; the layout places
+them one above the other. "Duet" in the Subtitle Editor puts a line on
+every other singer's layer too, for lines sung together.
+
 ### Telling singers apart
 
 **Separate Singers** in the Subtitle Editor gives every singer of a subtitle

@@ -1083,6 +1083,17 @@ fn effects_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {
                 percent_slider(ui, &mut edited.tint);
             });
             ui.end_row();
+
+            ui.label("Fill")
+                .on_hover_text("Turn the picture into a solid color (a flash, a fade to black)");
+            ui.horizontal(|ui| {
+                let mut color = edited.fill_color.map(|part| part as f32);
+                if ui.color_edit_button_rgb(&mut color).changed() {
+                    edited.fill_color = color.map(f64::from);
+                }
+                percent_slider(ui, &mut edited.fill);
+            });
+            ui.end_row();
         });
 
     // With a tolerance: converting to percent and back can change the last
@@ -1099,6 +1110,10 @@ fn effects_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {
             effects.tint_color[0],
             effects.tint_color[1],
             effects.tint_color[2],
+            effects.fill,
+            effects.fill_color[0],
+            effects.fill_color[1],
+            effects.fill_color[2],
         ]
     };
     let has_changed = values(edited)

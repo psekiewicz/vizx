@@ -48,6 +48,9 @@ pub struct Project {
 pub struct Marker {
     pub milliseconds: u64,
     pub name: String,
+    /// How the picture changes here, where the marker's scene starts.
+    #[serde(default, skip_serializing_if = "crate::Transition::is_cut")]
+    pub transition: crate::Transition,
 }
 
 impl Default for Project {
@@ -115,8 +118,35 @@ impl Project {
         let index = self
             .markers
             .partition_point(|marker| marker.milliseconds <= milliseconds);
-        self.markers.insert(index, Marker { milliseconds, name });
+        self.markers.insert(
+            index,
+            Marker {
+                milliseconds,
+                name,
+                transition: crate::Transition::default(),
+            },
+        );
         index
+    }
+
+    pub(crate) fn markers_mut(&mut self) -> &mut [Marker] {
+        &mut self.markers
+    }
+
+    pub(crate) fn tracks_mut_vec(&mut self) -> &mut Vec<Track> {
+        &mut self.tracks
+    }
+
+    pub(crate) fn new_media_id(&mut self) -> MediaId {
+        let id = MediaId(self.next_media_id);
+        self.next_media_id += 1;
+        id
+    }
+
+    pub(crate) fn new_clip_id(&mut self) -> ClipId {
+        let id = ClipId(self.next_clip_id);
+        self.next_clip_id += 1;
+        id
     }
 
     /// Renames marker `index`. Returns `true` only if this changed
@@ -143,6 +173,8 @@ impl Project {
             .markers
             .partition_point(|other| other.milliseconds <= milliseconds);
         self.markers.insert(new_index, marker);
+        // Its transition moves with it.
+        self.rebuild_scene_transitions();
         Some(new_index)
     }
 
@@ -150,6 +182,7 @@ impl Project {
     pub fn remove_marker(&mut self, index: usize) -> bool {
         if index < self.markers.len() {
             self.markers.remove(index);
+            self.rebuild_scene_transitions();
             true
         } else {
             false
@@ -174,6 +207,7 @@ impl Project {
             muted: false,
             clips: Vec::new(),
             subtitle_style: (kind == TrackKind::Subtitles).then(SubtitleStyle::default),
+            scene_transitions: false,
         };
         match kind {
             TrackKind::Visual | TrackKind::Subtitles => self.tracks.insert(0, track),

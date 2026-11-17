@@ -14,6 +14,7 @@ pub mod panels;
 pub mod preset_browser;
 pub mod project_settings_window;
 pub mod recovery_window;
+pub mod scenes_window;
 pub mod shortcuts_window;
 pub mod status_bar;
 pub mod subtitle_editor;

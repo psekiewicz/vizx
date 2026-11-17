@@ -35,7 +35,7 @@ use vizx_core::{
 use vizx_project::{
     AudioInput, AudioReaction, BlendMode, ClipEffects, ClipId, Easing, FrameAnimation, Keyframe,
     MediaId, Placement, Project, ReactionBand, TextAlignment, TextProperties, TrackId, TrackKind,
-    Transform,
+    Transform, Transition, TransitionKind,
 };
 
 /// One part of the song: when it starts, its name, and what the caption
@@ -162,6 +162,34 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--update") {
+        let path = args.get(1).ok_or("--update needs the project file")?;
+        return update_scenes(Path::new(path));
+    }
+    if args.first().map(String::as_str) == Some("--check") {
+        // Short clips around every scene change of a project, to look at
+        // the transitions.
+        let path = Path::new(args.get(1).ok_or("--check needs the project file")?);
+        let session = EditorSession::open(path).map_err(|error| error.to_string())?;
+        let ranges: Vec<(f64, f64, String)> = session
+            .project()
+            .scenes()
+            .iter()
+            .filter(|scene| scene.transition.kind != TransitionKind::Cut)
+            .map(|scene| {
+                let at = scene.start_milliseconds as f64 / 1000.0;
+                let half = scene.transition.duration_milliseconds as f64 / 2000.0 + 0.2;
+                (
+                    at - half,
+                    at + half,
+                    format!("transition {at:06.1} {}", scene.name),
+                )
+            })
+            .collect();
+        let ffmpeg = find_ffmpeg().ok_or("FFmpeg was not found")?;
+        let folder = path.parent().unwrap_or(Path::new("."));
+        return export(&session, &ffmpeg, folder, 360, Some(ranges));
+    }
     if args.len() < 4 {
         return Err(
             "usage: showcase <song> <stems folder> <lyrics project> <output folder> \
@@ -226,7 +254,20 @@ fn run() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     println!("Saved {}", project_path.display());
 
-    export(&session, &ffmpeg, &output, height, samples)
+    let ranges = samples.then(|| {
+        PARTS
+            .iter()
+            .map(|part| {
+                let at = part.start + 8.0;
+                (
+                    at,
+                    at + 2.0,
+                    format!("sample {:05.1} {}", part.start, part.name),
+                )
+            })
+            .collect()
+    });
+    export(&session, &ffmpeg, &output, height, ranges)
 }
 
 // ---------------------------------------------------------------------------
@@ -642,76 +683,10 @@ fn build_project(
         });
     }
 
-    // A flash of light where every chorus starts and ends, where the
-    // colors change.
-    let flash_track = session.add_track(TrackKind::Visual);
-    name_track(&mut session, Some(flash_track), "Chorus flashes");
-    let flash_size = vizx_project::ImageProperties {
-        width: 64,
-        height: 36,
-    };
-    let mut flash_media = None;
-    for (start, stop) in spans(&[PartKind::Chorus]) {
-        for at in [start, stop] {
-            if at >= end - 0.1 {
-                continue;
-            }
-            let from = (at - 0.08).max(0.0);
-            let clip = if let Some(media) = flash_media {
-                let mut added = None;
-                edit(&mut session, |project| {
-                    let template = project.media_source(media).cloned();
-                    let first = project
-                        .track(flash_track)
-                        .and_then(|track| track.clips.first().cloned());
-                    if let (Some(source), Some(mut clip)) = (template, first) {
-                        clip.keyframes.clear();
-                        added = project.paste_clip(&clip, &source, flash_track, milliseconds(from));
-                    }
-                });
-                added.ok_or("could not add a flash")?
-            } else {
-                let mut added = None;
-                edit(&mut session, |project| {
-                    let (media, track) =
-                        project.add_image(made.flash.to_string_lossy(), flash_size);
-                    flash_media = Some(media);
-                    let clip = project
-                        .track(track)
-                        .and_then(|layer| layer.clips.first())
-                        .map(|clip| clip.id);
-                    if let Some(clip) = clip {
-                        // Added to the first empty layer: the flash layer
-                        // itself, or another one it is moved from.
-                        if track != flash_track {
-                            project.move_clip_to_track(clip, flash_track);
-                            project.remove_track(track);
-                        }
-                        // Shortened first: moved at its full length, it
-                        // would make the project longer than the song.
-                        project.trim_clip_end(clip, 900);
-                        project.move_clip(clip, milliseconds(from));
-                    }
-                    added = clip;
-                });
-                added.ok_or("could not add a flash")?
-            };
-            edit(&mut session, |project| {
-                project.trim_clip_end(clip, milliseconds(from + 0.9));
-                project.set_clip_placement(clip, Placement::FULL);
-                project.set_clip_blend_mode(clip, BlendMode::Add);
-                project.set_clip_keyframes(
-                    clip,
-                    vec![
-                        key(0, Placement::FULL, 0.0, 0.0, Easing::Linear),
-                        key(80, Placement::FULL, 0.0, 0.85, Easing::Linear),
-                        key(900, Placement::FULL, 0.0, 0.0, Easing::Smooth),
-                    ],
-                );
-            });
-        }
-    }
-
+    // Scenes: every part starts at a marker; the transitions between them
+    // (a flash into every chorus, a glitch out of it, ...) are laid out by
+    // VizX on its "Scene transitions" layer.
+    edit(&mut session, set_scene_transitions);
     // 13. Title in the intro: pops in, then flies off.
     let title_track = session.add_track(TrackKind::Visual);
     name_track(&mut session, Some(title_track), "Title");
@@ -823,6 +798,74 @@ fn build_project(
     Ok(session)
 }
 
+/// The transition into every scene, by the name of its marker: a flash
+/// into every chorus, a glitch or a shake out of it, a fade through black
+/// into the bridge, a spin into the countdown.
+fn set_scene_transitions(project: &mut Project) {
+    let choices: Vec<(usize, Transition)> = project
+        .markers()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, marker)| {
+            let name = marker.name.to_lowercase();
+            let transition = if name.contains("chorus") {
+                Transition::new(TransitionKind::Flash, 700)
+            } else if name.starts_with("verse 1") {
+                Transition::new(TransitionKind::ZoomPunch, 800)
+            } else if name.starts_with("verse") {
+                Transition::new(TransitionKind::Glitch, 600)
+            } else if name.starts_with("bridge") {
+                Transition::new(TransitionKind::FadeBlack, 1200)
+            } else if name.starts_with("countdown") {
+                Transition::new(TransitionKind::Spin, 1000)
+            } else if name.starts_with("rap") {
+                Transition::new(TransitionKind::Shake, 800)
+            } else {
+                return None;
+            };
+            Some((index, transition))
+        })
+        .collect();
+    for (index, transition) in choices {
+        project.set_marker_transition(index, transition);
+    }
+}
+
+/// `--update`: puts the scene transitions into an existing showcase
+/// project (keeping everything else, such as corrected lyrics) and removes
+/// the chorus flashes the older showcase drew on a layer of their own. A
+/// copy of the file is kept next to it first.
+fn update_scenes(path: &Path) -> Result<(), String> {
+    let backup = path.with_extension("before-scenes.vzx");
+    std::fs::copy(path, &backup).map_err(|error| format!("could not back up: {error}"))?;
+    let mut session = EditorSession::open(path).map_err(|error| error.to_string())?;
+    let flashes: Vec<TrackId> = session
+        .project()
+        .tracks()
+        .iter()
+        .filter(|track| track.name == "Chorus flashes")
+        .map(|track| track.id)
+        .collect();
+    for track in flashes {
+        session.remove_track(track);
+    }
+    edit(&mut session, set_scene_transitions);
+    session.save_as(path).map_err(|error| error.to_string())?;
+    for scene in session.project().scenes() {
+        println!(
+            "  {:6.1} s  {:<14} {}",
+            scene.start_milliseconds as f64 / 1000.0,
+            scene.name,
+            scene.transition.kind.label()
+        );
+    }
+    println!(
+        "Saved {} (the old file is {})",
+        path.display(),
+        backup.display()
+    );
+    Ok(())
+}
 /// The lyrics on top, popping in, with a glow: corrected to `official` if
 /// given (the published words on the recognized timing), and split into
 /// one subtitle layer per singer (`singers`: how many; `None`: decide).
@@ -1176,7 +1219,7 @@ fn export(
     ffmpeg: &Path,
     output: &Path,
     height: u32,
-    samples: bool,
+    samples: Option<Vec<(f64, f64, String)>>,
 ) -> Result<(), String> {
     let project = session.project();
     let mut audio_store = AudioStore::default();
@@ -1209,19 +1252,18 @@ fn export(
     let mut catalog = VisualizerCatalog::new();
     let bundled_presets = find_bundled_presets();
     let end = project.settings.duration_seconds();
-    let jobs: Vec<(PathBuf, ExportSettings)> = if samples {
-        PARTS
-            .iter()
-            .filter(|part| part.start < end)
-            .map(|part| {
-                let at = (part.start + 8.0).min(end - 2.0);
+    let jobs: Vec<(PathBuf, ExportSettings)> = if let Some(ranges) = samples {
+        ranges
+            .into_iter()
+            .filter(|(start, _, _)| *start < end)
+            .map(|(start, stop, name)| {
                 (
-                    output.join(format!("sample {:05.1} {}.mp4", part.start, part.name)),
+                    output.join(format!("{name}.mp4")),
                     ExportSettings {
                         format: VideoFormat::Mp4H264,
                         quality: ExportQuality::Medium,
                         height: Some(360),
-                        range: Some((at, at + 2.0)),
+                        range: Some((start.max(0.0), stop.min(end))),
                     },
                 )
             })
@@ -1284,7 +1326,6 @@ fn export(
 struct Assets {
     background: PathBuf,
     background_chorus: PathBuf,
-    flash: PathBuf,
     emblem: PathBuf,
     sprite_sheet: PathBuf,
     sequence_first: PathBuf,
@@ -1467,7 +1508,6 @@ fn make_assets(folder: &Path, ffmpeg: &Path) -> Result<Assets, String> {
         sprite_sheet,
         sequence_first: sequence_folder.join("hexagon_0001.png"),
         background_chorus,
-        flash,
         video,
     })
 }

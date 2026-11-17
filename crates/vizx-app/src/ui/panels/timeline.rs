@@ -1208,6 +1208,16 @@ fn show_markers(
                 ui.data_mut(|data| data.insert_temp(buffer_id, name.clone()));
                 session.edit_project(|project| project.rename_marker(index, &name));
             }
+            ui.separator();
+            ui.label("Transition into this scene");
+            let mut transition = marker.transition;
+            for kind in vizx_project::TransitionKind::ALL {
+                ui.radio_value(&mut transition.kind, kind, kind.label());
+            }
+            if transition != marker.transition {
+                session.edit_project(|project| project.set_marker_transition(index, transition));
+            }
+            ui.separator();
             if ui.button("Delete Marker").clicked() {
                 session.edit_project(|project| project.remove_marker(index));
                 ui.close();

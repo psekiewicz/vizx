@@ -83,6 +83,10 @@ pub struct Track {
     /// For a subtitle layer: how its lines look and where they appear.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_style: Option<crate::SubtitleStyle>,
+    /// The layer VizX keeps the scene transitions on (see `scenes.rs`); its
+    /// clips are made from the markers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scene_transitions: bool,
 }
 
 impl Track {
@@ -196,6 +200,10 @@ pub struct ClipEffects {
     pub tint: f64,
     /// Red, green and blue, each from 0 to 1.
     pub tint_color: [f64; 3],
+    /// How much the picture turns into `fill_color` (a flash of white, a
+    /// fade to black).
+    pub fill: f64,
+    pub fill_color: [f64; 3],
 }
 
 impl Default for ClipEffects {
@@ -209,6 +217,8 @@ impl Default for ClipEffects {
             vignette: 0.0,
             tint: 0.0,
             tint_color: [1.0, 0.2, 0.1],
+            fill: 0.0,
+            fill_color: [1.0, 1.0, 1.0],
         }
     }
 }
@@ -219,7 +229,7 @@ impl ClipEffects {
         self.strengths().iter().all(|strength| *strength == 0.0)
     }
 
-    fn strengths(&self) -> [f64; 7] {
+    fn strengths(&self) -> [f64; 8] {
         [
             self.blur,
             self.color_split,
@@ -228,6 +238,7 @@ impl ClipEffects {
             self.glitch,
             self.vignette,
             self.tint,
+            self.fill,
         ]
     }
 
@@ -250,6 +261,8 @@ impl ClipEffects {
             vignette: strength(self.vignette),
             tint: strength(self.tint),
             tint_color: self.tint_color.map(strength),
+            fill: strength(self.fill),
+            fill_color: self.fill_color.map(strength),
         }
     }
 
@@ -270,6 +283,8 @@ impl ClipEffects {
             vignette: self.vignette * factor,
             tint: self.tint * factor,
             tint_color: self.tint_color,
+            fill: self.fill * factor,
+            fill_color: self.fill_color,
         }
     }
 }

@@ -17,6 +17,7 @@ mod metadata;
 mod motion;
 mod overlap;
 mod project;
+mod scenes;
 mod settings;
 mod subtitles;
 mod track;
@@ -31,6 +32,7 @@ pub use media::{
 pub use metadata::ProjectMetadata;
 pub use motion::{Easing, KEYFRAME_TOLERANCE_MILLISECONDS, Keyframe, Motion, Transform};
 pub use project::{LayerMove, Marker, Project};
+pub use scenes::{Scene, TRANSITIONS_LAYER_NAME, Transition, TransitionKind};
 pub use settings::{FrameRate, ProjectSettings};
 pub use subtitles::{SubtitleFit, SubtitlePosition, SubtitleStyle};
 pub use track::{
@@ -88,4 +90,7 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 ///   without effects.
 /// - 23: subtitle layers (`TrackKind::Subtitles` with a `subtitle_style`)
 ///   and a text's `outline`. Older files load without them.
-pub const CURRENT_FORMAT_VERSION: u32 = 23;
+/// - 24: scenes: a marker's `transition`, the layer that holds them
+///   (`scene_transitions`), and a clip effect's `fill`. Older files load
+///   with cuts.
+pub const CURRENT_FORMAT_VERSION: u32 = 24;
