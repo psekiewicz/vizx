@@ -168,6 +168,11 @@ impl Project {
                 repoint(&mut text.font_path);
             }
         }
+        for track in self.tracks_mut() {
+            if let Some(style) = &mut track.subtitle_style {
+                repoint(&mut style.font_path);
+            }
+        }
         changed
     }
 

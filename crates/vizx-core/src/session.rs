@@ -977,7 +977,7 @@ impl EditorSession {
     /// Adds a visual layer named "Lyrics" for lines of lyrics, and selects
     /// it.
     pub fn add_lyrics_track(&mut self) -> TrackId {
-        let track_id = self.project.add_track("Lyrics", TrackKind::Visual);
+        let track_id = self.project.add_subtitle_track("Lyrics");
         self.has_unsaved_changes = true;
         self.set_selection(Selection::Track(track_id));
         track_id
@@ -994,6 +994,36 @@ impl EditorSession {
     ) -> Result<TrackId, String> {
         if lines.is_empty() {
             return Err("there are no lines".to_owned());
+        }
+        let is_subtitle_layer = |project: &Project, id: TrackId| {
+            project
+                .track(id)
+                .is_some_and(|track| track.kind == TrackKind::Subtitles)
+        };
+        if track_id.is_none_or(|id| is_subtitle_layer(&self.project, id)) {
+            // A subtitle layer: the lines only need their words and times;
+            // a new layer takes the style.
+            crate::render_text(&style.text, self.project.settings.height)?;
+            let track_id = match track_id {
+                Some(id) => id,
+                None => {
+                    let id = self.add_lyrics_track();
+                    let keep = vizx_project::SubtitleStyle::default();
+                    self.project
+                        .set_subtitle_style(id, style.subtitle_style(&keep));
+                    id
+                }
+            };
+            for line in lines {
+                let start = (line.start_seconds.max(0.0) * 1000.0).round() as u64;
+                let end = (line.end_seconds.max(0.0) * 1000.0).round() as u64;
+                self.project
+                    .add_subtitle_line(track_id, &line.text, start, end.saturating_sub(start))
+                    .ok_or("the subtitle layer is gone")?;
+            }
+            self.has_unsaved_changes = true;
+            self.set_selection(Selection::Track(track_id));
+            return Ok(track_id);
         }
         // Measured before anything changes, so a bad font changes nothing.
         let mut placements = Vec::new();
@@ -1033,6 +1063,19 @@ impl EditorSession {
         style: &crate::LyricsStyle,
     ) -> Result<ClipId, String> {
         const UNTIL_ENDED_MILLISECONDS: u64 = 5000;
+        let start = (at_seconds.max(0.0) * 1000.0).round() as u64;
+        if self
+            .project
+            .track(track_id)
+            .is_some_and(|track| track.kind == TrackKind::Subtitles)
+        {
+            let clip_id = self
+                .project
+                .add_subtitle_line(track_id, text, start, UNTIL_ENDED_MILLISECONDS)
+                .ok_or("the subtitle layer is gone")?;
+            self.has_unsaved_changes = true;
+            return Ok(clip_id);
+        }
         let placement = self.lyric_placement(text, style)?;
         let properties = TextProperties {
             text: text.to_owned(),
@@ -1058,7 +1101,9 @@ impl EditorSession {
     pub fn end_lyric_line(&mut self, clip_id: ClipId, at_seconds: f64, style: &crate::LyricsStyle) {
         let end = (at_seconds.max(0.0) * 1000.0).round() as u64;
         self.project.trim_clip_end(clip_id, end);
-        if let Some((_, clip)) = self.project.clip(clip_id) {
+        if let Some((track, clip)) = self.project.clip(clip_id)
+            && track.kind != TrackKind::Subtitles
+        {
             let keyframes =
                 crate::lyric_keyframes(clip.placement, clip.duration_milliseconds, style);
             self.project.set_clip_keyframes(clip_id, keyframes);
@@ -1073,6 +1118,20 @@ impl EditorSession {
         track_id: TrackId,
         style: &crate::LyricsStyle,
     ) -> Result<usize, String> {
+        if let Some(current) = self.project.subtitle_style(track_id).cloned() {
+            crate::render_text(&style.text, self.project.settings.height)?;
+            let count = self
+                .project
+                .track(track_id)
+                .map_or(0, |track| track.clips.len());
+            if self
+                .project
+                .set_subtitle_style(track_id, style.subtitle_style(&current))
+            {
+                self.has_unsaved_changes = true;
+            }
+            return Ok(count);
+        }
         let texts: Vec<(ClipId, MediaId, String)> = self
             .project
             .track(track_id)
@@ -1315,32 +1374,23 @@ mod tests {
         assert_eq!(timing[0].1, timing[1].0);
         assert_eq!(timing[1].1, 5000);
         assert_eq!(timing[2], (6000, 7500));
-        // Faded in and out: invisible at both ends, shown in the middle.
-        let tapped_clip = &track.clips[2];
-        assert_eq!(tapped_clip.transform_at(0.0).opacity, 0.0);
-        assert_eq!(tapped_clip.transform_at(750.0).opacity, 1.0);
-        assert_eq!(tapped_clip.transform_at(1500.0).opacity, 0.0);
-        let first_size = track.clips[0].placement.height;
+        // The lines are a subtitle layer: the layer fades them in and out.
+        assert_eq!(track.kind, TrackKind::Subtitles);
+        let layout = crate::subtitle_layout(session.project(), 1080);
+        let tapped = &layout[&track.clips[2].id].motion;
+        assert_eq!(tapped.transform_at(0.0).opacity, 0.0);
+        assert_eq!(tapped.transform_at(750.0).opacity, 1.0);
+        assert_eq!(tapped.transform_at(1500.0).opacity, 0.0);
+        assert_eq!(
+            session.project().clip_text(track.clips[1].id),
+            Some("two\nrows")
+        );
 
+        // Restyling changes the layer's look, so every line at once.
         style.text.size *= 2.0;
         assert_eq!(session.restyle_lyrics(track_id, &style), Ok(3));
-
-        let track = session.project().track(track_id).unwrap();
-        let texts: Vec<_> = track
-            .clips
-            .iter()
-            .map(|clip| {
-                session
-                    .project()
-                    .media_source(clip.media)
-                    .unwrap()
-                    .text()
-                    .unwrap()
-            })
-            .collect();
-        assert_eq!(texts[1].text, "two\nrows");
-        assert!(texts.iter().all(|text| text.size == style.text.size));
-        assert!(track.clips[0].placement.height > 1.5 * first_size);
+        let restyled = session.project().subtitle_style(track_id).unwrap();
+        assert_eq!(restyled.size, style.text.size);
     }
 
     #[test]

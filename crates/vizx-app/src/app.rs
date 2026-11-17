@@ -115,6 +115,10 @@ pub enum AppCommand {
     /// Pick the folder of a visualizer plugin of the user's own.
     AddVisualizerFolder,
     AddVisualLayer,
+    /// Add a layer for subtitles (one per singer or speaker).
+    AddSubtitleLayer,
+    /// Open the Subtitle Editor, on the selected subtitle layer if any.
+    OpenSubtitleEditor,
     AddAudioTrack,
     OpenProjectSettings,
     /// Start playback, or pause it if it is running.
@@ -168,6 +172,7 @@ pub struct VizxApp {
     pub is_about_window_open: bool,
     pub is_project_settings_open: bool,
     pub lyrics: LyricsWindow,
+    pub subtitle_editor: crate::ui::subtitle_editor::SubtitleEditor,
     /// VizX's own folder for settings and autosaves, if the system has one.
     app_data: Option<PathBuf>,
     /// Settings of VizX itself, such as the recent projects.
@@ -234,6 +239,7 @@ impl VizxApp {
             is_about_window_open: false,
             is_project_settings_open: false,
             lyrics: LyricsWindow::default(),
+            subtitle_editor: Default::default(),
             stem_job: None,
             collect_job: None,
             lyrics_recognition: None,
@@ -936,6 +942,21 @@ impl VizxApp {
             AppCommand::AddVisualizerFolder => self.add_visualizer_folder(frame),
             AppCommand::AddVisualLayer => {
                 self.session.add_track(TrackKind::Visual);
+            }
+            AppCommand::AddSubtitleLayer => {
+                self.session.add_track(TrackKind::Subtitles);
+                self.status_message =
+                    "Subtitle layer added: set its look in Properties, its lines in the \
+                     Subtitle Editor"
+                        .to_owned();
+            }
+            AppCommand::OpenSubtitleEditor => {
+                let layer = self
+                    .session
+                    .selected_track()
+                    .filter(|track| track.kind == TrackKind::Subtitles)
+                    .map(|track| track.id);
+                self.subtitle_editor.open(layer);
             }
             AppCommand::AddAudioTrack => {
                 self.session.add_track(TrackKind::Audio);
@@ -1643,6 +1664,7 @@ impl eframe::App for VizxApp {
         about_window::show(&ctx, self);
         project_settings_window::show(&ctx, self);
         lyrics_window::show(&ctx, self);
+        crate::ui::subtitle_editor::show(&ctx, self);
         recovery_window::show(&ctx, self);
         welcome_window::show(&ctx, self);
         shortcuts_window::show(&ctx, self);

@@ -160,6 +160,9 @@ pub struct VisualPreview {
     /// Why the picture could not be composed, if it could not.
     composition_error: Option<String>,
     frame_pixels: Vec<u8>,
+    /// Where the subtitle lines go, and what they were worked out from (it
+    /// is worked out again only when that changes).
+    subtitles: (String, HashMap<ClipId, vizx_core::SubtitleLine>),
 }
 
 impl VisualPreview {
@@ -178,6 +181,7 @@ impl VisualPreview {
             composition: None,
             composition_error: None,
             frame_pixels: Vec::new(),
+            subtitles: (String::new(), HashMap::new()),
         }
     }
 
@@ -270,6 +274,12 @@ impl VisualPreview {
         let dragged: Option<(ClipId, Placement, f64)> =
             ctx.data(|data| data.get_temp(egui::Id::new(DRAGGED_PLACEMENT_ID)));
 
+        let subtitle_key = subtitle_key(session.project());
+        if self.subtitles.0 != subtitle_key {
+            let layout = vizx_core::subtitle_layout(project, settings.height);
+            self.subtitles = (subtitle_key, layout);
+        }
+
         self.layers.clear();
         // Where each layer goes, in the same order as `self.layers`.
         let mut geometries = Vec::new();
@@ -280,7 +290,17 @@ impl VisualPreview {
             .into_iter()
             .rev()
         {
-            let state = if media.is_effects_layer() {
+            let subtitle = if track.kind == vizx_project::TrackKind::Subtitles {
+                match self.subtitles.1.get(&clip.id) {
+                    Some(line) => Some(line.clone()),
+                    None => continue,
+                }
+            } else {
+                None
+            };
+            let state = if let Some(line) = &subtitle {
+                self.show_text(clip.id, &line.text, settings.height)
+            } else if media.is_effects_layer() {
                 // Drawn from the layers below it, which are already there.
                 LayerState::Shown
             } else if media.image().is_some() {
@@ -330,8 +350,9 @@ impl VisualPreview {
             };
             // The clip's state at the playhead: keyframes and spin.
             let seconds_into_clip = playhead_seconds - clip.start_milliseconds as f64 / 1000.0;
-            let mut transform = clip.motion().animated_at(seconds_into_clip.max(0.0));
-            let keyed = clip.transform_at(seconds_into_clip.max(0.0) * 1000.0);
+            let motion = subtitle.map_or_else(|| clip.motion(), |line| line.motion);
+            let mut transform = motion.animated_at(seconds_into_clip.max(0.0));
+            let keyed = motion.transform_at(seconds_into_clip.max(0.0) * 1000.0);
             if let Some((dragged_clip, placement, rotation)) = dragged
                 && dragged_clip == clip.id
             {
@@ -760,6 +781,32 @@ fn preview_height(composition_width: u32, composition_height: u32) -> u32 {
     let exact = u64::from(PREVIEW_WIDTH) * u64::from(composition_height)
         / u64::from(composition_width.max(1));
     ((exact as u32).max(2) / 2) * 2
+}
+
+/// Everything the layout of the subtitles depends on, as text: when it
+/// changes, the subtitles are laid out again.
+fn subtitle_key(project: &vizx_project::Project) -> String {
+    use std::fmt::Write;
+    let settings = &project.settings;
+    let mut key = format!("{}x{}", settings.width, settings.height);
+    for track in project.tracks() {
+        if track.kind != vizx_project::TrackKind::Subtitles {
+            continue;
+        }
+        let _ = write!(key, "|{:?}{:?}", track.id, track.subtitle_style);
+        for clip in &track.clips {
+            let text = project
+                .media_source(clip.media)
+                .and_then(|media| media.text())
+                .map_or("", |text| text.text.as_str());
+            let _ = write!(
+                key,
+                ";{:?}@{}+{}:{text}",
+                clip.id, clip.start_milliseconds, clip.duration_milliseconds
+            );
+        }
+    }
+    key
 }
 
 #[cfg(test)]

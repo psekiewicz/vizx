@@ -527,6 +527,40 @@ of the line's middle (subtitle-like near the bottom by default), and a
 fade in/out, optionally popping in, made of four keyframes per clip.
 "Restyle Layer" gives every text on a layer the current look again.
 
+### Subtitle layers
+
+Lyrics and spoken lines have their own kind of layer, `TrackKind::Subtitles`
+(format version 23). Every line is a clip with a text; how the lines look
+and where they go belongs to the layer (`SubtitleStyle`: font, size, color,
+outline, alignment, margin, fit, fade, pop, and a fixed or random position),
+so one change restyles all of them. Several subtitle layers can show lines
+at the same moment, one per singer or speaker.
+
+`vizx_core::subtitle_layout` works out every line for a frame height, the
+same for the preview and the export:
+
+- **Fit:** a line wider than the safe area (inside the margin) is wrapped
+  between words (`wrap_text`, which also evens out a short last row), and
+  shrunk only if a single word is still too wide; "Shrink" keeps one row,
+  "Let it overflow" does neither.
+- **Place:** around the layer's fixed point, or at one of 16 spots of its
+  random area, drawn from the layer's seed and the clip (SplitMix64), so
+  they repeat; "New Random Places" changes the seed.
+- **Keep apart:** lines whose times overlap, on any subtitle layer, must not
+  cover each other: a fixed line steps by its own height towards the middle
+  of the frame (then away), a random one takes the spot that covers least.
+- **Appear:** fade and pop keyframes as for lyrics (`lyric_keyframes`).
+
+Text pictures got an outline (`TextProperties::outline`, a round brush grown
+from the letters' coverage, drawn behind them). The preview keeps the layout
+until anything it depends on changes (`subtitle_key`). The Lyrics window now
+adds its lines to a subtitle layer; an old layer of lyric texts becomes one
+with "Convert to Subtitle Layer" (right-click its name). The Subtitle Editor
+lists every line: start, end, layer and words are edited in the table; lines
+are added at the playhead, split (the words divided by time), merged,
+deleted, shifted together, and saved as `.srt`. Collect All and Save also
+copies the font of a subtitle layer.
+
 ### Stems: one visualizer for the vocals, one for the drums
 
 An audio clip's context menu offers **Separate Stems**. The song is split

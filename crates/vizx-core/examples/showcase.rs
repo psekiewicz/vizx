@@ -578,6 +578,8 @@ fn build_project(
         size: 0.17,
         color: [1.0, 0.92, 0.96],
         alignment: TextAlignment::Center,
+        outline: 0.04,
+        outline_color: [0.25, 0.0, 0.2],
     };
     let subtitle = TextProperties {
         text: "a VizX showcase".to_owned(),
@@ -1119,7 +1121,11 @@ fn make_assets(folder: &Path, ffmpeg: &Path) -> Result<Assets, String> {
     for (x, y, pixel) in picture.enumerate_pixels_mut() {
         let (u, v) = (f64::from(x) / 1920.0 - 0.5, f64::from(y) / 1080.0 - 0.55);
         let glow = (-(u * u * 2.5 + v * v * 6.0) * 3.0).exp();
-        let star = if hash(x, y).is_multiple_of(1400) { 0.8 } else { 0.0 };
+        let star = if hash(x, y).is_multiple_of(1400) {
+            0.8
+        } else {
+            0.0
+        };
         let red = 0.04 + 0.45 * glow + star;
         let green = 0.01 + 0.08 * glow + star;
         let blue = 0.08 + 0.55 * glow + star;

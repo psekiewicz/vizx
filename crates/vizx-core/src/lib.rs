@@ -21,6 +21,7 @@ mod preset_library;
 mod selection;
 mod session;
 mod stems;
+mod subtitles;
 mod text;
 mod thumbnail;
 mod visualizer_catalog;
@@ -61,7 +62,8 @@ pub use preset_library::{
 pub use selection::Selection;
 pub use session::{CopiedClip, EditorSession, UNTITLED_PROJECT_NAME};
 pub use stems::{STEM_NAMES, STEMS_DIR_VARIABLE, StemEngine, StemFiles, StemJob, stem_folder};
-pub use text::render_text;
+pub use subtitles::{SubtitleLine, subtitle_layout};
+pub use text::{measure_text, render_text, wrap_text};
 pub use thumbnail::{THUMBNAIL_EDGE, make_thumbnail};
 pub use visualizer_catalog::{
     BUNDLED_VISUALIZER_PREFIX, BundledVisualizer, PluginState, VisualizerCatalog,

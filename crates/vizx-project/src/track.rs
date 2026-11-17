@@ -32,17 +32,28 @@ pub enum TrackKind {
     /// visual tracks were split into three kinds.
     #[serde(alias = "Visualizer", alias = "Animation", alias = "Text")]
     Visual,
+    /// A layer of subtitles: lines of text over time, all in the look the
+    /// layer sets (see `subtitles.rs`). It sits among the visual layers and
+    /// is drawn in its place, like them.
+    Subtitles,
 }
 
 impl TrackKind {
-    pub const ALL: [Self; 2] = [Self::Visual, Self::Audio];
+    pub const ALL: [Self; 3] = [Self::Visual, Self::Subtitles, Self::Audio];
 
     /// Name of the kind as shown to the user.
     pub fn label(self) -> &'static str {
         match self {
             Self::Audio => "Audio Track",
             Self::Visual => "Visual Layer",
+            Self::Subtitles => "Subtitle Layer",
         }
+    }
+
+    /// Whether this kind is part of the picture (a visual or subtitle
+    /// layer), as opposed to sound.
+    pub fn is_layer(self) -> bool {
+        matches!(self, Self::Visual | Self::Subtitles)
     }
 
     /// First word of automatic track names such as `Layer 2`.
@@ -50,6 +61,7 @@ impl TrackKind {
         match self {
             Self::Audio => "Audio",
             Self::Visual => "Layer",
+            Self::Subtitles => "Subtitles",
         }
     }
 }
@@ -68,6 +80,9 @@ pub struct Track {
     /// What is placed on this track, in no particular order.
     #[serde(default)]
     pub clips: Vec<Clip>,
+    /// For a subtitle layer: how its lines look and where they appear.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_style: Option<crate::SubtitleStyle>,
 }
 
 impl Track {

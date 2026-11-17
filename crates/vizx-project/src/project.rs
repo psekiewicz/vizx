@@ -7,7 +7,7 @@ use crate::{
     ClipEffects, ClipId, ImageProperties, MediaContent, MediaId, MediaSource, Placement,
     ProjectMetadata, ProjectSettings, TextProperties, Track, TrackId, TrackKind, Transform,
 };
-use crate::{Easing, FrameAnimation, Keyframe};
+use crate::{Easing, FrameAnimation, Keyframe, SubtitleStyle};
 
 /// Root of all data that belongs to one VizX project.
 ///
@@ -173,9 +173,10 @@ impl Project {
             kind,
             muted: false,
             clips: Vec::new(),
+            subtitle_style: (kind == TrackKind::Subtitles).then(SubtitleStyle::default),
         };
         match kind {
-            TrackKind::Visual => self.tracks.insert(0, track),
+            TrackKind::Visual | TrackKind::Subtitles => self.tracks.insert(0, track),
             TrackKind::Audio => self.tracks.push(track),
         }
         id
@@ -219,7 +220,7 @@ impl Project {
         let layer_count = self
             .tracks
             .iter()
-            .filter(|track| track.kind == TrackKind::Visual)
+            .filter(|track| track.kind.is_layer())
             .count();
         // Visual layers come first in the list, so a layer's position in
         // the list is also its position among the layers.
@@ -487,12 +488,16 @@ impl Project {
         track_id: TrackId,
         start_milliseconds: u64,
     ) -> Option<ClipId> {
-        let wanted_kind = if source.audio().is_some() {
-            TrackKind::Audio
+        let kind = self.track(track_id)?.kind;
+        let fits = if source.audio().is_some() {
+            kind == TrackKind::Audio
+        } else if source.text().is_some() {
+            // A line of text goes on a visual or a subtitle layer.
+            kind.is_layer()
         } else {
-            TrackKind::Visual
+            kind == TrackKind::Visual
         };
-        if self.track(track_id)?.kind != wanted_kind {
+        if !fits {
             return None;
         }
         let shared = self
@@ -947,7 +952,7 @@ impl Project {
     pub fn visual_clips(&self) -> impl Iterator<Item = (&Clip, &MediaSource)> {
         self.tracks
             .iter()
-            .filter(|track| track.kind == TrackKind::Visual)
+            .filter(|track| track.kind.is_layer())
             .flat_map(|track| &track.clips)
             .filter_map(|clip| Some((clip, self.media_source(clip.media)?)))
             .filter(|(_, source)| source.is_visual())
@@ -974,7 +979,7 @@ impl Project {
     pub fn visual_layers_at(&self, milliseconds: u64) -> Vec<(&Track, &Clip, &MediaSource)> {
         self.tracks
             .iter()
-            .filter(|track| track.kind == TrackKind::Visual)
+            .filter(|track| track.kind.is_layer())
             .flat_map(|track| track.clips.iter().map(move |clip| (track, clip)))
             .filter(|(_, clip)| {
                 milliseconds >= clip.start_milliseconds && milliseconds < clip.end_milliseconds()
@@ -1071,7 +1076,7 @@ impl Project {
         start_milliseconds: u64,
         duration_milliseconds: u64,
     ) -> Option<ClipId> {
-        if self.track(track_id)?.kind != TrackKind::Visual {
+        if !self.track(track_id)?.kind.is_layer() {
             return None;
         }
         let media_id = MediaId(self.next_media_id);
@@ -1538,6 +1543,125 @@ impl Project {
     pub fn milkdrop_preset_at(&self, milliseconds: u64) -> Option<&MediaSource> {
         self.milkdrop_clip_at(milliseconds)
             .map(|(_, source)| source)
+    }
+
+    pub(crate) fn tracks_mut(&mut self) -> &mut [Track] {
+        &mut self.tracks
+    }
+
+    /// Adds a subtitle layer named `name` above all other layers.
+    pub fn add_subtitle_track(&mut self, name: &str) -> TrackId {
+        self.add_track(name, TrackKind::Subtitles)
+    }
+
+    /// How the lines of a subtitle layer look. `None` for other tracks.
+    pub fn subtitle_style(&self, track_id: TrackId) -> Option<&SubtitleStyle> {
+        self.track(track_id)?.subtitle_style.as_ref()
+    }
+
+    /// Changes how the lines of a subtitle layer look. Returns `true` only
+    /// if this changed something.
+    pub fn set_subtitle_style(&mut self, track_id: TrackId, style: SubtitleStyle) -> bool {
+        let style = style.sanitized();
+        match self.tracks.iter_mut().find(|track| track.id == track_id) {
+            Some(track) if track.kind == TrackKind::Subtitles => {
+                let has_changed = track.subtitle_style.as_ref() != Some(&style);
+                track.subtitle_style = Some(style);
+                has_changed
+            }
+            _ => false,
+        }
+    }
+
+    /// Adds a line saying `text` on the subtitle layer `track_id`, from
+    /// `start_milliseconds` for `duration_milliseconds`. `None` if there is
+    /// no such subtitle layer.
+    pub fn add_subtitle_line(
+        &mut self,
+        track_id: TrackId,
+        text: &str,
+        start_milliseconds: u64,
+        duration_milliseconds: u64,
+    ) -> Option<ClipId> {
+        if self.track(track_id)?.kind != TrackKind::Subtitles {
+            return None;
+        }
+        let properties = TextProperties {
+            text: text.to_owned(),
+            ..TextProperties::default()
+        };
+        self.add_text_clip(
+            track_id,
+            properties,
+            Placement::FULL,
+            start_milliseconds,
+            duration_milliseconds,
+        )
+    }
+
+    /// The words of a text clip (a subtitle line or a text element).
+    pub fn clip_text(&self, clip_id: ClipId) -> Option<&str> {
+        let (_, clip) = self.clip(clip_id)?;
+        Some(self.media_source(clip.media)?.text()?.text.as_str())
+    }
+
+    /// Changes only the words of a text clip, keeping how it looks.
+    /// Returns `true` only if this changed something.
+    pub fn set_clip_text(&mut self, clip_id: ClipId, text: &str) -> bool {
+        let Some(media_id) = self.clip(clip_id).map(|(_, clip)| clip.media) else {
+            return false;
+        };
+        match self.media.iter_mut().find(|source| source.id == media_id) {
+            Some(MediaSource {
+                content: MediaContent::Text(current),
+                ..
+            }) if current.text != text => {
+                current.text = text.to_owned();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Turns a visual layer that holds only texts (lyrics added as texts)
+    /// into a subtitle layer that looks like its first text and shows its
+    /// lines where that text was. Returns `false` if the layer is not such
+    /// a layer.
+    pub fn convert_to_subtitles(&mut self, track_id: TrackId) -> bool {
+        let Some(track) = self.track(track_id) else {
+            return false;
+        };
+        let texts: Option<Vec<(&TextProperties, Placement)>> = track
+            .clips
+            .iter()
+            .map(|clip| Some((self.media_source(clip.media)?.text()?, clip.placement)))
+            .collect();
+        let Some(texts) = texts.filter(|texts| !texts.is_empty()) else {
+            return false;
+        };
+        if track.kind != TrackKind::Visual {
+            return false;
+        }
+        let (first_text, first_place) = texts[0];
+        let style = SubtitleStyle {
+            position: crate::SubtitlePosition::Fixed {
+                x: first_place.x + first_place.width / 2.0,
+                y: first_place.y + first_place.height / 2.0,
+            },
+            ..SubtitleStyle::like(first_text)
+        }
+        .sanitized();
+        let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) else {
+            return false;
+        };
+        track.kind = TrackKind::Subtitles;
+        track.subtitle_style = Some(style);
+        for clip in &mut track.clips {
+            // The layer decides where lines go and how they fade now.
+            clip.keyframes.clear();
+            clip.placement = Placement::FULL;
+        }
+        true
     }
 
     /// Renames a track. Returns `true` only if the name actually changed.
@@ -2651,5 +2775,49 @@ mod tests {
         assert!(project.rename_track(id, "New"));
         assert!(!project.rename_track(id, "New"));
         assert_eq!(project.track(id).unwrap().name, "New");
+    }
+
+    #[test]
+    fn subtitle_layers_hold_lines_and_a_layer_of_texts_becomes_one() {
+        let mut project = Project::with_starter_tracks();
+        let singer = project.add_subtitle_track("Singer");
+        // A subtitle layer is a layer: on top, movable, part of the picture.
+        assert_eq!(project.tracks()[0].id, singer);
+        assert!(project.subtitle_style(singer).is_some());
+        let line = project
+            .add_subtitle_line(singer, "Hello", 1000, 2000)
+            .unwrap();
+        assert_eq!(project.clip_text(line), Some("Hello"));
+        assert!(project.set_clip_text(line, "Hello there"));
+        assert!(!project.set_clip_text(line, "Hello there"));
+        assert_eq!(project.visual_layers_at(1500).len(), 1);
+        // Lines go only on subtitle layers; a picture never does.
+        let layer = project.add_default_named_track(TrackKind::Visual);
+        assert!(project.add_subtitle_line(layer, "No", 0, 1000).is_none());
+        assert!(!project.move_clip_to_track(line, layer));
+        // A layer of texts can become a subtitle layer, positioned where its
+        // first text was.
+        let lyrics = project.add_track("Lyrics", TrackKind::Visual);
+        let place = Placement {
+            x: 0.25,
+            y: 0.7,
+            width: 0.5,
+            height: 0.1,
+        };
+        project
+            .add_text_clip(lyrics, TextProperties::default(), place, 0, 1000)
+            .unwrap();
+        assert!(!project.convert_to_subtitles(singer));
+        assert!(project.convert_to_subtitles(lyrics));
+        let track = project.track(lyrics).unwrap();
+        assert_eq!(track.kind, TrackKind::Subtitles);
+        let style = track.subtitle_style.as_ref().unwrap();
+        assert_eq!(
+            style.position,
+            crate::SubtitlePosition::Fixed { x: 0.5, y: 0.75 }
+        );
+        // Saved and loaded again, nothing is lost.
+        let loaded = Project::from_vzx_str(&project.to_vzx_string().unwrap()).unwrap();
+        assert_eq!(loaded, project);
     }
 }

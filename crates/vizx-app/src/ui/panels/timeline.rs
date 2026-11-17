@@ -1232,6 +1232,7 @@ fn show_track_headers(
     let mut clicked_track: Option<TrackId> = None;
     let mut track_to_remove: Option<TrackId> = None;
     let mut layer_to_move: Option<(TrackId, LayerMove)> = None;
+    let mut layer_to_convert: Option<TrackId> = None;
     let selected_track = session.selected_track().map(|track| track.id);
     let rows = TrackRows::new(session.project().tracks());
 
@@ -1287,7 +1288,7 @@ fn show_track_headers(
             ui.separator();
             // The order of the layers decides what is in front: a layer
             // higher in the list is drawn over the ones below it.
-            if track.kind == TrackKind::Visual {
+            if track.kind.is_layer() {
                 for (label, to) in [
                     ("Bring to Front", LayerMove::ToFront),
                     ("Move Up", LayerMove::Up),
@@ -1297,6 +1298,23 @@ fn show_track_headers(
                     if ui.button(label).clicked() {
                         layer_to_move = Some((track.id, to));
                     }
+                }
+                ui.separator();
+            }
+            if track.kind == TrackKind::Subtitles {
+                if ui.button("Subtitle Editor...").clicked() {
+                    clicked_track = Some(track.id);
+                    *requested_command = Some(AppCommand::OpenSubtitleEditor);
+                }
+                ui.separator();
+            } else if track.kind == TrackKind::Visual && holds_only_texts(session.project(), track)
+            {
+                let button = ui.button("Convert to Subtitle Layer").on_hover_text(
+                    "The texts become lines of subtitles: one look for all of them, kept \
+                     inside the frame, and edited in the Subtitle Editor",
+                );
+                if button.clicked() {
+                    layer_to_convert = Some(track.id);
                 }
                 ui.separator();
             }
@@ -1335,6 +1353,19 @@ fn show_track_headers(
     if let Some((id, to)) = layer_to_move {
         session.edit_project(|project| project.move_layer(id, to));
     }
+    if let Some(id) = layer_to_convert {
+        session.edit_project(|project| project.convert_to_subtitles(id));
+    }
+}
+
+/// Whether a layer holds texts and nothing else (lyrics added as texts).
+fn holds_only_texts(project: &vizx_project::Project, track: &Track) -> bool {
+    !track.clips.is_empty()
+        && track.clips.iter().all(|clip| {
+            project
+                .media_source(clip.media)
+                .is_some_and(|media| media.text().is_some())
+        })
 }
 
 /// Where each track's lane is, measured down from the top of the first one.
@@ -1357,7 +1388,7 @@ impl TrackRows {
         for track in tracks {
             let height = match track.kind {
                 TrackKind::Audio => AUDIO_TRACK_HEIGHT,
-                TrackKind::Visual => VISUAL_TRACK_HEIGHT,
+                TrackKind::Visual | TrackKind::Subtitles => VISUAL_TRACK_HEIGHT,
             };
             rows.push(TrackRow { top, height });
             top += height;
@@ -1516,6 +1547,7 @@ fn track_color(kind: TrackKind) -> Color32 {
     match kind {
         TrackKind::Audio => Color32::from_rgb(86, 148, 222),
         TrackKind::Visual => theme::ACCENT,
+        TrackKind::Subtitles => Color32::from_rgb(232, 196, 92),
     }
 }
 

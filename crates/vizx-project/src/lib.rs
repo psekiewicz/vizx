@@ -18,6 +18,7 @@ mod motion;
 mod overlap;
 mod project;
 mod settings;
+mod subtitles;
 mod track;
 
 pub use animation::{FrameAnimation, FrameLayout, sequence_frame_path, split_numbered_path};
@@ -31,6 +32,7 @@ pub use metadata::ProjectMetadata;
 pub use motion::{Easing, KEYFRAME_TOLERANCE_MILLISECONDS, Keyframe, Motion, Transform};
 pub use project::{LayerMove, Marker, Project};
 pub use settings::{FrameRate, ProjectSettings};
+pub use subtitles::{SubtitleFit, SubtitlePosition, SubtitleStyle};
 pub use track::{
     AudioInput, AudioReaction, BlendMode, Clip, ClipEffects, ClipId, Placement, ReactionBand,
     ReactionEffect, Track, TrackId, TrackKind,
@@ -84,4 +86,6 @@ pub const PROJECT_FILE_EXTENSION: &str = "vzx";
 /// - 22: a clip's `effects`, a reaction's `shake` and `drives_effects`,
 ///   and effects layers (`MediaContent::EffectsLayer`). Older files load
 ///   without effects.
-pub const CURRENT_FORMAT_VERSION: u32 = 22;
+/// - 23: subtitle layers (`TrackKind::Subtitles` with a `subtitle_style`)
+///   and a text's `outline`. Older files load without them.
+pub const CURRENT_FORMAT_VERSION: u32 = 23;

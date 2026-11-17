@@ -294,6 +294,8 @@ impl ExportJob {
         }
 
         let mut layers = Vec::new();
+        let (_, video_height) = export.video_size(project.settings.width, project.settings.height);
+        let subtitles = crate::subtitle_layout(project, video_height);
         // The project lists layers from the top down; drawing goes from the
         // bottom up.
         for track in project.tracks().iter().rev() {
@@ -304,7 +306,15 @@ impl ExportJob {
                 if !media.is_visual() {
                     continue;
                 }
-                let content = if media.image().is_some() {
+                let mut motion = clip.motion();
+                let content = if track.kind == vizx_project::TrackKind::Subtitles {
+                    // The layer decides the look and the place.
+                    let Some(line) = subtitles.get(&clip.id) else {
+                        continue;
+                    };
+                    motion = line.motion.clone();
+                    ExportContent::Text(line.text.clone())
+                } else if media.image().is_some() {
                     ExportContent::Image(PathBuf::from(&media.path))
                 } else if let Some(animation) = media.animation() {
                     ExportContent::Animation(PathBuf::from(&media.path), animation.clone())
@@ -322,7 +332,7 @@ impl ExportJob {
                     content,
                     start_seconds: clip.start_milliseconds as f64 / 1000.0,
                     duration_seconds: clip.duration_milliseconds as f64 / 1000.0,
-                    motion: clip.motion(),
+                    motion,
                     reaction: clip.reaction,
                     sharp_pixels: project.clip_sharp_pixels(clip),
                     blend: layer_blend(clip.blend_mode),

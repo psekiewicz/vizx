@@ -16,6 +16,7 @@ pub mod project_settings_window;
 pub mod recovery_window;
 pub mod shortcuts_window;
 pub mod status_bar;
+pub mod subtitle_editor;
 pub mod toolbar;
 pub mod unsaved_changes_dialog;
 pub mod visualizer_browser;
@@ -83,6 +84,7 @@ pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
     );
     ui.separator();
     item(ui, "Visual Layer", "", AppCommand::AddVisualLayer);
+    item(ui, "Subtitle Layer", "", AppCommand::AddSubtitleLayer);
     item(ui, "Audio Track", "", AppCommand::AddAudioTrack);
 
     chosen

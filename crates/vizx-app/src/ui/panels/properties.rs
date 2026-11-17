@@ -73,13 +73,18 @@ fn track_properties(
         }
     }
 
-    if !track.clips.is_empty() {
+    let selected_clip = session.selected_clip_id();
+    if track.kind == TrackKind::Subtitles {
+        match selected_clip.and_then(|id| track.clips.iter().find(|clip| clip.id == id)) {
+            Some(clip) => subtitle_line_properties(ui, session, clip),
+            None => crate::ui::subtitle_editor::style_editor(ui, session, requested_command, track),
+        }
+    } else if !track.clips.is_empty() {
         ui.add_space(8.0);
         ui.label(egui::RichText::new("Content").strong());
         ui.separator();
         // With one clip selected, only that clip is shown; with the whole
         // track selected, all of its clips.
-        let selected_clip = session.selected_clip_id();
         let shown_clips = track
             .clips
             .iter()
@@ -206,6 +211,35 @@ fn track_properties(
     if ui.button("Delete Track").clicked() {
         session.remove_track(track.id);
     }
+}
+
+/// One line of a subtitle layer: its words and times, and how it moves
+/// with the music. Its look and place come from the layer.
+fn subtitle_line_properties(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new("Subtitle Line").strong());
+    ui.separator();
+    let mut words = session
+        .project()
+        .clip_text(clip.id)
+        .unwrap_or_default()
+        .replace('\n', " | ");
+    let field = ui
+        .add(egui::TextEdit::multiline(&mut words).desired_rows(2))
+        .on_hover_text("Use | to break the line where you want");
+    if field.changed() {
+        let words = words.replace(" | ", "\n").replace('|', "\n");
+        session.edit_project(|project| project.set_clip_text(clip.id, &words));
+    }
+    timing_editor(ui, session, clip);
+    ui.label(
+        egui::RichText::new("Look and place: select the layer. All lines: Subtitle Editor.")
+            .small()
+            .color(theme::TEXT_MUTED),
+    );
+    audio_input_selector(ui, session, clip);
+    opacity_and_reaction_editor(ui, session, clip, false);
+    effects_editor(ui, session, clip);
 }
 
 /// Lets the user choose which audio a visualizer reacts to: everything, or

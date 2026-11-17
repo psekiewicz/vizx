@@ -201,6 +201,10 @@ pub struct TextProperties {
     pub color: [f64; 3],
     /// How lines of different length are lined up.
     pub alignment: TextAlignment,
+    /// Thickness of an outline around the letters, as a fraction of their
+    /// size; 0 draws none.
+    pub outline: f64,
+    pub outline_color: [f64; 3],
 }
 
 impl TextProperties {
@@ -215,13 +219,20 @@ impl TextProperties {
         } else {
             Self::default().size
         };
-        self.color = self.color.map(|part| {
+        let unit = |part: f64| {
             if part.is_finite() {
                 part.clamp(0.0, 1.0)
             } else {
                 1.0
             }
-        });
+        };
+        self.color = self.color.map(unit);
+        self.outline_color = self.outline_color.map(unit);
+        self.outline = if self.outline.is_finite() {
+            self.outline.clamp(0.0, crate::SubtitleStyle::OUTLINE_MAX)
+        } else {
+            0.0
+        };
         self
     }
 }
@@ -234,6 +245,8 @@ impl Default for TextProperties {
             size: 0.12,
             color: [1.0, 1.0, 1.0],
             alignment: TextAlignment::Center,
+            outline: 0.0,
+            outline_color: [0.0, 0.0, 0.0],
         }
     }
 }

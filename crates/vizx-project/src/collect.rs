@@ -96,6 +96,14 @@ impl Project {
                 media.path = new_path;
             }
         }
+        // The font of a subtitle layer belongs to the layer.
+        for track in project.tracks_mut() {
+            if let Some(style) = &mut track.subtitle_style
+                && let Some(font) = planner.file(&style.font_path)
+            {
+                style.font_path = font;
+            }
+        }
         let mut moved_paths: Vec<(String, String)> = planner.placed.into_iter().collect();
         moved_paths.sort();
         CollectionPlan {

@@ -1,7 +1,8 @@
 //! The Lyrics window: the quick way to make a "text video". The words of a
-//! song are pasted in, one subtitle per line, and turned into text clips on
-//! a "Lyrics" layer, timed by tapping along with the music, spread over a
+//! song are pasted in, one subtitle per line, and turned into lines of a
+//! subtitle layer, timed by tapping along with the music, spread over a
 //! stretch of time, one every few beats, or read from an .lrc/.srt file.
+//! The lines are then fixed in the Subtitle Editor.
 
 use eframe::egui;
 use vizx_core::{LyricLine, LyricsStyle};
@@ -233,7 +234,7 @@ fn setup_panel(ui: &mut egui::Ui, app: &mut VizxApp) {
         .project()
         .tracks()
         .iter()
-        .filter(|track| track.kind == TrackKind::Visual)
+        .filter(|track| track.kind == TrackKind::Subtitles)
         .map(|track| (track.id, track.name.clone()))
         .collect();
     if app

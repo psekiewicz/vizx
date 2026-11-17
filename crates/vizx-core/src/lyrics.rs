@@ -43,6 +43,29 @@ impl Default for LyricsStyle {
     }
 }
 
+impl LyricsStyle {
+    /// The same look for a subtitle layer, keeping its outline and fit.
+    pub fn subtitle_style(
+        &self,
+        keep: &vizx_project::SubtitleStyle,
+    ) -> vizx_project::SubtitleStyle {
+        vizx_project::SubtitleStyle {
+            font_path: self.text.font_path.clone(),
+            size: self.text.size,
+            color: self.text.color,
+            alignment: self.text.alignment,
+            position: vizx_project::SubtitlePosition::Fixed {
+                x: 0.5,
+                y: self.height,
+            },
+            fade_seconds: self.fade_seconds,
+            pop: self.pop,
+            ..keep.clone()
+        }
+        .sanitized()
+    }
+}
+
 /// The keyframes that fade a line in and out (and let it pop), for a clip
 /// at `placement` lasting `duration_milliseconds`. Empty without a fade.
 pub fn lyric_keyframes(
