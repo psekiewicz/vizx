@@ -1,0 +1,14 @@
+{
+    "name": "Kaleidoscope",
+    "author": "VizX",
+    "description": "A mirrored, slowly turning flower of light: petals grow with the spectrum, rings ripple outwards with the bass and the colors drift around the wheel. Black stays transparent.",
+    "parameters": [
+        { "id": "mirrors", "name": "Mirrors", "kind": "number", "min": 2, "max": 16, "default": 6, "step": 1 },
+        { "id": "spin", "name": "Spin", "kind": "number", "min": -1.0, "max": 1.0, "default": 0.1 },
+        { "id": "zoom", "name": "Zoom", "kind": "number", "min": 0.3, "max": 3.0, "default": 1.0 },
+        { "id": "petals", "name": "Petal length", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.6 },
+        { "id": "ripples", "name": "Ripples", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.5 },
+        { "id": "colors", "name": "Color drift", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.3 },
+        { "id": "saturation", "name": "Saturation", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.8 }
+    ]
+}

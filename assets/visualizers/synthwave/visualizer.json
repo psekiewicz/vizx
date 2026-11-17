@@ -1,0 +1,17 @@
+{
+    "name": "Synthwave",
+    "author": "VizX",
+    "description": "A retro sunset: a striped sun that swells with the bass, mountains shaped by the spectrum and a glowing grid floor racing towards you, jumping forward on the beat. The sky stays transparent.",
+    "parameters": [
+        { "id": "horizon", "name": "Horizon", "kind": "number", "min": 0.3, "max": 0.8, "default": 0.58 },
+        { "id": "speed", "name": "Speed", "kind": "number", "min": 0.0, "max": 3.0, "default": 0.8 },
+        { "id": "kick", "name": "Beat jump", "kind": "number", "min": 0.0, "max": 2.0, "default": 0.4 },
+        { "id": "sun", "name": "Sun size", "kind": "number", "min": 0.0, "max": 0.6, "default": 0.3 },
+        { "id": "mountains", "name": "Mountain height", "kind": "number", "min": 0.0, "max": 0.4, "default": 0.16 },
+        { "id": "grid", "name": "Grid lines", "kind": "number", "min": 4, "max": 40, "default": 14, "step": 1 },
+        { "id": "color_sun_top", "name": "Sun top", "kind": "color", "default": [1.0, 0.85, 0.2] },
+        { "id": "color_sun_bottom", "name": "Sun bottom", "kind": "color", "default": [1.0, 0.15, 0.55] },
+        { "id": "color_grid", "name": "Grid", "kind": "color", "default": [1.0, 0.2, 0.85] },
+        { "id": "color_ground", "name": "Ground", "kind": "color", "default": [0.06, 0.0, 0.12] }
+    ]
+}

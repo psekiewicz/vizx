@@ -1,0 +1,14 @@
+{
+    "name": "Warp Stars",
+    "author": "VizX",
+    "description": "Stars streaming out from the middle as if jumping to light speed. Every beat throws them forward; loud parts stretch them into streaks. The space between them stays transparent.",
+    "parameters": [
+        { "id": "speed", "name": "Speed", "kind": "number", "min": 0.0, "max": 3.0, "default": 0.5 },
+        { "id": "kick", "name": "Beat jump", "kind": "number", "min": 0.0, "max": 2.0, "default": 0.6 },
+        { "id": "density", "name": "Density", "kind": "number", "min": 0.05, "max": 1.0, "default": 0.35 },
+        { "id": "streak", "name": "Streaks", "kind": "number", "min": 0.0, "max": 1.0, "default": 0.6 },
+        { "id": "size", "name": "Star size", "kind": "number", "min": 0.3, "max": 3.0, "default": 1.0 },
+        { "id": "color", "name": "Color", "kind": "color", "default": [0.75, 0.88, 1.0] },
+        { "id": "color_beat", "name": "Beat color", "kind": "color", "default": [1.0, 0.35, 0.75] }
+    ]
+}

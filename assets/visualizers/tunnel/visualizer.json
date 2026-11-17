@@ -1,0 +1,14 @@
+{
+    "name": "Tunnel",
+    "author": "VizX",
+    "description": "Flying through a tunnel of rings and light stripes. It lurches forward on every beat, its walls light up with the spectrum and the far end glows with the bass.",
+    "parameters": [
+        { "id": "speed", "name": "Speed", "kind": "number", "min": 0.0, "max": 3.0, "default": 0.6 },
+        { "id": "kick", "name": "Beat lurch", "kind": "number", "min": 0.0, "max": 2.0, "default": 0.5 },
+        { "id": "rings", "name": "Rings", "kind": "number", "min": 0.5, "max": 6.0, "default": 2.0 },
+        { "id": "stripes", "name": "Stripes", "kind": "number", "min": 3, "max": 48, "default": 16, "step": 1 },
+        { "id": "twist", "name": "Twist", "kind": "number", "min": -1.0, "max": 1.0, "default": 0.15 },
+        { "id": "color_near", "name": "Near color", "kind": "color", "default": [0.1, 0.8, 1.0] },
+        { "id": "color_far", "name": "Far color", "kind": "color", "default": [1.0, 0.2, 0.7] }
+    ]
+}

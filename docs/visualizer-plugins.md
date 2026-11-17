@@ -2,10 +2,28 @@
 
 A VizX visualizer is a small program that decides the color of every pixel
 from the sound. It is written in **WGSL**, the shading language of WebGPU,
-and runs on the graphics card. The five visualizers that ship with VizX
-(Spectrum Bars, Oscilloscope, Waterfall, Core, Ring) are ordinary plugins; they
-live in [`assets/visualizers`](../assets/visualizers) and are good starting
-points to copy.
+and runs on the graphics card. The eleven visualizers that ship with VizX
+are ordinary plugins; they live in
+[`assets/visualizers`](../assets/visualizers) and are good starting points
+to copy:
+
+| Visualizer | What it shows | Technique worth copying |
+|---|---|---|
+| Spectrum Bars | bars of the spectrum | cutting the picture into bands |
+| Oscilloscope | the sound wave | distance to a curve, trails |
+| Waterfall | the spectrum scrolling by | `spectrum_history` |
+| Core | a ring with spectrum rays | polar coordinates, echo |
+| Ring | an NCS-style ring of dots | dots without loops over dots |
+| Tunnel | flying through a tube of rings | depth from `1 / distance`, lines a fixed number of pixels wide |
+| Warp Stars | stars streaking outwards | cells in angle and log-distance, hashing |
+| Ridgelines | rows of past spectra, front hides back | a loop from front to back that stops at the first row covering the pixel |
+| Synthwave | sun, spectrum mountains, grid floor | a perspective floor from one division |
+| Kaleidoscope | mirrored petals and ripples | folding the angle into a wedge |
+| Beat Burst | sparks and a shockwave on each beat | per-beat randomness from `beat_count`, trails from `previous_frame` |
+
+Several of them move forward on the beat with
+`vizx.beat_count - exp(-vizx.since_beat * k)`: the count jumps by one on a
+beat, and the exponential turns the jump into a quick, smooth lurch.
 
 Nothing has to be compiled or installed. A plugin is a folder with two text
 files, and VizX reloads it whenever you save one of them.
