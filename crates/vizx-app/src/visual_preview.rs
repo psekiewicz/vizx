@@ -160,6 +160,10 @@ pub struct VisualPreview {
     /// Why the picture could not be composed, if it could not.
     composition_error: Option<String>,
     frame_pixels: Vec<u8>,
+    /// Every clip that has to be pre-rendered and how many frames it has,
+    /// also those still waiting for their turn, so the progress counts all
+    /// of the work and never goes back when the next clip starts.
+    wanted_frames: Vec<(ClipId, u32)>,
     /// Where the subtitle lines go, and what they were worked out from (it
     /// is worked out again only when that changes).
     subtitles: (String, HashMap<ClipId, vizx_core::SubtitleLine>),
@@ -182,6 +186,7 @@ impl VisualPreview {
             composition_error: None,
             frame_pixels: Vec::new(),
             subtitles: (String::new(), HashMap::new()),
+            wanted_frames: Vec::new(),
         }
     }
 
@@ -259,6 +264,10 @@ impl VisualPreview {
                     },
                 ));
             }
+            self.wanted_frames = wanted
+                .iter()
+                .map(|(clip, job)| (*clip, job.frame_count))
+                .collect();
             self.start_and_drop_renders(ctx, wanted);
         }
 
@@ -715,19 +724,30 @@ impl VisualPreview {
     /// Overall pre-render progress for the status bar: finished and total
     /// frames of all clips, and the disk space the stored frames use. `None`
     /// when the project has nothing to pre-render.
+    ///
+    /// Clips are rendered one after another; the clips still waiting count
+    /// with all their frames, so the percentage only ever goes up.
     pub fn progress(&self) -> Option<PrerenderProgress> {
-        if self.prerenders.is_empty() {
+        if self.prerenders.is_empty() && self.wanted_frames.is_empty() {
             return None;
         }
-        Some(PrerenderProgress {
-            finished_frames: self
-                .prerenders
-                .values()
-                .map(Prerender::finished_frame_count)
-                .sum(),
-            total_frames: self.prerenders.values().map(Prerender::frame_count).sum(),
+        let mut progress = PrerenderProgress {
+            finished_frames: 0,
+            total_frames: 0,
             stored_bytes: self.prerenders.values().map(Prerender::stored_bytes).sum(),
-        })
+            finished_clips: 0,
+            total_clips: self.wanted_frames.len(),
+        };
+        for (clip, frames) in &self.wanted_frames {
+            progress.total_frames += frames;
+            if let Some(prerender) = self.prerenders.get(clip) {
+                progress.finished_frames += prerender.finished_frame_count().min(*frames);
+                if prerender.is_finished() {
+                    progress.finished_clips += 1;
+                }
+            }
+        }
+        Some(progress)
     }
 }
 
@@ -735,6 +755,9 @@ pub struct PrerenderProgress {
     pub finished_frames: u32,
     pub total_frames: u32,
     pub stored_bytes: u64,
+    /// Clips whose frames are all there, of all clips to pre-render.
+    pub finished_clips: usize,
+    pub total_clips: usize,
 }
 
 /// A number that identifies a clip's picture for the compositor.

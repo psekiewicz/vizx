@@ -32,9 +32,11 @@ pub fn show(ui: &mut egui::Ui, app: &VizxApp) {
                 let megabytes = progress.stored_bytes as f64 / (1024.0 * 1024.0);
                 let text = if progress.finished_frames < progress.total_frames {
                     format!(
-                        "Pre-render {}%",
+                        "Pre-render {}% (clip {} of {})",
                         u64::from(progress.finished_frames) * 100
-                            / u64::from(progress.total_frames.max(1))
+                            / u64::from(progress.total_frames.max(1)),
+                        (progress.finished_clips + 1).min(progress.total_clips),
+                        progress.total_clips
                     )
                 } else {
                     format!("Pre-render ready ({megabytes:.0} MB)")
