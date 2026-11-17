@@ -10,6 +10,7 @@
 #   onnxruntime*.dll    stem separation
 #   models\             HTDemucs and Whisper models
 #   data\               pre-rendered frames and stems (portable mode)
+#   Install models.cmd  downloads the models on a computer without them
 #
 # Usage (from the repository root, in PowerShell):
 #   .\scripts\package-prototype.ps1 [-Destination D:\VizX-prototype]
@@ -72,6 +73,10 @@ Place-File "$OnnxRuntimeDir\lib\onnxruntime.dll" "$Destination\onnxruntime.dll"
 Place-File "$OnnxRuntimeDir\lib\onnxruntime_providers_shared.dll" "$Destination\onnxruntime_providers_shared.dll"
 Place-File $DemucsModel "$Destination\models\$(Split-Path -Leaf $DemucsModel)"
 Place-File $WhisperModel "$Destination\models\$(Split-Path -Leaf $WhisperModel)"
+
+# The installer downloads missing models on another computer.
+Copy-Item "$PSScriptRoot\install-models.ps1" "$Destination\install-models.ps1" -Force
+Copy-Item "$PSScriptRoot\Install models.cmd" "$Destination\Install models.cmd" -Force
 
 foreach ($folder in 'visualizers', 'presets') {
     $target = "$Destination\$folder"

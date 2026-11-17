@@ -81,6 +81,13 @@ uses a quick built-in separation. VizX looks for `onnxruntime.dll` and
 `.onnx` file). `VIZX_STEMS_DIR` puts the separated stems in one folder
 instead of next to each song. Everything runs locally.
 
+The easiest way to get the models: run `scripts\Install models.cmd` (or the
+copy next to `vizx.exe` in a packaged build). A small window downloads
+HTDemucs, ONNX Runtime and the Whisper models for lyrics recognition from
+where their authors publish them (Hugging Face, GitHub), checks every file
+against its SHA-256, and puts it next to `vizx.exe`. Interrupted downloads
+continue where they stopped; nothing needs administrator rights.
+
 Pre-rendered MilkDrop frames can take gigabytes; they go to the system's
 temporary folder, or to `VIZX_CACHE_DIR` when it is set.
 
