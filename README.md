@@ -175,12 +175,22 @@ The backend and adapter in use are shown on the right side of the status bar.
 
 ### Portable build (Windows)
 
-`scripts\package-prototype.ps1` builds the release version and gathers
-it, with FFmpeg, projectM, ONNX Runtime, the models and the bundled
-visualizers and presets, into one folder that runs without cargo or
-environment variables. A `data` folder next to `vizx.exe` keeps
-pre-rendered frames and stems there instead of the system's temporary
-folder.
+Double-click `scripts\Package VizX.cmd` (or run
+`scripts\package-prototype.ps1` in PowerShell). It builds the release
+version and gathers it into `dist\VizX` in the repository, or into a
+folder given as the first argument. The folder holds `vizx.exe`, the
+bundled visualizers and presets, and `Install models.cmd`, and it runs
+without cargo or environment variables.
+
+FFmpeg, projectM, ONNX Runtime and the models are copied in when the
+script finds them: from the `VIZX_*` settings (environment variables or
+the `[env]` section of cargo's `config.toml`), and FFmpeg also from the
+`PATH`. Anything not found is left out with a note at the end. Run
+`Install models.cmd` in the folder to download the models and ONNX
+Runtime.
+
+A `data` folder next to `vizx.exe` keeps pre-rendered frames and stems
+there instead of the system's temporary folder.
 
 ## Showcase video
 

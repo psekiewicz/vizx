@@ -30,3 +30,6 @@ $RECYCLE.BIN/
 .env.*
 *.tmp
 *.log
+
+# --- Portable build (scripts/package-prototype.ps1) ---
+/dist/

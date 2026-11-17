@@ -743,10 +743,14 @@ the slow steps and run once per song (their results are kept).
 ### Portable prototype
 
 `scripts\package-prototype.ps1` builds the release version and gathers it
-into one folder (default `D:\VizX-prototype`) that runs without cargo or
-environment variables: `vizx.exe`, `ffmpeg.exe`, projectM and GLEW, ONNX
-Runtime, `models\` (hard-linked when on the same drive), the bundled
-`visualizers\` and `presets\`, and an empty `data\`. A `data` folder next
+into one folder (default `dist\VizX` in the repository; `Package
+VizX.cmd` starts it) that runs without cargo or environment variables:
+`vizx.exe`, the bundled `visualizers\` and `presets\`, `Install
+models.cmd` and an empty `data\`, plus whatever of `ffmpeg.exe`, projectM
+and GLEW, ONNX Runtime and `models\` (hard-linked when on the same drive)
+it finds through the `VIZX_*` settings, in the environment or in the
+`[env]` section of cargo's `config.toml`. Nothing about the development
+machine's folders is assumed. A `data` folder next
 to the executable switches on portable mode (`portable_data_folder`):
 pre-rendered frames and stems go there instead of the system's temporary
 folder and next to the songs.
