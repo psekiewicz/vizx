@@ -51,16 +51,17 @@ struct Part {
 enum PartKind {
     Intro,
     Verse,
-    PreChorus,
+    /// The refrain: it starts at "Wipe out what you've (I've) been told".
     Chorus,
     Bridge,
     Countdown,
     Rap,
-    Outro,
 }
 
-/// ANTIVILLAIN, from its lyrics' timing.
-const PARTS: [Part; 13] = [
+/// ANTIVILLAIN, from its lyrics' timing. Every chorus starts at "Wipe out
+/// what you've been told" (the third one, sung by the second singer, at
+/// "Wipe out what I've been told").
+const PARTS: [Part; 10] = [
     Part {
         start: 0.0,
         name: "Intro",
@@ -75,32 +76,20 @@ const PARTS: [Part; 13] = [
     },
     Part {
         start: 40.2,
-        name: "Pre-chorus 1",
-        caption: "PRE-CHORUS  -  effects layer: shake and tint on the beat",
-        kind: PartKind::PreChorus,
-    },
-    Part {
-        start: 52.8,
         name: "Chorus 1",
-        caption: "CHORUS  -  spectrum bars, sprite sheets stepping on beats, glitch on the drums",
+        caption: "CHORUS  -  new colors and preset, spectrum bars, sprite sheets on the beat",
         kind: PartKind::Chorus,
     },
     Part {
         start: 65.8,
         name: "Verse 2",
-        caption: "VERSE 2  -  another preset, the emblem grows with the bass",
+        caption: "VERSE 2  -  back to the verse colors; the emblem grows with the bass",
         kind: PartKind::Verse,
     },
     Part {
         start: 91.5,
-        name: "Pre-chorus 2",
-        caption: "PRE-CHORUS  -  blend modes: Add, Screen, Lighten",
-        kind: PartKind::PreChorus,
-    },
-    Part {
-        start: 104.1,
         name: "Chorus 2",
-        caption: "CHORUS  -  color split and glow follow the drums",
+        caption: "CHORUS  -  color split and glitch follow the drums",
         kind: PartKind::Chorus,
     },
     Part {
@@ -117,39 +106,50 @@ const PARTS: [Part; 13] = [
     },
     Part {
         start: 178.0,
-        name: "Pre-chorus 3",
-        caption: "PRE-CHORUS  -  grain and vignette",
-        kind: PartKind::PreChorus,
-    },
-    Part {
-        start: 191.1,
         name: "Chorus 3",
-        caption: "CHORUS  -  everything at once",
+        caption: "CHORUS  -  the second singer: own subtitle layer and color (Separate Singers)",
         kind: PartKind::Chorus,
     },
     Part {
         start: 203.3,
         name: "Rap",
-        caption: "RAP  -  core visualizer, hard glitch and shake on every beat",
+        caption: "RAP  -  two singers alternating, hard glitch and shake on every beat",
         kind: PartKind::Rap,
     },
     Part {
         start: 241.9,
-        name: "Outro",
-        caption: "OUTRO  -  made with VizX",
-        kind: PartKind::Outro,
+        name: "Final chorus",
+        caption: "FINAL CHORUS  -  made with VizX",
+        kind: PartKind::Chorus,
     },
 ];
 
-/// MilkDrop collection folders, one per part, in turn.
-const PRESET_CATEGORIES: [&str; 6] = [
-    "Supernova",
-    "Fractal",
-    "Hypnotic",
-    "Particles",
-    "Reaction",
-    "Geometric",
-];
+/// The picture changes only where a chorus starts or ends: each chorus,
+/// and each stretch between two choruses (after the intro), is one
+/// section with its own MilkDrop preset, background and colors. `true`
+/// for a chorus.
+fn sections(parts: &[(f64, f64, &Part)]) -> Vec<(f64, f64, bool)> {
+    let mut sections: Vec<(f64, f64, bool)> = Vec::new();
+    for (start, stop, part) in parts {
+        if part.kind == PartKind::Intro {
+            continue;
+        }
+        let is_chorus = part.kind == PartKind::Chorus;
+        match sections.last_mut() {
+            Some(last) if !is_chorus && !last.2 => last.1 = *stop,
+            _ => sections.push((*start, *stop, is_chorus)),
+        }
+    }
+    sections
+}
+/// MilkDrop collection folders: bright ones for the choruses, calmer ones
+/// between them.
+const CHORUS_CATEGORIES: [&str; 3] = ["Supernova", "Particles", "Sparkle"];
+const VERSE_CATEGORIES: [&str; 3] = ["Fractal", "Hypnotic", "Geometric"];
+
+/// The two color schemes: between the choruses and in them.
+const VERSE_TINT: [f64; 3] = [0.45, 0.3, 1.0];
+const CHORUS_TINT: [f64; 3] = [1.0, 0.42, 0.12];
 
 const TITLE_FONT: &str = r"C:\Windows\Fonts\ariblk.ttf";
 
@@ -165,7 +165,7 @@ fn run() -> Result<(), String> {
     if args.len() < 4 {
         return Err(
             "usage: showcase <song> <stems folder> <lyrics project> <output folder> \
-             [--height N] [--samples]"
+             [--height N] [--samples] [--official lyrics.txt] [--singers N]"
                 .to_owned(),
         );
     }
@@ -175,6 +175,8 @@ fn run() -> Result<(), String> {
     let output = PathBuf::from(&args[3]);
     let mut height = 1080;
     let mut samples = false;
+    let mut official = None;
+    let mut singers = Some(2);
     let mut rest = args[4..].iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -185,6 +187,20 @@ fn run() -> Result<(), String> {
                     .ok_or("--height needs a number")?;
             }
             "--samples" => samples = true,
+            "--official" => {
+                let file = rest.next().ok_or("--official needs a file")?;
+                official = Some(
+                    std::fs::read_to_string(file)
+                        .map_err(|error| format!("could not read {file}: {error}"))?,
+                );
+            }
+            "--singers" => {
+                let count: usize = rest
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .ok_or("--singers needs a number (0 lets VizX decide)")?;
+                singers = (count > 0).then_some(count);
+            }
             other => return Err(format!("unknown option {other}")),
         }
     }
@@ -196,8 +212,14 @@ fn run() -> Result<(), String> {
     let made = make_assets(&assets, &ffmpeg)?;
 
     println!("Building the project...");
-    let session = build_project(&song, &stems_folder, &lyrics_project, &made, &ffmpeg)?;
-    let mut session = session;
+    let mut session = build_project(&song, &stems_folder, &made, &ffmpeg)?;
+    lyrics_and_singers(
+        &mut session,
+        &song,
+        &lyrics_project,
+        official.as_deref(),
+        singers,
+    )?;
     let project_path = output.join("ANTIVILLAIN showcase.vzx");
     session
         .save_as(&project_path)
@@ -214,7 +236,6 @@ fn run() -> Result<(), String> {
 fn build_project(
     song: &Path,
     stems_folder: &Path,
-    lyrics_project: &Path,
     made: &Assets,
     ffmpeg: &Path,
 ) -> Result<EditorSession, String> {
@@ -289,17 +310,47 @@ fn build_project(
         );
     });
 
-    // 2. MilkDrop presets behind everything, a different one in every part
-    //    after the intro.
+    // ... and another one in every chorus, right above it.
+    let mut chorus_background: Option<TrackId> = None;
+    for (start, stop, is_chorus) in sections(&parts) {
+        if !is_chorus {
+            continue;
+        }
+        let added = session.import_background_image(&made.background_chorus)?;
+        let (clip, track) = segment(&mut session, added, chorus_background, start, stop);
+        if chorus_background.is_none() {
+            edit(&mut session, |project| {
+                project.move_layer(track, vizx_project::LayerMove::Up);
+                project.rename_track(track, "Background (choruses)");
+            });
+        }
+        chorus_background = Some(track);
+        let duration = milliseconds(stop - start) as i64;
+        edit(&mut session, |project| {
+            let resting = project.clip(clip).expect("just added").1.placement;
+            project.set_clip_keyframes(
+                clip,
+                vec![
+                    key(0, scaled(resting, 1.2), -3.0, 1.0, Easing::Smooth),
+                    key(duration, resting, 0.0, 1.0, Easing::Smooth),
+                ],
+            );
+        });
+    }
+
+    // 2. MilkDrop presets behind everything: a new one only where a
+    //    chorus starts or ends.
     let library = find_bundled_presets()
         .and_then(|root| PresetLibrary::scan(&root).ok())
         .ok_or("the bundled MilkDrop presets were not found")?;
     let mut backdrop: Option<TrackId> = None;
-    for (index, (start, stop, part)) in parts.iter().enumerate() {
-        if part.kind == PartKind::Intro {
-            continue;
-        }
-        let category = PRESET_CATEGORIES[index % PRESET_CATEGORIES.len()];
+    for (index, (start, stop, is_chorus)) in sections(&parts).iter().enumerate() {
+        let categories = if *is_chorus {
+            CHORUS_CATEGORIES
+        } else {
+            VERSE_CATEGORIES
+        };
+        let category = categories[(index / 2) % categories.len()];
         let in_category: Vec<_> = library
             .entries()
             .iter()
@@ -309,7 +360,13 @@ fn build_project(
             continue;
         }
         let entry = in_category[(index * 7) % in_category.len()];
-        println!("  {}: MilkDrop {} / {}", part.name, category, entry.name);
+        println!(
+            "  {:5.1} s {}: MilkDrop {} / {}",
+            start,
+            if *is_chorus { "chorus" } else { "verse " },
+            category,
+            entry.name
+        );
         let added = session.add_bundled_milkdrop_preset(entry);
         let (clip, track) = segment(&mut session, added, backdrop, *start, *stop);
         backdrop = Some(track);
@@ -319,6 +376,8 @@ fn build_project(
                 clip,
                 ClipEffects {
                     vignette: 0.35,
+                    tint: 0.4,
+                    tint_color: if *is_chorus { CHORUS_TINT } else { VERSE_TINT },
                     ..ClipEffects::default()
                 },
             );
@@ -410,12 +469,26 @@ fn build_project(
     name_track(&mut session, waterfall, "Waterfall");
 
     // 6. The ring, from the first verse to the end, on the drums.
-    let ring_spans = vec![(PARTS[1].start, end)];
+    //    Its color changes with the sections, like the background.
+    let ring_spans: Vec<(f64, f64)> = sections(&parts)
+        .iter()
+        .map(|(start, stop, _)| (*start, *stop))
+        .collect();
+    let chorus_spans = spans(&[PartKind::Chorus]);
     let ring = plugin(&mut session, "ring", ring_spans, |project, clip| {
+        let start = project.clip(clip).expect("added").1.start_milliseconds;
+        let in_chorus = chorus_spans
+            .iter()
+            .any(|(from, _)| milliseconds(*from) == start);
         project.set_clip_placement(clip, square(0.5, 0.5, 0.95));
         project.set_clip_audio_input(clip, drums);
         project.set_clip_blend_mode(clip, BlendMode::Add);
-        project.set_clip_parameter(clip, "color", vec![1.0, 0.25, 0.55]);
+        let color = if in_chorus {
+            vec![1.0, 0.78, 0.2]
+        } else {
+            vec![1.0, 0.25, 0.55]
+        };
+        project.set_clip_parameter(clip, "color", color);
         project.set_clip_parameter(clip, "spin", vec![0.08]);
         project.set_clip_reaction(
             clip,
@@ -479,7 +552,7 @@ fn build_project(
     let bars = plugin(
         &mut session,
         "spectrum-bars",
-        spans(&[PartKind::Chorus, PartKind::PreChorus, PartKind::Outro]),
+        spans(&[PartKind::Chorus]),
         |project, clip| {
             project.set_clip_placement(
                 clip,
@@ -567,6 +640,73 @@ fn build_project(
             project.set_clip_audio_input(clip, drums);
             project.set_clip_reaction(clip, reaction);
         });
+    }
+
+    // A flash of light where every chorus starts and ends, where the
+    // colors change.
+    let flash_track = session.add_track(TrackKind::Visual);
+    name_track(&mut session, Some(flash_track), "Chorus flashes");
+    let flash_size = vizx_project::ImageProperties {
+        width: 64,
+        height: 36,
+    };
+    let mut flash_media = None;
+    for (start, stop) in spans(&[PartKind::Chorus]) {
+        for at in [start, stop] {
+            if at >= end - 0.1 {
+                continue;
+            }
+            let from = (at - 0.08).max(0.0);
+            let clip = if let Some(media) = flash_media {
+                let mut added = None;
+                edit(&mut session, |project| {
+                    let template = project.media_source(media).cloned();
+                    let first = project
+                        .track(flash_track)
+                        .and_then(|track| track.clips.first().cloned());
+                    if let (Some(source), Some(mut clip)) = (template, first) {
+                        clip.keyframes.clear();
+                        added = project.paste_clip(&clip, &source, flash_track, milliseconds(from));
+                    }
+                });
+                added.ok_or("could not add a flash")?
+            } else {
+                let mut added = None;
+                edit(&mut session, |project| {
+                    let (media, track) =
+                        project.add_image(made.flash.to_string_lossy(), flash_size);
+                    flash_media = Some(media);
+                    let clip = project
+                        .track(track)
+                        .and_then(|layer| layer.clips.first())
+                        .map(|clip| clip.id);
+                    if let Some(clip) = clip {
+                        // Added to the first empty layer: the flash layer
+                        // itself, or another one it is moved from.
+                        if track != flash_track {
+                            project.move_clip_to_track(clip, flash_track);
+                            project.remove_track(track);
+                        }
+                        project.move_clip(clip, milliseconds(from));
+                    }
+                    added = clip;
+                });
+                added.ok_or("could not add a flash")?
+            };
+            edit(&mut session, |project| {
+                project.trim_clip_end(clip, milliseconds(from + 0.9));
+                project.set_clip_placement(clip, Placement::FULL);
+                project.set_clip_blend_mode(clip, BlendMode::Add);
+                project.set_clip_keyframes(
+                    clip,
+                    vec![
+                        key(0, Placement::FULL, 0.0, 0.0, Easing::Linear),
+                        key(80, Placement::FULL, 0.0, 0.85, Easing::Linear),
+                        key(900, Placement::FULL, 0.0, 0.0, Easing::Smooth),
+                    ],
+                );
+            });
+        }
     }
 
     // 13. Title in the intro: pops in, then flies off.
@@ -666,37 +806,6 @@ fn build_project(
         });
     }
 
-    // 15. The lyrics on top, popping in, with a glow.
-    let lines = lyric_lines(lyrics_project)?;
-    let lyrics_style = LyricsStyle {
-        text: TextProperties {
-            size: 0.058,
-            color: [1.0, 1.0, 1.0],
-            font_path: r"C:\Windows\Fonts\arialbd.ttf".to_owned(),
-            ..TextProperties::default()
-        },
-        height: 0.86,
-        fade_seconds: 0.18,
-        pop: true,
-    };
-    let lyrics = session.add_lyrics(&lines, &lyrics_style, None)?;
-    let lyric_clips: Vec<ClipId> = session
-        .project()
-        .track(lyrics)
-        .map(|track| track.clips.iter().map(|clip| clip.id).collect())
-        .unwrap_or_default();
-    edit(&mut session, |project| {
-        for clip in lyric_clips {
-            project.set_clip_effects(
-                clip,
-                ClipEffects {
-                    glow: 0.35,
-                    ..ClipEffects::default()
-                },
-            );
-        }
-    });
-
     // Layers that ended up empty (the starter layer) go.
     let empty: Vec<TrackId> = session
         .project()
@@ -711,7 +820,97 @@ fn build_project(
     Ok(session)
 }
 
-/// The look of the effects layer in one kind of part.
+/// The lyrics on top, popping in, with a glow: corrected to `official` if
+/// given (the published words on the recognized timing), and split into
+/// one subtitle layer per singer (`singers`: how many; `None`: decide).
+fn lyrics_and_singers(
+    session: &mut EditorSession,
+    song: &Path,
+    lyrics_project: &Path,
+    official: Option<&str>,
+    singers: Option<usize>,
+) -> Result<(), String> {
+    let lines = lyric_lines(lyrics_project)?;
+    let lyrics_style = LyricsStyle {
+        text: TextProperties {
+            size: 0.058,
+            color: [1.0, 1.0, 1.0],
+            font_path: r"C:\Windows\Fonts\arialbd.ttf".to_owned(),
+            ..TextProperties::default()
+        },
+        height: 0.86,
+        fade_seconds: 0.18,
+        pop: true,
+    };
+    let lyrics = session.add_lyrics(&lines, &lyrics_style, None)?;
+    if let Some(official) = official {
+        let mut count = 0;
+        edit(session, |project| {
+            count = vizx_core::apply_official_lyrics(project, &[lyrics], official);
+        });
+        println!("  {count} lines with the official words");
+    }
+
+    println!("Telling the singers apart...");
+    let audio = std::sync::Arc::new(
+        vizx_audio::decode_audio_file(song).map_err(|error| error.to_string())?,
+    );
+    let timed: Vec<(ClipId, f64, f64)> = session
+        .project()
+        .track(lyrics)
+        .map(|track| {
+            track
+                .clips
+                .iter()
+                .map(|clip| {
+                    (
+                        clip.id,
+                        clip.start_milliseconds as f64 / 1000.0,
+                        clip.end_milliseconds() as f64 / 1000.0,
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let placement = vizx_core::SongPlacement {
+        clip_start_seconds: 0.0,
+        source_offset_seconds: 0.0,
+        clip_duration_seconds: audio.duration_seconds(),
+    };
+    let job = vizx_core::SingerSeparation::start(audio, song, placement, timed, singers, || {})?;
+    let found = loop {
+        if let Some(outcome) = job.finished() {
+            break outcome?;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let mut layers = Vec::new();
+    edit(session, |project| {
+        layers = project.split_subtitle_layer(lyrics, &found);
+    });
+    println!("  {} singers", layers.len());
+
+    let clips: Vec<ClipId> = layers
+        .iter()
+        .filter_map(|layer| session.project().track(*layer))
+        .flat_map(|track| track.clips.iter().map(|clip| clip.id))
+        .collect();
+    edit(session, |project| {
+        for clip in clips {
+            project.set_clip_effects(
+                clip,
+                ClipEffects {
+                    glow: 0.35,
+                    ..ClipEffects::default()
+                },
+            );
+        }
+    });
+    Ok(())
+}
+
+/// The look of the effects layer in one kind of part (colors change only
+/// with the sections, see `sections`).
 fn part_effects(kind: PartKind) -> (ClipEffects, AudioReaction) {
     let beat = |shake: f64, scale: f64, drives_effects: bool| AudioReaction {
         band: ReactionBand::Beat,
@@ -739,15 +938,7 @@ fn part_effects(kind: PartKind) -> (ClipEffects, AudioReaction) {
             },
             beat(0.006, 0.012, false),
         ),
-        PartKind::PreChorus => (
-            ClipEffects {
-                tint: 0.55,
-                tint_color: [0.55, 0.2, 1.0],
-                vignette: 0.4,
-                ..none
-            },
-            beat(0.012, 0.02, true),
-        ),
+
         PartKind::Chorus => (
             ClipEffects {
                 color_split: 0.55,
@@ -762,8 +953,6 @@ fn part_effects(kind: PartKind) -> (ClipEffects, AudioReaction) {
             ClipEffects {
                 blur: 0.12,
                 glow: 0.5,
-                tint: 0.35,
-                tint_color: [0.3, 0.6, 1.0],
                 ..none
             },
             beat(0.004, 0.01, false),
@@ -771,8 +960,6 @@ fn part_effects(kind: PartKind) -> (ClipEffects, AudioReaction) {
         PartKind::Countdown => (
             ClipEffects {
                 grain: 0.5,
-                tint: 0.6,
-                tint_color: [1.0, 0.15, 0.2],
                 glitch: 0.2,
                 vignette: 0.6,
                 ..none
@@ -788,15 +975,6 @@ fn part_effects(kind: PartKind) -> (ClipEffects, AudioReaction) {
                 ..none
             },
             beat(0.04, 0.05, true),
-        ),
-        PartKind::Outro => (
-            ClipEffects {
-                vignette: 0.7,
-                blur: 0.2,
-                grain: 0.3,
-                ..none
-            },
-            AudioReaction::default(),
         ),
     }
 }
@@ -1102,6 +1280,8 @@ fn export(
 
 struct Assets {
     background: PathBuf,
+    background_chorus: PathBuf,
+    flash: PathBuf,
     emblem: PathBuf,
     sprite_sheet: PathBuf,
     sequence_first: PathBuf,
@@ -1133,6 +1313,26 @@ fn make_assets(folder: &Path, ffmpeg: &Path) -> Result<Assets, String> {
     }
     save(&picture, &background)?;
 
+    // The chorus background: the same glow in red and gold.
+    let background_chorus = folder.join("background chorus.png");
+    let mut picture = RgbaImage::new(1920, 1080);
+    for (x, y, pixel) in picture.enumerate_pixels_mut() {
+        let (u, v) = (f64::from(x) / 1920.0 - 0.5, f64::from(y) / 1080.0 - 0.5);
+        let glow = (-(u * u * 1.8 + v * v * 4.0) * 3.0).exp();
+        let rays = (0.5 + 0.5 * (v.atan2(u) * 12.0).sin()) * glow * 0.25;
+        let red = 0.08 + 0.7 * glow + rays;
+        let green = 0.02 + 0.3 * glow + rays * 0.6;
+        let blue = 0.03 + 0.05 * glow;
+        *pixel = Rgba([to_byte(red), to_byte(green), to_byte(blue), 255]);
+    }
+    save(&picture, &background_chorus)?;
+
+    // A white flash (stretched over the frame).
+    let flash = folder.join("flash.png");
+    save(
+        &RgbaImage::from_pixel(64, 36, Rgba([255, 240, 230, 255])),
+        &flash,
+    )?;
     // Emblem: a ring with a "V" inside, on transparency.
     let emblem = folder.join("emblem.png");
     let mut picture = RgbaImage::new(512, 512);
@@ -1263,6 +1463,8 @@ fn make_assets(folder: &Path, ffmpeg: &Path) -> Result<Assets, String> {
         emblem,
         sprite_sheet,
         sequence_first: sequence_folder.join("hexagon_0001.png"),
+        background_chorus,
+        flash,
         video,
     })
 }

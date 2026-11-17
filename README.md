@@ -149,7 +149,15 @@ marker and an on-screen caption naming its features):
 - effects layers with a look per part: camera shake and effects driven by
   the drums;
 - a keyframed title in a TrueType font, and the lyrics as popping
-  subtitles.
+  subtitles, split into one subtitle layer per singer (Separate Singers;
+  `--singers N`, 0 lets VizX decide);
+- colors that change only where a chorus starts or ends: another MilkDrop
+  preset, background, ring color and tint, with a flash on each change.
+
+`--official lyrics.txt` replaces the recognized words with the published
+lyrics (saved by you into a text file, one line per line), on the
+recognized timing, the same way as "Correct Words from Official Lyrics" in
+the Subtitle Editor.
 
 The pictures, sprite sheet, image sequence and video are generated (the
 video by FFmpeg), so the example needs only the song, its stems and the

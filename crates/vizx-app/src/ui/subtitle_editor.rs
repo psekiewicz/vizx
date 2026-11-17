@@ -32,6 +32,8 @@ pub struct SubtitleEditor {
     follow_playhead: bool,
     /// How many singers "Separate Singers" looks for; 0 lets it decide.
     singer_count: usize,
+    /// Official lyrics pasted to replace the recognized words.
+    official: String,
     message: String,
 }
 
@@ -126,6 +128,7 @@ fn contents(ui: &mut egui::Ui, app: &mut VizxApp) {
     });
 
     singers_tools(ui, app, &layers);
+    official_lyrics_tools(ui, app, &layers);
     let playhead = app.session.playhead_seconds();
     let rows = rows(
         &app.session,
@@ -144,6 +147,60 @@ fn contents(ui: &mut egui::Ui, app: &mut VizxApp) {
                 .color(theme::TEXT_MUTED),
         );
     }
+}
+
+/// Pasting the official lyrics: they replace the words of the lines shown,
+/// keeping the heard timing and each line's singer.
+fn official_lyrics_tools(ui: &mut egui::Ui, app: &mut VizxApp, layers: &[(TrackId, String)]) {
+    egui::CollapsingHeader::new("Correct Words from Official Lyrics")
+        .id_salt("official_lyrics")
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(
+                    "Paste the lyrics as published (one line per line). They replace the words \
+                     of the lines shown; the times stay as heard and every line stays with its \
+                     singer. Lines like [Chorus] are skipped.",
+                )
+                .small()
+                .color(theme::TEXT_MUTED),
+            );
+            egui::ScrollArea::vertical()
+                .id_salt("official_lyrics_text")
+                .max_height(140.0)
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut app.subtitle_editor.official)
+                            .desired_rows(6)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("Paste the official lyrics here"),
+                    );
+                });
+            let targets: Vec<TrackId> = match app.subtitle_editor.layer {
+                Some(layer) => vec![layer],
+                None => layers.iter().map(|(id, _)| *id).collect(),
+            };
+            let has_text = !app.subtitle_editor.official.trim().is_empty();
+            if ui
+                .add_enabled(has_text, egui::Button::new("Use These Words"))
+                .on_hover_text("Replace the lines of the layer(s) shown above")
+                .clicked()
+            {
+                let official = app.subtitle_editor.official.clone();
+                let mut count = 0;
+                app.session.edit_project(|project| {
+                    count = vizx_core::apply_official_lyrics(project, &targets, &official);
+                    count > 0
+                });
+                app.subtitle_editor.message = if count > 0 {
+                    format!(
+                        "{count} lines now have the official words (Undo brings the old ones back)"
+                    )
+                } else {
+                    "Nothing to replace: no lines on the layer, or no words pasted".to_owned()
+                };
+                app.subtitle_editor.selected = None;
+            }
+        });
 }
 
 /// Telling the singers of a layer apart, each onto a layer of their own.
