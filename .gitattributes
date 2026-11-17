@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Batch files need Windows line endings: cmd.exe misreads labels in LF files.
+*.cmd text eol=crlf
+*.bat text eol=crlf

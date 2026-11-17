@@ -76,8 +76,9 @@ Place-File $DemucsModel "$Destination\models\$(Split-Path -Leaf $DemucsModel)"
 Place-File $WhisperModel "$Destination\models\$(Split-Path -Leaf $WhisperModel)"
 Place-File $SpeakerModel "$Destination\models\$(Split-Path -Leaf $SpeakerModel)"
 
-# The installer downloads missing models on another computer.
-Copy-Item "$PSScriptRoot\install-models.ps1" "$Destination\install-models.ps1" -Force
+# The installer downloads missing models on another computer. An installer
+# copied by an older version of this script is removed.
+Remove-Item "$Destination\install-models.ps1" -Force -ErrorAction SilentlyContinue
 Copy-Item "$PSScriptRoot\Install models.cmd" "$Destination\Install models.cmd" -Force
 
 foreach ($folder in 'visualizers', 'presets') {
