@@ -132,11 +132,13 @@ about ten times slower. See
 [docs/architecture.md](docs/architecture.md#recognizing-lyrics-vocals-first-then-whisper).
 
 The easiest way to get the models: run `scripts\Install models.cmd` (or the
-copy next to `vizx.exe` in a packaged build). A small window downloads
-HTDemucs, ONNX Runtime, the Whisper model and the WeSpeaker model from
-where their authors publish them (Hugging Face, GitHub), checks every file
-against its SHA-256, and puts it next to `vizx.exe`. Interrupted downloads
-continue where they stopped; nothing needs administrator rights.
+copy next to `vizx.exe` in a packaged build). It asks which models to
+install, then downloads HTDemucs, ONNX Runtime, the Whisper model and the
+WeSpeaker model from where their authors publish them (Hugging Face,
+GitHub). It checks every file against its SHA-256 and puts it next to
+`vizx.exe`. It only uses tools that come with Windows 10 (1803 and later)
+and 11 (`curl`, `tar`, `certutil`). Interrupted downloads continue where
+they stopped, and nothing needs administrator rights.
 
 Pre-rendered MilkDrop frames can take gigabytes; they go to the system's
 temporary folder, or to `VIZX_CACHE_DIR` when it is set.
