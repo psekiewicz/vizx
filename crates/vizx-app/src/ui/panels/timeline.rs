@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use eframe::egui::{self, Align2, Color32, CursorIcon, FontId, Rect, Sense, Stroke};
 use vizx_audio::WaveformPeaks;
 use vizx_core::{AudioState, AudioStore, EditorSession, Selection, VisualizerCatalog};
-use vizx_project::{ClipId, LayerMove, MediaId, Track, TrackId, TrackKind};
+use vizx_project::{
+    ClipId, EntranceExit, LayerMove, MediaId, Reveal, RevealKind, Track, TrackId, TrackKind,
+};
 
 use crate::app::AppCommand;
 use crate::theme;
@@ -596,11 +598,12 @@ fn show_lanes(
                     } else {
                         CursorIcon::ResizeHorizontal
                     });
-                    let with_ctrl = ui.input(|input| input.modifiers.command);
+                    // Shift+click adds to the selection.
+                    let with_shift = ui.input(|input| input.modifiers.shift);
                     if response.clicked() {
                         clicked_clip = Some((
                             clip.id,
-                            if with_ctrl {
+                            if with_shift {
                                 ClipClick::Toggle
                             } else {
                                 ClipClick::Only
@@ -760,6 +763,152 @@ fn show_lanes(
                     }
                 }
             }
+        }
+
+        // Entrance and exit: a shaded ramp at each end of a visual clip, as
+        // long as the animation lasts. The selected clip gets a round
+        // handle on each ramp: drag it to make the animation longer or
+        // shorter (out of nothing it starts as a fade), right-click it to
+        // choose the kind.
+        let mut reveal_edit: Option<(ClipId, EntranceExit)> = None;
+        for (track, row) in session.project().tracks().iter().zip(&rows.rows) {
+            if !track.kind.is_layer() {
+                continue;
+            }
+            let top = content_rect.top() + row.top + CLIP_VERTICAL_MARGIN;
+            let bottom = content_rect.top() + row.top + row.height - CLIP_VERTICAL_MARGIN;
+            for clip in &track.clips {
+                let left = content_rect.left()
+                    + clip.start_milliseconds as f32 / 1000.0 * scale.pixels_per_second;
+                let width = clip.duration_milliseconds as f32 / 1000.0 * scale.pixels_per_second;
+                let right = left + width;
+                if right < visible_left || left > visible_right {
+                    continue;
+                }
+                let clip_seconds = clip.duration_milliseconds as f64 / 1000.0;
+                let (entrance, exit) = clip.entrance_exit.lengths(clip_seconds);
+                let ramp_color = Color32::from_rgba_unmultiplied(255, 255, 255, 60);
+                let line = Stroke::new(1.0, Color32::from_white_alpha(200));
+                let entrance_x = left + entrance as f32 * scale.pixels_per_second;
+                let exit_x = right - exit as f32 * scale.pixels_per_second;
+                if entrance > 0.0 {
+                    // Rising from nothing at the start to full at its end.
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(left, bottom),
+                            egui::pos2(entrance_x, top),
+                            egui::pos2(left, top),
+                        ],
+                        ramp_color,
+                        Stroke::NONE,
+                    ));
+                    painter.line_segment(
+                        [egui::pos2(left, bottom), egui::pos2(entrance_x, top)],
+                        line,
+                    );
+                }
+                if exit > 0.0 {
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(exit_x, top),
+                            egui::pos2(right, bottom),
+                            egui::pos2(right, top),
+                        ],
+                        ramp_color,
+                        Stroke::NONE,
+                    ));
+                    painter
+                        .line_segment([egui::pos2(exit_x, top), egui::pos2(right, bottom)], line);
+                }
+
+                if selection != Selection::Clip(clip.id) || width < 4.0 * CLIP_EDGE_WIDTH {
+                    continue;
+                }
+                // Handles sit just inside the trim zones when there is no
+                // animation yet, so both can be grabbed.
+                let handle_inset = CLIP_EDGE_WIDTH + 4.0;
+                let entrance_handle = egui::pos2(entrance_x.max(left + handle_inset), top + 4.0);
+                let exit_handle = egui::pos2(exit_x.min(right - handle_inset), top + 4.0);
+                for (is_entrance, position) in [(true, entrance_handle), (false, exit_handle)] {
+                    let reveal = if is_entrance {
+                        clip.entrance_exit.entrance
+                    } else {
+                        clip.entrance_exit.exit
+                    };
+                    painter.circle(
+                        position,
+                        4.0,
+                        if reveal.is_none() {
+                            Color32::from_gray(60)
+                        } else {
+                            Color32::WHITE
+                        },
+                        Stroke::new(1.0, Color32::BLACK),
+                    );
+                    let name = if is_entrance { "Entrance" } else { "Exit" };
+                    let tip = if reveal.is_none() {
+                        format!("{name}: none\nDrag to add a fade\nRight-click: choose the kind")
+                    } else {
+                        format!(
+                            "{name}: {} {:.2} s\nDrag: length\nRight-click: choose the kind",
+                            reveal.kind.label(),
+                            reveal.seconds
+                        )
+                    };
+                    let response = ui
+                        .interact(
+                            Rect::from_center_size(position, egui::Vec2::splat(12.0)),
+                            ui.id().with(("timeline_reveal", clip.id, is_entrance)),
+                            Sense::click_and_drag(),
+                        )
+                        .on_hover_cursor(CursorIcon::ResizeHorizontal)
+                        .on_hover_text(tip);
+                    let mut changed = reveal;
+                    if response.dragged()
+                        && let Some(pointer) = response.interact_pointer_pos()
+                    {
+                        let pixels = if is_entrance {
+                            pointer.x - left
+                        } else {
+                            right - pointer.x
+                        };
+                        let seconds = f64::from(pixels.max(0.0) / scale.pixels_per_second);
+                        if seconds < Reveal::SECONDS_RANGE.0 {
+                            changed.kind = RevealKind::None;
+                        } else {
+                            if changed.is_none() {
+                                changed.kind = RevealKind::Fade;
+                            }
+                            changed.seconds = seconds.min(clip_seconds);
+                        }
+                    }
+                    response.context_menu(|ui| {
+                        ui.label(egui::RichText::new(name).strong());
+                        ui.separator();
+                        for kind in RevealKind::ALL {
+                            if ui
+                                .selectable_label(changed.kind == kind, kind.label())
+                                .clicked()
+                            {
+                                changed.kind = kind;
+                                ui.close();
+                            }
+                        }
+                    });
+                    if changed != reveal {
+                        let mut value = clip.entrance_exit;
+                        if is_entrance {
+                            value.entrance = changed;
+                        } else {
+                            value.exit = changed;
+                        }
+                        reveal_edit = Some((clip.id, value));
+                    }
+                }
+            }
+        }
+        if let Some((clip_id, value)) = reveal_edit {
+            session.edit_project(|project| project.set_clip_entrance_exit(clip_id, value));
         }
 
         // Placing beats by hand: on the selected audio clip whose file uses
@@ -945,7 +1094,7 @@ fn show_lanes(
 enum ClipClick {
     /// A plain click: only this clip is selected.
     Only,
-    /// Ctrl+click: this clip joins the selection or leaves it.
+    /// Shift+click: this clip joins the selection or leaves it.
     Toggle,
     /// A right-click or the start of a drag: a clip of the selection keeps
     /// the others selected, any other clip becomes the only one.

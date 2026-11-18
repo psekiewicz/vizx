@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Keyframe, MediaId};
+use crate::{EntranceExit, Keyframe, MediaId};
 
 /// Identifies a track within one project.
 ///
@@ -176,6 +176,10 @@ pub struct Clip {
     /// Effects drawn on a visual clip (blur, glow, glitch...).
     #[serde(default, skip_serializing_if = "ClipEffects::is_none")]
     pub effects: ClipEffects,
+    /// How a visual clip enters the picture and leaves it (fade, zoom,
+    /// slide...), played on top of its keyframes.
+    #[serde(default, skip_serializing_if = "EntranceExit::is_none")]
+    pub entrance_exit: EntranceExit,
 }
 
 /// Effects drawn on a visual clip. Every strength goes from 0 (off) to 1.

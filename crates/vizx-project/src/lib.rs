@@ -30,7 +30,10 @@ pub use media::{
     TextProperties,
 };
 pub use metadata::ProjectMetadata;
-pub use motion::{Easing, KEYFRAME_TOLERANCE_MILLISECONDS, Keyframe, Motion, Transform};
+pub use motion::{
+    Easing, EntranceExit, KEYFRAME_TOLERANCE_MILLISECONDS, Keyframe, Motion, Reveal, RevealKind,
+    Transform,
+};
 pub use project::{LayerMove, Marker, Project};
 pub use scenes::{Scene, TRANSITIONS_LAYER_NAME, Transition, TransitionKind};
 pub use settings::{FrameRate, ProjectSettings};

@@ -2,7 +2,7 @@ use eframe::egui;
 use vizx_core::{AudioStore, EditorSession, ParameterKind, VisualizerCatalog};
 use vizx_project::{
     AudioInput, AudioReaction, Clip, ClipEffects, Easing, FrameAnimation, FrameLayout, MediaId,
-    Placement, ReactionBand, TextAlignment, TextProperties, Track, TrackKind,
+    Placement, ReactionBand, Reveal, RevealKind, TextAlignment, TextProperties, Track, TrackKind,
 };
 
 use crate::app::AppCommand;
@@ -163,6 +163,9 @@ fn track_properties(
             }
             if is_visual {
                 transform_editor(ui, session, clip);
+                if !is_effects_layer {
+                    entrance_exit_editor(ui, session, clip);
+                }
                 if is_picture {
                     let mut sharp = session.project().clip_sharp_pixels(clip);
                     if ui
@@ -232,6 +235,7 @@ fn subtitle_line_properties(ui: &mut egui::Ui, session: &mut EditorSession, clip
         session.edit_project(|project| project.set_clip_text(clip.id, &words));
     }
     timing_editor(ui, session, clip);
+    entrance_exit_editor(ui, session, clip);
     ui.label(
         egui::RichText::new("Look and place: select the layer. All lines: Subtitle Editor.")
             .small()
@@ -486,6 +490,46 @@ fn transform_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip)
         session.edit_project(|project| project.set_clip_spin(clip.id, spin));
     }
 }
+/// How a visual clip enters the picture and leaves it. The same can be
+/// done on the timeline, with the handles on the selected clip's ramps.
+fn entrance_exit_editor(ui: &mut egui::Ui, session: &mut EditorSession, clip: &Clip) {
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("Entrance / Exit").strong());
+    ui.separator();
+    let mut value = clip.entrance_exit;
+    let (shortest, longest) = Reveal::SECONDS_RANGE;
+    egui::Grid::new(("entrance_exit", clip.id))
+        .num_columns(3)
+        .show(ui, |ui| {
+            for (name, reveal) in [("In", &mut value.entrance), ("Out", &mut value.exit)] {
+                ui.label(name);
+                egui::ComboBox::from_id_salt(("reveal_kind", clip.id, name))
+                    .selected_text(reveal.kind.label())
+                    .show_ui(ui, |ui| {
+                        for kind in RevealKind::ALL {
+                            ui.selectable_value(&mut reveal.kind, kind, kind.label());
+                        }
+                    });
+                ui.add_enabled(
+                    !reveal.is_none(),
+                    egui::Slider::new(&mut reveal.seconds, shortest..=longest)
+                        .logarithmic(true)
+                        .max_decimals(2)
+                        .suffix(" s"),
+                );
+                ui.end_row();
+            }
+        });
+    ui.label(
+        egui::RichText::new("Tip: drag the round handles on the clip in the timeline")
+            .small()
+            .color(theme::TEXT_MUTED),
+    );
+    if value != clip.entrance_exit {
+        session.edit_project(|project| project.set_clip_entrance_exit(clip.id, value));
+    }
+}
+
 /// Where the beats of an audio file come from: found automatically, or
 /// placed by hand (which replaces the found ones everywhere: animations,
 /// visualizers and the beat marks on the timeline).

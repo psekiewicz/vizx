@@ -3361,6 +3361,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vizx-setup"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "flate2",
+ "rfd",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "vizx-visualizer"
 version = "0.1.0"
 dependencies = [

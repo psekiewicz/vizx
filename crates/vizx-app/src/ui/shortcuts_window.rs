@@ -40,8 +40,10 @@ const GROUPS: [(&str, &[(&str, &str)]); 5] = [
         &[
             ("Ctrl+Z", "Undo"),
             ("Ctrl+Shift+Z or Ctrl+Y", "Redo"),
-            ("Ctrl+click a clip", "Add to / remove from selection"),
+            ("Shift+click", "Add to / remove from selection"),
             ("Drag on an empty area", "Box select"),
+            ("Shift+drag in the preview", "Box select over elements"),
+            ("Alt while dragging in the preview", "Move without snapping"),
             ("Ctrl+A", "Select all clips"),
             ("Ctrl+C / Ctrl+X", "Copy / cut"),
             ("Ctrl+V", "Paste at playhead"),

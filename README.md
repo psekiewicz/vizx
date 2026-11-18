@@ -79,9 +79,10 @@ vizx/
 │   ├── vizx-render/       Off-screen wgpu device and layer compositor (no GUI)
 │   ├── vizx-ml/           Local ML: HTDemucs stems, Whisper lyrics, WeSpeaker singers (no GUI)
 │   ├── vizx-core/         Shared application logic (no GUI)
-│   └── vizx-app/          Desktop application: window and interface
+│   ├── vizx-app/          Desktop application: window and interface
+│   └── vizx-setup/        The one-file installer and uninstaller
 ├── assets/                Bundled visualizer plugins, MilkDrop presets (git submodule), fonts, icons
-├── scripts/               Model installer and portable packaging (Windows)
+├── scripts/               Model installer, portable packaging and the installer build (Windows)
 └── docs/
     ├── architecture.md    Architecture and design decisions
     ├── milkdrop.md        Setting up projectM for MilkDrop presets
@@ -181,6 +182,19 @@ visualizers and presets, into one folder that runs without cargo or
 environment variables. A `data` folder next to `vizx.exe` keeps
 pre-rendered frames and stems there instead of the system's temporary
 folder.
+
+### Building the installer
+
+```powershell
+.\scripts\build-installer.ps1        # writes D:\vizx-installer\VizX-Setup-<version>.exe
+```
+
+It builds VizX in release mode, gathers it with FFmpeg, projectM, ONNX
+Runtime, the models, presets and visualizers (see the parameters of
+`scripts\package-prototype.ps1` for where those come from), adds the
+Visual C++ runtime, and packs it all into one setup program. The installer
+needs no administrator rights, installs for the current user with Start
+menu and desktop shortcuts, and can be removed in "Apps & features".
 
 ## Showcase video
 

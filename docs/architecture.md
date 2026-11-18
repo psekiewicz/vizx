@@ -12,7 +12,8 @@ its own copy of anything.
 
 ## Crates
 
-The workspace has eight crates. Dependencies point in one direction only:
+The workspace has nine crates. Dependencies point in one direction only
+(the installer, `vizx-setup`, stands apart: it uses none of the others):
 
 ```text
 vizx-app  ──►  vizx-core  ──►  vizx-project
@@ -43,6 +44,7 @@ in the project.
 | `vizx-ml` | Local machine learning: the HTDemucs stem separation model, run by ONNX Runtime loaded at run time. Nothing leaves the computer. | GUI, project data, network access |
 | `vizx-core` | Editing state and logic operating on a project. Future home of subsystem coordination. The only network access: looking up lyrics on LRCLIB when the user asks. | GUI code |
 | `vizx-app` | The window, panels, menus and visual style. | Project rules or logic that other front ends would need |
+| `vizx-setup` | The one-file installer and the uninstaller (see "Installer" below). | Anything VizX itself needs at run time |
 
 Because the lower two crates have no GUI dependency, they can be tested
 without opening a window and reused by a future command-line exporter.
@@ -785,6 +787,32 @@ to the executable switches on portable mode (`portable_data_folder`):
 pre-rendered frames and stems go there instead of the system's temporary
 folder and next to the songs.
 
+### Installer
+
+`scripts\build-installer.ps1` turns that folder into one file,
+`VizX-Setup-<version>.exe` (default in `D:\vizx-installer`). It adds the
+Visual C++ runtime DLLs (VizX, projectM and ONNX Runtime need them; a fresh
+Windows does not have them) and the licences of the bundled tools, then
+`vizx-pack` appends every file to `vizx-setup.exe`.
+
+- **One file** (`vizx-setup/src/payload.rs`): the setup program is followed
+  by its payload, one entry per file (deflate, or stored as is for models
+  and pictures, which do not get smaller), and a 32-byte trailer that says
+  where the payload starts. Windows ignores what follows a program, so the
+  setup program finds its payload by reading its own file from the end.
+  Paths in the payload may only name files inside the install folder.
+- **For the current user**, no administrator rights: by default into
+  `%LOCALAPPDATA%\Programs\VizX` (any folder can be chosen; VizX always
+  gets a folder of its own, and a folder holding other files is refused).
+  Start menu and desktop shortcuts, and an entry in "Apps & features"
+  under `HKEY_CURRENT_USER`. An empty `data\` switches on portable mode.
+  Installing over an earlier VizX updates it.
+- **Uninstalling**: `uninstall.exe` in the install folder is the setup
+  program without its payload. It removes exactly the files listed in
+  `vizx-install-manifest.txt` (written while installing), the `data\`
+  folder and the folders left empty, never anything else, then removes
+  itself once it has closed.
+
 ### Long sessions: autosave, recent projects, clipboard, shortcuts
 
 VizX is used for hours at a time, so losing work or reaching for the mouse
@@ -824,7 +852,7 @@ for every step is expensive.
 - **Markers** (format version 19, `Project::markers`): named moments added
   with M, drawn as flags on the ruler; click to go there, drag to move,
   right-click to rename or delete. Ctrl+Left/Right jump between them.
-- **Several clips** can be selected: Ctrl+click, a rectangle dragged over
+- **Several clips** can be selected: Shift+click, a rectangle dragged over
   empty lanes, or Ctrl+A. The session keeps them next to the main
   selection (`selected_clip_ids`); dragging one moves all, in time and up
   or down (`move_selected_clips_to_track`: clips of the dragged clip's kind

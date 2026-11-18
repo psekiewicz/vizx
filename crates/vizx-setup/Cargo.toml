@@ -1,0 +1,29 @@
+[package]
+name = "vizx-setup"
+description = "The VizX installer: one setup program with the whole application inside it."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+# The setup program the user runs. Without its payload (VizX's files,
+# appended by `vizx-pack`) it is also the uninstaller.
+[[bin]]
+name = "vizx-setup"
+path = "src/main.rs"
+
+# Appends the files of a VizX folder to the setup program, making the one
+# installer file. Used by scripts/build-installer.ps1.
+[[bin]]
+name = "vizx-pack"
+path = "src/bin/vizx-pack.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+eframe.workspace = true
+rfd.workspace = true
+flate2.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }

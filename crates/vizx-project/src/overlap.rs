@@ -109,6 +109,40 @@ impl Project {
             .unwrap_or(0)
     }
 
+    /// The free stretch of time on `track_id` where a new clip goes when it
+    /// is added at `at_milliseconds` (the playhead): the gap between clips
+    /// that holds that moment, or, if a clip is there, the gap right after
+    /// it. Within the project's length. `None` if there is no room there.
+    /// Returns `(start, duration)`.
+    pub fn free_gap_at(&self, track_id: TrackId, at_milliseconds: u64) -> Option<(u64, u64)> {
+        let project_end = self.settings.duration_milliseconds;
+        let mut clips = self.occupied(track_id, &[]);
+        clips.sort_unstable();
+        let mut at = at_milliseconds.min(project_end) as i64;
+        // Past every clip that covers the moment (clips may touch).
+        for (start, end) in &clips {
+            if *start <= at && at < *end {
+                at = *end;
+            }
+        }
+        let gap_start = clips
+            .iter()
+            .map(|(_, end)| *end)
+            .filter(|end| *end <= at)
+            .max()
+            .unwrap_or(0);
+        let gap_end = clips
+            .iter()
+            .map(|(start, _)| *start)
+            .filter(|start| *start > at)
+            .min()
+            .unwrap_or(project_end as i64)
+            .min(project_end as i64);
+        let duration = gap_end - gap_start;
+        (at < project_end as i64 && duration >= crate::Clip::MIN_DURATION_MILLISECONDS as i64)
+            .then_some((gap_start as u64, duration as u64))
+    }
+
     /// How far the edges of a clip may be trimmed without covering its
     /// neighbours: the end of the clip before it, and the start of the clip
     /// after it (`None` if there is none).
@@ -213,5 +247,20 @@ mod tests {
         assert_eq!(project.trim_room(second), (2_000, None));
         // A copy laid over the first clip goes to the next free place.
         assert_eq!(project.first_free_shift_forward(&[first]), 0);
+    }
+
+    #[test]
+    fn a_new_clip_fills_the_gap_at_the_playhead() {
+        let (mut project, first, _) = two_clips();
+        project.settings.duration_milliseconds = 10_000;
+        let track = project.clip(first).unwrap().0.id;
+        // Between the clips (2-5 s).
+        assert_eq!(project.free_gap_at(track, 3_000), Some((2_000, 3_000)));
+        // Inside the first clip: the gap after it.
+        assert_eq!(project.free_gap_at(track, 1_000), Some((2_000, 3_000)));
+        // After the last clip, up to the end of the project.
+        assert_eq!(project.free_gap_at(track, 6_000), Some((7_000, 3_000)));
+        // At the very end there is no room.
+        assert_eq!(project.free_gap_at(track, 10_000), None);
     }
 }

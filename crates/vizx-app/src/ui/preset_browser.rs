@@ -11,7 +11,7 @@ use std::thread;
 use eframe::egui;
 use vizx_core::{PresetEntry, PresetLibrary};
 
-use crate::app::VizxApp;
+use crate::app::{AppCommand, VizxApp};
 use crate::theme;
 
 const ALL_CATEGORIES: &str = "All categories";
@@ -111,6 +111,7 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
 
     let mut is_open = app.preset_browser.is_open;
     let mut preset_to_add = None;
+    let mut wants_file = false;
 
     egui::Window::new("MilkDrop Presets")
         .open(&mut is_open)
@@ -119,6 +120,18 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
         .min_size([380.0, 240.0])
         .default_pos(ctx.content_rect().center() - egui::vec2(380.0, 300.0))
         .show(ctx, |ui| {
+            // A preset of the user's own is added from here too, so the
+            // Add menu needs only one MilkDrop entry.
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Load .milk File...")
+                    .on_hover_text("Add a MilkDrop preset file of your own")
+                    .clicked()
+                {
+                    wants_file = true;
+                }
+            });
+            ui.separator();
             let browser = &mut app.preset_browser;
             match &browser.library {
                 LibraryState::NotLoaded | LibraryState::Loading(_) => {
@@ -130,7 +143,7 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
                 LibraryState::Unavailable(reason) => {
                     ui.label(egui::RichText::new(reason).color(theme::TEXT_MUTED));
                     ui.add_space(4.0);
-                    ui.label("To load a .milk file, use Add > MilkDrop Preset File...");
+                    ui.label("Use \"Load .milk File...\" above to add a preset of your own.");
                 }
                 LibraryState::Ready(library) => {
                     preset_to_add = browse(
@@ -149,6 +162,10 @@ pub fn show(ctx: &egui::Context, app: &mut VizxApp) {
     if let Some(entry) = preset_to_add {
         app.session.add_bundled_milkdrop_preset(&entry);
         app.status_message = format!("Added preset {}", entry.name);
+    }
+    if wants_file {
+        // A file dialog needs the main window, so it is an app command.
+        app.request(AppCommand::AddMilkdropPreset);
     }
 }
 

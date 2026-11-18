@@ -71,12 +71,7 @@ pub fn add_menu_items(ui: &mut eframe::egui::Ui) -> Option<AppCommand> {
         "Ctrl+M",
         AppCommand::BrowseMilkdropPresets,
     );
-    item(
-        ui,
-        "MilkDrop Preset File...",
-        "",
-        AppCommand::AddMilkdropPreset,
-    );
+
     item(
         ui,
         "Visualizer...",

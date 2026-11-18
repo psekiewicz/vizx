@@ -48,7 +48,7 @@ pub struct EditorSession {
     loop_region: Option<(f64, f64)>,
     is_looping: bool,
     /// More clips selected together with the one in `selection` (with
-    /// Ctrl+click or a rectangle). Only counts while a clip is selected.
+    /// Shift+click or a rectangle). Only counts while a clip is selected.
     extra_clips: Vec<ClipId>,
     /// Whether clips on one track are kept from covering each other when
     /// they are moved, trimmed, pasted or duplicated.
@@ -339,7 +339,7 @@ impl EditorSession {
     }
 
     /// Adds a clip to the selection, or takes it out if it is in it
-    /// (Ctrl+click).
+    /// (Shift+click).
     pub fn toggle_clip_selection(&mut self, clip_id: ClipId) {
         let mut ids = self.selected_clip_ids();
         match ids.iter().position(|id| *id == clip_id) {
@@ -737,9 +737,74 @@ impl EditorSession {
             self.project.move_clip(id, start);
         }
     }
+    /// The visual layer new elements go onto: the selected layer, or the
+    /// layer of the selected clip. Not the layer of scene transitions, which
+    /// holds only those.
+    fn selected_visual_layer(&self) -> Option<TrackId> {
+        self.selected_track()
+            .filter(|track| track.kind == TrackKind::Visual && !track.scene_transitions)
+            .map(|track| track.id)
+    }
+
+    /// Adds a visual element with `add` (which puts it on a free or new
+    /// layer, as [`Project`] does) and then moves it where the user expects
+    /// it: onto the selected layer, filling the free time at the playhead.
+    /// If the selected layer has no room there, the element stays on its
+    /// new layer, which is put directly above the selected one. Without a
+    /// selected layer nothing is changed. Returns the element's layer.
+    fn add_onto_selected_layer(
+        &mut self,
+        add: impl FnOnce(&mut Project) -> (MediaId, TrackId),
+    ) -> TrackId {
+        let target = self.selected_visual_layer();
+        let tracks_before: Vec<TrackId> =
+            self.project.tracks().iter().map(|track| track.id).collect();
+        let (media_id, added_to) = add(&mut self.project);
+        let Some(target) = target else {
+            return added_to;
+        };
+        if target == added_to {
+            return added_to;
+        }
+        let is_new_layer = !tracks_before.contains(&added_to);
+        let playhead = (self.playhead_seconds.max(0.0) * 1000.0).round() as u64;
+        match self.project.free_gap_at(target, playhead) {
+            Some((start, duration)) => {
+                self.project
+                    .put_media_clip_on_layer(media_id, target, start, duration);
+                let is_left_empty = self
+                    .project
+                    .track(added_to)
+                    .is_some_and(|track| track.clips.is_empty());
+                if is_new_layer && is_left_empty {
+                    self.project.remove_track(added_to);
+                }
+                target
+            }
+            None => {
+                if is_new_layer {
+                    self.project.move_layer_above(added_to, target);
+                }
+                added_to
+            }
+        }
+    }
+
     /// Adds a track to the timeline and selects it.
+    ///
+    /// A new layer goes directly above the selected layer (on top if none
+    /// is selected), as in image editors.
     pub fn add_track(&mut self, kind: TrackKind) -> TrackId {
+        let selected_layer = self
+            .selected_track()
+            .filter(|track| track.kind.is_layer())
+            .map(|track| track.id);
         let id = self.project.add_default_named_track(kind);
+        if kind.is_layer()
+            && let Some(selected) = selected_layer
+        {
+            self.project.move_layer_above(id, selected);
+        }
         self.has_unsaved_changes = true;
         self.set_selection(Selection::Track(id));
         id
@@ -811,7 +876,8 @@ impl EditorSession {
             return Err("the file does not exist".to_owned());
         }
 
-        let (_media_id, track_id) = self.project.add_milkdrop_preset(path.to_string_lossy());
+        let track_id = self
+            .add_onto_selected_layer(|project| project.add_milkdrop_preset(path.to_string_lossy()));
         self.has_unsaved_changes = true;
         self.set_selection(Selection::Track(track_id));
         Ok(track_id)
@@ -825,7 +891,8 @@ impl EditorSession {
     /// other machines (see [`BUNDLED_PRESET_PREFIX`](crate::BUNDLED_PRESET_PREFIX)).
     pub fn add_bundled_milkdrop_preset(&mut self, entry: &PresetEntry) -> TrackId {
         let reference = PresetLibrary::project_reference(entry);
-        let (_media_id, track_id) = self.project.add_milkdrop_preset(reference);
+        let track_id =
+            self.add_onto_selected_layer(|project| project.add_milkdrop_preset(reference));
         self.has_unsaved_changes = true;
         self.set_selection(Selection::Track(track_id));
         track_id
@@ -841,9 +908,9 @@ impl EditorSession {
         }
         let (width, height) = crate::image_store::image_file_size(path)?;
 
-        let (_media_id, track_id) = self
-            .project
-            .add_image(path.to_string_lossy(), ImageProperties { width, height });
+        let track_id = self.add_onto_selected_layer(|project| {
+            project.add_image(path.to_string_lossy(), ImageProperties { width, height })
+        });
         self.has_unsaved_changes = true;
         self.set_selection(Selection::Track(track_id));
         Ok(track_id)
@@ -878,11 +945,14 @@ impl EditorSession {
         let (width, height) = crate::probe_video(ffmpeg, path)?;
         let properties = ImageProperties { width, height };
 
-        let (_media_id, track_id) = if as_background {
+        let track_id = if as_background {
             self.project
                 .add_background_video(path.to_string_lossy(), properties)
+                .1
         } else {
-            self.project.add_video(path.to_string_lossy(), properties)
+            self.add_onto_selected_layer(|project| {
+                project.add_video(path.to_string_lossy(), properties)
+            })
         };
         self.has_unsaved_changes = true;
         self.set_selection(Selection::Track(track_id));
@@ -940,7 +1010,8 @@ impl EditorSession {
         let properties = TextProperties::default();
         let placement = self.text_placement(&properties, (0.5, 0.5))?;
 
-        let (_media_id, track_id) = self.project.add_text(properties, placement);
+        let track_id =
+            self.add_onto_selected_layer(|project| project.add_text(properties, placement));
         self.has_unsaved_changes = true;
         self.set_selection(Selection::Track(track_id));
         Ok(track_id)
@@ -1200,7 +1271,8 @@ impl EditorSession {
     /// selected.
     pub fn import_image_sequence(&mut self, file: &Path) -> Result<TrackId, String> {
         let (first_file, animation) = crate::find_image_sequence(file, DEFAULT_ANIMATION_SPEED)?;
-        let (_media_id, track_id) = self.project.add_animation(first_file, animation);
+        let track_id =
+            self.add_onto_selected_layer(|project| project.add_animation(first_file, animation));
         self.has_unsaved_changes = true;
         self.set_selection(Selection::Track(track_id));
         Ok(track_id)
@@ -1213,9 +1285,9 @@ impl EditorSession {
             return Err("not a PNG or JPEG image".to_owned());
         }
         let animation = crate::guess_sprite_sheet(file, DEFAULT_ANIMATION_SPEED)?;
-        let (_media_id, track_id) = self
-            .project
-            .add_animation(file.to_string_lossy(), animation);
+        let track_id = self.add_onto_selected_layer(|project| {
+            project.add_animation(file.to_string_lossy(), animation)
+        });
         self.has_unsaved_changes = true;
         self.set_selection(Selection::Track(track_id));
         Ok(track_id)
@@ -1225,7 +1297,8 @@ impl EditorSession {
     /// becomes selected. `stored_path` is the plugin's folder, or the
     /// reference of a bundled plugin (see `VisualizerCatalog`).
     pub fn add_visualizer_plugin(&mut self, stored_path: &str) -> TrackId {
-        let (_media_id, track_id) = self.project.add_visualizer_plugin(stored_path);
+        let track_id =
+            self.add_onto_selected_layer(|project| project.add_visualizer_plugin(stored_path));
         self.has_unsaved_changes = true;
         self.set_selection(Selection::Track(track_id));
         track_id
@@ -1325,6 +1398,55 @@ mod tests {
             project.metadata.author = name.to_owned();
             true
         });
+    }
+
+    #[test]
+    fn new_elements_go_onto_the_selected_layer() {
+        let mut session = EditorSession::new_untitled();
+        session.edit_project(|project| {
+            project.settings.duration_milliseconds = 10_000;
+            true
+        });
+        let visual_layers = |session: &EditorSession| {
+            session
+                .project()
+                .tracks()
+                .iter()
+                .filter(|track| track.kind == TrackKind::Visual)
+                .map(|track| track.id)
+                .collect::<Vec<_>>()
+        };
+        // Nothing selected: the empty starter layer takes it.
+        let first = session.add_visualizer_plugin("bundled-visualizers:/a");
+        assert_eq!(visual_layers(&session), vec![first]);
+
+        // Cut the clip short, so the layer has room after 4 s.
+        let clip = session.project().track(first).unwrap().clips[0].id;
+        session.edit_project(|project| project.trim_clip_end(clip, 4_000));
+
+        // With the layer selected and the playhead in the free part, the
+        // new one fills that part instead of getting a layer of its own.
+        session.select(Selection::Track(first));
+        session.set_playhead_seconds(6.0);
+        let second = session.add_visualizer_plugin("bundled-visualizers:/b");
+        assert_eq!(second, first);
+        assert_eq!(visual_layers(&session), vec![first]);
+        let clips = &session.project().track(first).unwrap().clips;
+        assert_eq!(clips.len(), 2);
+        assert_eq!(
+            (clips[1].start_milliseconds, clips[1].duration_milliseconds),
+            (4_000, 6_000)
+        );
+
+        // No room left: a new layer, right above the selected one.
+        let other = session.add_track(TrackKind::Visual);
+        session.select(Selection::Track(first));
+        let third = session.add_visualizer_plugin("bundled-visualizers:/c");
+        assert_ne!(third, first);
+        let layers = visual_layers(&session);
+        let position = |id| layers.iter().position(|layer| *layer == id).unwrap();
+        assert_eq!(position(third) + 1, position(first));
+        assert!(layers.contains(&other));
     }
 
     #[test]

@@ -279,6 +279,86 @@ impl Project {
         true
     }
 
+    /// Moves the visual layer `id` so that it lies directly above (in front
+    /// of) the layer `above`. Returns `true` only if the layer moved.
+    pub fn move_layer_above(&mut self, id: TrackId, above: TrackId) -> bool {
+        let is_layer = |track: &Track| track.kind.is_layer();
+        let (Some(from), Some(_)) = (
+            self.tracks
+                .iter()
+                .position(|track| track.id == id && is_layer(track)),
+            self.tracks
+                .iter()
+                .position(|track| track.id == above && is_layer(track)),
+        ) else {
+            return false;
+        };
+        if id == above {
+            return false;
+        }
+        let layer = self.tracks.remove(from);
+        let target = self
+            .tracks
+            .iter()
+            .position(|track| track.id == above)
+            .unwrap_or(0);
+        let has_moved = target != from;
+        self.tracks.insert(target, layer);
+        has_moved
+    }
+
+    /// Puts the clip of the media `media_id` (a newly added element) onto
+    /// the layer `layer`, from `start_milliseconds` for
+    /// `duration_milliseconds`. Its place in the picture stays as it is.
+    /// Returns `true` only if the clip was found and the layer is a visual
+    /// layer.
+    pub fn put_media_clip_on_layer(
+        &mut self,
+        media_id: MediaId,
+        layer: TrackId,
+        start_milliseconds: u64,
+        duration_milliseconds: u64,
+    ) -> bool {
+        if self
+            .track(layer)
+            .is_none_or(|track| track.kind != TrackKind::Visual)
+        {
+            return false;
+        }
+        let mut moved = None;
+        for track in &mut self.tracks {
+            if let Some(index) = track.clips.iter().position(|clip| clip.media == media_id) {
+                moved = Some(track.clips.remove(index));
+                break;
+            }
+        }
+        let Some(mut clip) = moved else {
+            return false;
+        };
+        clip.start_milliseconds = start_milliseconds;
+        clip.duration_milliseconds = duration_milliseconds.max(Clip::MIN_DURATION_MILLISECONDS);
+        if let Some(track) = self.tracks.iter_mut().find(|track| track.id == layer) {
+            track.clips.push(clip);
+        }
+        true
+    }
+
+    /// Sets how a visual clip enters and leaves the picture. Returns `true`
+    /// only if this changed something.
+    pub fn set_clip_entrance_exit(&mut self, id: ClipId, value: crate::EntranceExit) -> bool {
+        let value = crate::EntranceExit {
+            entrance: value.entrance.sanitized(),
+            exit: value.exit.sanitized(),
+        };
+        match self.clip_mut(id) {
+            Some(clip) if clip.entrance_exit != value => {
+                clip.entrance_exit = value;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// A clip and the track it is on.
     pub fn clip(&self, id: ClipId) -> Option<(&Track, &Clip)> {
         self.tracks.iter().find_map(|track| {
@@ -687,6 +767,7 @@ impl Project {
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
             effects: ClipEffects::default(),
+            entrance_exit: crate::EntranceExit::default(),
         };
         self.next_clip_id += 1;
         let clip_end = clip.end_milliseconds();
@@ -750,6 +831,7 @@ impl Project {
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
             effects: ClipEffects::default(),
+            entrance_exit: crate::EntranceExit::default(),
         };
         self.next_clip_id += 1;
         let track = self.tracks.iter_mut().find(|track| track.id == track_id)?;
@@ -926,6 +1008,7 @@ impl Project {
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
             effects: ClipEffects::default(),
+            entrance_exit: crate::EntranceExit::default(),
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -972,6 +1055,7 @@ impl Project {
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
             effects: ClipEffects::default(),
+            entrance_exit: crate::EntranceExit::default(),
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -1075,6 +1159,7 @@ impl Project {
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
             effects: ClipEffects::default(),
+            entrance_exit: crate::EntranceExit::default(),
         };
         self.next_clip_id += 1;
         if let Some(track) = self.tracks.iter_mut().find(|track| track.id == track_id) {
@@ -1143,6 +1228,7 @@ impl Project {
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
             effects: ClipEffects::default(),
+            entrance_exit: crate::EntranceExit::default(),
         };
         self.tracks
             .iter_mut()

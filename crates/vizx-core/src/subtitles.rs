@@ -117,6 +117,8 @@ pub fn subtitle_layout(project: &Project, frame_height: u32) -> HashMap<ClipId, 
                     },
                     keyframes,
                     spin_degrees_per_second: 0.0,
+                    entrance_exit: clip.entrance_exit,
+                    clip_seconds: clip.duration_milliseconds as f64 / 1000.0,
                 },
             },
         );

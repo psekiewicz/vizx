@@ -404,6 +404,7 @@ impl Project {
             sharp_pixels: None,
             blend_mode: BlendMode::Normal,
             effects,
+            entrance_exit: crate::EntranceExit::default(),
         }
     }
 }

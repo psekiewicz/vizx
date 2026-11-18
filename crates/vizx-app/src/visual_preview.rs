@@ -53,16 +53,17 @@ pub fn set_shown_width(ctx: &egui::Context, pixels: f32) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::new(SHOWN_WIDTH_ID), pixels));
 }
 
-/// Called by the preview panel while a clip is being moved or resized with
-/// the mouse: draw that clip at this placement instead of the one stored in
-/// the project, so the picture follows the mouse. `None` ends it.
-pub fn set_dragged_placement(ctx: &egui::Context, dragged: Option<(ClipId, Placement, f64)>) {
+/// Called by the preview panel while clips are being moved or resized with
+/// the mouse: draw each of them at its placement and rotation here instead
+/// of the ones stored in the project, so the picture follows the mouse.
+/// An empty list ends it.
+pub fn set_dragged_placements(ctx: &egui::Context, dragged: Vec<(ClipId, Placement, f64)>) {
     let id = egui::Id::new(DRAGGED_PLACEMENT_ID);
-    ctx.data_mut(|data| match dragged {
-        Some(dragged) => {
+    ctx.data_mut(|data| match dragged.is_empty() {
+        false => {
             data.insert_temp(id, dragged);
         }
-        None => data.remove::<(ClipId, Placement, f64)>(id),
+        true => data.remove::<Vec<(ClipId, Placement, f64)>>(id),
     });
 }
 
@@ -280,8 +281,9 @@ impl VisualPreview {
         let lookup_milliseconds = ((playhead_seconds * 1000.0) as u64).min(last_millisecond);
         // A clip the user is dragging right now is drawn where the mouse
         // has taken it.
-        let dragged: Option<(ClipId, Placement, f64)> =
-            ctx.data(|data| data.get_temp(egui::Id::new(DRAGGED_PLACEMENT_ID)));
+        let dragged: Vec<(ClipId, Placement, f64)> = ctx
+            .data(|data| data.get_temp(egui::Id::new(DRAGGED_PLACEMENT_ID)))
+            .unwrap_or_default();
 
         let subtitle_key = subtitle_key(session.project());
         if self.subtitles.0 != subtitle_key {
@@ -362,9 +364,11 @@ impl VisualPreview {
             let motion = subtitle.map_or_else(|| clip.motion(), |line| line.motion);
             let mut transform = motion.animated_at(seconds_into_clip.max(0.0));
             let keyed = motion.transform_at(seconds_into_clip.max(0.0) * 1000.0);
-            if let Some((dragged_clip, placement, rotation)) = dragged
-                && dragged_clip == clip.id
+            if let Some((_, placement, rotation)) = dragged
+                .iter()
+                .find(|(dragged_clip, _, _)| *dragged_clip == clip.id)
             {
+                let (placement, rotation) = (*placement, *rotation);
                 transform.placement = placement;
                 // The dragged rotation replaces the keyed one; spin stays.
                 transform.rotation_degrees += rotation - keyed.rotation_degrees;
