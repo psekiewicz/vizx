@@ -801,17 +801,29 @@ Windows does not have them) and the licences of the bundled tools, then
   where the payload starts. Windows ignores what follows a program, so the
   setup program finds its payload by reading its own file from the end.
   Paths in the payload may only name files inside the install folder.
-- **For the current user**, no administrator rights: by default into
-  `%LOCALAPPDATA%\Programs\VizX` (any folder can be chosen; VizX always
-  gets a folder of its own, and a folder holding other files is refused).
-  Start menu and desktop shortcuts, and an entry in "Apps & features"
-  under `HKEY_CURRENT_USER`. An empty `data\` switches on portable mode.
-  Installing over an earlier VizX updates it.
+- **Only for me** (default): into `%LOCALAPPDATA%\Programs\VizX`, the
+  user's Start menu and desktop, and "Apps & features" under
+  `HKEY_CURRENT_USER`. No administrator rights, except as a last resort:
+  when the chosen folder cannot be written without them, the setup
+  program starts itself again with `runas` (Windows asks) and `--elevated`
+  plus the chosen options, and that copy starts at once. An empty `data\`
+  switches on portable mode.
+- **For everyone on this computer**: into `%ProgramFiles%\VizX`, everyone's
+  Start menu and the public desktop, and `HKEY_LOCAL_MACHINE`; always with
+  administrator rights. No `data\` folder (users cannot write there), so
+  VizX keeps its large files in the temporary folder. "Start VizX" at the
+  end goes through Explorer, so VizX does not run with those rights.
+- Any folder can be chosen; VizX always gets a folder of its own, and a
+  folder holding other files is refused. Installing over an earlier VizX
+  updates it. `--silent [--all-users] [--folder <dir>] [--no-shortcuts]`
+  installs without a window (and without asking for rights).
 - **Uninstalling**: `uninstall.exe` in the install folder is the setup
   program without its payload. It removes exactly the files listed in
   `vizx-install-manifest.txt` (written while installing), the `data\`
   folder and the folders left empty, never anything else, then removes
-  itself once it has closed.
+  itself once it has closed. An installation for everyone (its entry is
+  under `HKEY_LOCAL_MACHINE`) is removed with administrator rights, asked
+  for the same way.
 
 ### Long sessions: autosave, recent projects, clipboard, shortcuts
 

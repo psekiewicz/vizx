@@ -192,9 +192,11 @@ folder.
 It builds VizX in release mode, gathers it with FFmpeg, projectM, ONNX
 Runtime, the models, presets and visualizers (see the parameters of
 `scripts\package-prototype.ps1` for where those come from), adds the
-Visual C++ runtime, and packs it all into one setup program. The installer
-needs no administrator rights, installs for the current user with Start
-menu and desktop shortcuts, and can be removed in "Apps & features".
+Visual C++ runtime, and packs it all into one setup program. It installs
+either only for the current user (no administrator rights, unless the
+chosen folder needs them; then Windows asks) or for everyone on the
+computer (Program Files, with administrator rights), with Start menu and
+desktop shortcuts, and can be removed in "Apps & features".
 
 ## Showcase video
 
